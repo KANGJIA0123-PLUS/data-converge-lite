@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-converge-lite"
+version = "0.1.0"
+description = "Company-layout ClickHouse aggregation with a small recoverable scheduler"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6,<7", "APScheduler>=3.11,<4", "redis>=5,<7"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+data-converge-lite = "data_converge.main:main"
+
+[tool.setuptools]
+include-package-data = false
+packages = ["data_converge", "data_converge.config", "data_converge.dag", "data_converge.dwd_ready", "data_converge.scheduler", "data_converge.sql_execution", "data_converge.state", "data_converge.execution_logging", "data_converge.leader_election", "data_converge_assets"]
+package-dir = {"" = "Services/Service/data-converge/src", data_converge_assets = "Services/Service/data-converge/resources"}
+
+[tool.setuptools.package-data]
+data_converge_assets = ["config/*.yaml", "sql/*.sql"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E9", "F"]

@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "hw-mindops-dataconverge"
+version = "1.0.0"
+description = ""
+authors = []
+package-mode = false
+
+
+# 依赖
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+PyYAML = ">=6,<7"
+APScheduler = ">=3.11,<4"
+redis = ">=5,<7"
+[tool.poetry.dev-dependencies]
+
+
+# 下载地址
+[[tool.poetry.source]]
+name = "pypi-center"
+url = "https://cmc.centralrepo.rnd.huawei.com/artifactory/pypi-center/simple/"
+priority = "supplemental"
+
+[[tool.poetry.source]]
+name = "pypi-product"
+url = "https://cmc.centralrepo.rnd.huawei.com/artifactory/product_pypi/simple/"
+priority = "supplemental"
+
+[[tool.poetry.source]]
+name = "pypi-center-repo"
+url = "https://cmc.centralrepo.rnd.huawei.com/artifactory/pypi-central-repo/simple/"
+priority = "primary"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

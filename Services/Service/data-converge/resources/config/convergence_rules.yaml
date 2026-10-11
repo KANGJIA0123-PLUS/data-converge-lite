@@ -1,0 +1,746 @@
+# DataConverge 汇聚任务配置
+#
+# 配置说明:
+#   - taskname: 任务唯一标识（必填）
+#   - description: 任务描述（可选）
+#   - source_tables: 源表列表（必填，至少一个）
+#   - target_table: 目标表（必填）
+#   - aggregation_interval: 聚合时间窗口(ISO 8601 Duration)（必填）
+#   - cron: 任务触发时间(标准cron表达式)（必填）
+#   - depends_on: 依赖的任务taskname列表（可选，默认空列表）
+#   - sql_id: 对应config/sql/目录下SQL文件的ID（必填）
+#
+# 时间规则说明:
+#   - 5分钟任务: 在第6分钟执行(6,11,16,21,26,31,36,41,46,51,56)，等待上游DWD数据就绪
+#   - 小时任务: 在每小时第6分钟执行，等待5分钟任务完成
+#   - 天任务: 在每天00:10执行，等待小时任务完成
+#   - 月任务: 在每月1号00:20执行，等待天任务完成
+
+convergence_rules:
+  # ============================================================================
+  # 1. GPU 聚合链 (DWD -> DWS -> DWS -> DWS -> DWS)
+  # ============================================================================
+
+  # 1.1 GPU 5分钟实时汇聚: DWD -> DWS
+  # 执行时间: 6,11,16,21,26,31,36,41,46,51,56分
+  - taskname: task_gpu_realtime_to_5min_dws
+    description: GPU实时数据 -> 5分钟预聚合 (DWD -> DWS)
+    source_tables:
+      - t_mops_gpu_realtime_dwd
+    target_table: t_mops_gpu_5min_dws
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on: []
+    sql_id: task_gpu_realtime_to_5min_dws
+
+  # 1.2 GPU 小时汇聚: DWS -> DWS
+  # 执行时间: 每小时第6分钟
+  - taskname: task_gpu_5min_to_hour_dws
+    description: GPU 5分钟数据 -> 小时聚合 (DWS -> DWS)
+    source_tables:
+      - t_mops_gpu_5min_dws
+    target_table: t_mops_gpu_hour_dws
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_gpu_realtime_to_5min_dws
+    sql_id: task_gpu_5min_to_hour_dws
+
+  # 1.3 GPU 天汇聚: DWS -> DWS
+  # 执行时间: 每天00:10
+  - taskname: task_gpu_hour_to_day_dws
+    description: GPU小时数据 -> 天聚合 (DWS -> DWS)
+    source_tables:
+      - t_mops_gpu_hour_dws
+    target_table: t_mops_gpu_day_dws
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_gpu_5min_to_hour_dws
+    sql_id: task_gpu_hour_to_day_dws
+
+  # 1.4 GPU 月汇聚: DWS -> DWS
+  # 执行时间: 每月1号00:20
+  - taskname: task_gpu_day_to_month_dws
+    description: GPU天数据 -> 月聚合 (DWS -> DWS)
+    source_tables:
+      - t_mops_gpu_day_dws
+    target_table: t_mops_gpu_month_dws
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_gpu_hour_to_day_dws
+    sql_id: task_gpu_day_to_month_dws
+
+  # ============================================================================
+  # 2. 节点聚合链 (DWD -> DWS -> DWS -> DWS -> DWS)
+  # ============================================================================
+
+  # 2.1 节点 5分钟实时汇聚: DWD -> DWS
+  # 执行时间: 6,11,16,21,26,31,36,41,46,51,56分
+  - taskname: task_node_realtime_to_5min_dws
+    description: 节点实时数据 -> 5分钟预聚合 (DWD -> DWS)
+    source_tables:
+      - t_mops_node_realtime_dwd
+    target_table: t_mops_node_5min_dws
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on: []
+    sql_id: task_node_realtime_to_5min_dws
+
+  # 2.2 节点 小时汇聚: DWS -> DWS
+  # 执行时间: 每小时第6分钟
+  - taskname: task_node_5min_to_hour_dws
+    description: 节点5分钟数据 -> 小时聚合 (DWS -> DWS)
+    source_tables:
+      - t_mops_node_5min_dws
+    target_table: t_mops_node_hour_dws
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_node_realtime_to_5min_dws
+    sql_id: task_node_5min_to_hour_dws
+
+  # 2.3 节点 天汇聚: DWS -> DWS
+  # 执行时间: 每天00:10
+  - taskname: task_node_hour_to_day_dws
+    description: 节点小时数据 -> 天聚合 (DWS -> DWS)
+    source_tables:
+      - t_mops_node_hour_dws
+    target_table: t_mops_node_day_dws
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_node_5min_to_hour_dws
+    sql_id: task_node_hour_to_day_dws
+
+  # 2.4 节点 月汇聚: DWS -> DWS
+  # 执行时间: 每月1号00:20
+  - taskname: task_node_day_to_month_dws
+    description: 节点天数据 -> 月聚合 (DWS -> DWS)
+    source_tables:
+      - t_mops_node_day_dws
+    target_table: t_mops_node_month_dws
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_node_hour_to_day_dws
+    sql_id: task_node_day_to_month_dws
+
+  # ============================================================================
+  # 3. 节点ADS表 (GPU DWS + Node DWS -> Node ADS)
+  # ============================================================================
+
+  # 3.1 节点5分钟ADS: GPU 5min DWS + Node 5min DWS -> Node 5min ADS
+  - taskname: task_node_5min_ads
+    description: 节点5分钟聚合ADS表(GPU+Node)
+    source_tables:
+      - t_mops_gpu_5min_dws
+      - t_mops_node_5min_dws
+    target_table: t_mops_node_5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_gpu_realtime_to_5min_dws
+      - task_node_realtime_to_5min_dws
+    sql_id: task_node_5min_ads
+
+  # 3.2 节点小时ADS: GPU hour DWS + Node hour DWS -> Node hour ADS
+  - taskname: task_node_hour_ads
+    description: 节点小时聚合ADS表(GPU+Node)
+    source_tables:
+      - t_mops_gpu_hour_dws
+      - t_mops_node_hour_dws
+    target_table: t_mops_node_hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_gpu_5min_to_hour_dws
+      - task_node_5min_to_hour_dws
+    sql_id: task_node_hour_ads
+
+  # 3.3 节点天ADS: GPU day DWS + Node day DWS -> Node day ADS
+  - taskname: task_node_day_ads
+    description: 节点天聚合ADS表(GPU+Node)
+    source_tables:
+      - t_mops_gpu_day_dws
+      - t_mops_node_day_dws
+    target_table: t_mops_node_day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_gpu_hour_to_day_dws
+      - task_node_hour_to_day_dws
+    sql_id: task_node_day_ads
+
+  # 3.4 节点月ADS: GPU month DWS + Node month DWS -> Node month ADS
+  - taskname: task_node_month_ads
+    description: 节点月聚合ADS表(GPU+Node)
+    source_tables:
+      - t_mops_gpu_month_dws
+      - t_mops_node_month_dws
+    target_table: t_mops_node_month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_gpu_day_to_month_dws
+      - task_node_day_to_month_dws
+    sql_id: task_node_month_ads
+
+  # ============================================================================
+  # 4. 资源ADS表 (Node ADS + resource_config -> Resource ADS)
+  # ============================================================================
+
+  # 4.1 资源5分钟ADS
+  - taskname: task_resource_5min_ads
+    description: 资源5分钟聚合ADS表
+    source_tables:
+      - t_mops_node_5min_ads
+      - resource_config_local
+    target_table: t_mops_resource_5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_node_5min_ads
+    sql_id: task_resource_5min_ads
+
+  # 4.2 资源小时ADS
+  - taskname: task_resource_hour_ads
+    description: 资源小时聚合ADS表
+    source_tables:
+      - t_mops_node_hour_ads
+      - resource_config_local
+    target_table: t_mops_resource_hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_node_hour_ads
+    sql_id: task_resource_hour_ads
+
+  # 4.3 资源天ADS
+  - taskname: task_resource_day_ads
+    description: 资源天聚合ADS表
+    source_tables:
+      - t_mops_node_day_ads
+      - resource_config_local
+    target_table: t_mops_resource_day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_node_day_ads
+    sql_id: task_resource_day_ads
+
+  # 4.4 资源月ADS
+  - taskname: task_resource_month_ads
+    description: 资源月聚合ADS表
+    source_tables:
+      - t_mops_node_month_ads
+      - resource_config_local
+    target_table: t_mops_resource_month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_node_month_ads
+    sql_id: task_resource_month_ads
+
+  # ============================================================================
+  # 5.1 模型实例DWS表 (DWD -> DWS -> DWS -> DWS -> DWS)
+  # ============================================================================
+
+  # 5.1.1 模型实例5分钟DWS
+  - taskname: task_model_instance_5min_dws
+    description: 模型实例5分钟预聚合
+    source_tables:
+      - t_mops_modelinstance_realtime_dwd
+    target_table: t_mops_modelinstance_5min_dws
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on: []
+    sql_id: task_model_instance_5min_dws
+
+  # 5.1.2 模型实小时DWS
+  - taskname: task_model_instance_hour_dws
+    description: 模型实小时聚合
+    source_tables:
+      - t_mops_modelinstance_5min_dws
+    target_table: t_mops_modelinstance_hour_dws
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_instance_5min_dws
+    sql_id: task_model_instance_hour_dws
+
+  # 5.1.3 模型实例天DWS
+  - taskname: task_model_instance_day_dws
+    description: 模型实例天聚合
+    source_tables:
+      - t_mops_modelinstance_hour_dws
+    target_table: t_mops_modelinstance_day_dws
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_instance_hour_dws
+    sql_id: task_model_instance_day_dws
+
+  # 5.1.4 模型实例月DWS
+  - taskname: task_model_instance_month_dws
+    description: 模型实例月聚合
+    source_tables:
+      - t_mops_modelinstance_day_dws
+    target_table: t_mops_modelinstance_month_dws
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_instance_day_dws
+    sql_id: task_model_instance_month_dws
+
+  # ============================================================================
+  # 5.1.5-8 模型实例ADS表 (Model Instance DWS + GPU DWS -> Model Instance ADS)
+  # ============================================================================
+
+  # 5.1.5 模型实例5分钟ADS
+  - taskname: task_model_instance_5min_ads
+    description: 模型实例5分钟ADS表
+    source_tables:
+      - t_mops_modelinstance_5min_dws
+      - t_mops_gpu_5min_dws
+    target_table: t_mops_modelinstance_5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_model_instance_5min_dws
+      - task_gpu_realtime_to_5min_dws
+    sql_id: task_model_instance_5min_ads
+
+  # 5.1.6 模型实小时ADS
+  - taskname: task_model_instance_hour_ads
+    description: 模型实小时ADS表
+    source_tables:
+      - t_mops_modelinstance_hour_dws
+      - t_mops_gpu_hour_dws
+    target_table: t_mops_modelinstance_hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_instance_hour_dws
+      - task_gpu_5min_to_hour_dws
+    sql_id: task_model_instance_hour_ads
+
+  # 5.1.7 模型实例天ADS
+  - taskname: task_model_instance_day_ads
+    description: 模型实例天ADS表
+    source_tables:
+      - t_mops_modelinstance_day_dws
+      - t_mops_gpu_day_dws
+    target_table: t_mops_modelinstance_day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_instance_day_dws
+      - task_gpu_hour_to_day_dws
+    sql_id: task_model_instance_day_ads
+
+  # 5.1.8 模型实例月ADS
+  - taskname: task_model_instance_month_ads
+    description: 模型实例月ADS表
+    source_tables:
+      - t_mops_modelinstance_month_dws
+      - t_mops_gpu_month_dws
+    target_table: t_mops_modelinstance_month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_instance_month_dws
+      - task_gpu_day_to_month_dws
+    sql_id: task_model_instance_month_ads
+
+  # ============================================================================
+  # 5.2 模型指标实例DWS表 (DWD -> DWS -> DWS -> DWS -> DWS)
+  # ============================================================================
+
+  # 5.2.1 模型指标实例5分钟DWS
+  - taskname: task_model_metric_instance_5min_dws
+    description: 模型指标实例5分钟预聚合
+    source_tables:
+      - t_mops_modelmetric_realtime_dwd
+    target_table: t_mops__modelmetric_instance__5min_dws
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on: []
+    sql_id: task_model_metric_instance_5min_dws
+
+  # 5.2.2 模型指标实小时DWS
+  - taskname: task_model_metric_instance_hour_dws
+    description: 模型指标实小时聚合
+    source_tables:
+      - t_mops__modelmetric_instance__5min_dws
+    target_table: t_mops__modelmetric_instance__hour_dws
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_metric_instance_5min_dws
+    sql_id: task_model_metric_instance_hour_dws
+
+  # 5.2.3 模型指标实例天DWS
+  - taskname: task_model_metric_instance_day_dws
+    description: 模型指标实例天聚合
+    source_tables:
+      - t_mops__modelmetric_instance__hour_dws
+    target_table: t_mops__modelmetric_instance__day_dws
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_metric_instance_hour_dws
+    sql_id: task_model_metric_instance_day_dws
+
+  # 5.2.4 模型指标实例月DWS
+  - taskname: task_model_metric_instance_month_dws
+    description: 模型指标实例月聚合
+    source_tables:
+      - t_mops__modelmetric_instance__day_dws
+    target_table: t_mops__modelmetric_instance__month_dws
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_metric_instance_day_dws
+    sql_id: task_model_metric_instance_month_dws
+
+  # ============================================================================
+  # 6.1 模型指标实例ADS表
+  # ============================================================================
+
+  # 6.1.1 模型指标实例5分钟ADS
+  - taskname: task_model_metric_instance_5min_ads
+    description: 模型指标实例5分钟ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__5min_dws
+    target_table: t_mops__modelmetric_instance__5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_model_metric_instance_5min_dws
+    sql_id: task_model_metric_instance_5min_ads
+
+  # 6.1.2 模型指标实小时ADS
+  - taskname: task_model_metric_instance_hour_ads
+    description: 模型指标实小时ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__hour_dws
+    target_table: t_mops__modelmetric_instance__hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_metric_instance_hour_dws
+    sql_id: task_model_metric_instance_hour_ads
+
+  # 6.1.3 模型指标实例天ADS
+  - taskname: task_model_metric_instance_day_ads
+    description: 模型指标实例天ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__day_dws
+    target_table: t_mops__modelmetric_instance__day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_metric_instance_day_dws
+    sql_id: task_model_metric_instance_day_ads
+
+  # 6.1.4 模型指标实例月ADS
+  - taskname: task_model_metric_instance_month_ads
+    description: 模型指标实例月ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__month_dws
+    target_table: t_mops__modelmetric_instance__month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_metric_instance_month_dws
+    sql_id: task_model_metric_instance_month_ads
+
+  # ============================================================================
+  # 6.2 模型指标服务器ADS表 (Instance ADS -> Server ADS)
+  # ============================================================================
+
+  # 6.2.1 模型指标服务器5分钟ADS
+  - taskname: task_model_metric_server_5min_ads
+    description: 模型指标服务器5分钟ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__5min_ads
+    target_table: t_mops__modelmetric_server__5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_model_metric_instance_5min_ads
+    sql_id: task_model_metric_server_5min_ads
+
+  # 6.2.2 模型指标服务器小时ADS
+  - taskname: task_model_metric_server_hour_ads
+    description: 模型指标服务器小时ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__hour_ads
+    target_table: t_mops__modelmetric_server__hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_metric_instance_hour_ads
+    sql_id: task_model_metric_server_hour_ads
+
+  # 6.2.3 模型指标服务器天ADS
+  - taskname: task_model_metric_server_day_ads
+    description: 模型指标服务器天ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__day_ads
+    target_table: t_mops__modelmetric_server__day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_metric_instance_day_ads
+    sql_id: task_model_metric_server_day_ads
+
+  # 6.2.4 模型指标服务器月ADS
+  - taskname: task_model_metric_server_month_ads
+    description: 模型指标服务器月ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__month_ads
+    target_table: t_mops__modelmetric_server__month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_metric_instance_month_ads
+    sql_id: task_model_metric_server_month_ads
+
+  # ============================================================================
+  # 6.3 资源服务器ADS表 (Server ADS + resource_config -> Resource Server ADS)
+  # ============================================================================
+
+  # 6.3.1 资源服务器5分钟ADS
+  - taskname: task_resource_server_5min_ads
+    description: 资源服务器5分钟ADS表
+    source_tables:
+      - t_mops__modelmetric_server__5min_ads
+      - resource_config_local
+    target_table: t_mops__resource_server__5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_model_metric_server_5min_ads
+    sql_id: task_resource_server_5min_ads
+
+  # 6.3.2 资源服务器小时ADS
+  - taskname: task_resource_server_hour_ads
+    description: 资源服务器小时ADS表
+    source_tables:
+      - t_mops__modelmetric_server__hour_ads
+      - resource_config_local
+    target_table: t_mops__resource_server__hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_metric_server_hour_ads
+    sql_id: task_resource_server_hour_ads
+
+  # 6.3.3 资源服务器天ADS
+  - taskname: task_resource_server_day_ads
+    description: 资源服务器天ADS表
+    source_tables:
+      - t_mops__modelmetric_server__day_ads
+      - resource_config_local
+    target_table: t_mops__resource_server__day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_metric_server_day_ads
+    sql_id: task_resource_server_day_ads
+
+  # 6.3.4 资源服务器月ADS
+  - taskname: task_resource_server_month_ads
+    description: 资源服务器月ADS表
+    source_tables:
+      - t_mops__modelmetric_server__month_ads
+      - resource_config_local
+    target_table: t_mops__resource_server__month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_metric_server_month_ads
+    sql_id: task_resource_server_month_ads
+
+  # ============================================================================
+  # 7.1 请求追踪DWS表 (DWD -> DWS -> DWS -> DWS -> DWS)
+  # ============================================================================
+
+  # 7.1.1 请求追踪5分钟DWS
+  - taskname: task_request_5min_dws
+    description: 请求追踪5分钟预聚合
+    source_tables:
+      - t_mops_request_realtime_dwd
+    target_table: t_mops_request_5min_dws
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on: []
+    sql_id: task_request_5min_dws
+
+  # 7.1.2 请求追踪小时DWS
+  - taskname: task_request_hour_dws
+    description: 请求追踪小时聚合
+    source_tables:
+      - t_mops_request_5min_dws
+    target_table: t_mops_request_hour_dws
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_request_5min_dws
+    sql_id: task_request_hour_dws
+
+  # 7.1.3 请求追踪天DWS
+  - taskname: task_request_day_dws
+    description: 请求追踪天聚合
+    source_tables:
+      - t_mops_request_hour_dws
+    target_table: t_mops_request_day_dws
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_request_hour_dws
+    sql_id: task_request_day_dws
+
+  # 7.1.4 请求追踪月DWS
+  - taskname: task_request_month_dws
+    description: 请求追踪月聚合
+    source_tables:
+      - t_mops_request_day_dws
+    target_table: t_mops_request_month_dws
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_request_day_dws
+    sql_id: task_request_month_dws
+
+  # ============================================================================
+  # 7.2.1 请求追踪Agent ADS表
+  # ============================================================================
+
+  # 7.2.1.1 请求追踪Agent 5分钟ADS
+  - taskname: task_request_5min_agent_ads
+    description: 请求追踪Agent 5分钟ADS表
+    source_tables:
+      - t_mops_request_5min_dws
+    target_table: t_mops_request_5min_agent_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_request_5min_dws
+    sql_id: task_request_5min_agent_ads
+
+  # 7.2.1.2 请求追踪Server 5分钟ADS
+  - taskname: task_request_5min_server_ads
+    description: 请求追踪Server 5分钟ADS表
+    source_tables:
+      - t_mops_request_5min_dws
+    target_table: t_mops_request_5min_server_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_request_5min_dws
+    sql_id: task_request_5min_server_ads
+
+  # ============================================================================
+  # 7.2.2 请求追踪ADS表
+  # ============================================================================
+
+  # 7.2.2.1 请求追踪Agent小时ADS
+  - taskname: task_request_hour_agent_ads
+    description: 请求追踪Agent小时ADS表
+    source_tables:
+      - t_mops_request_hour_dws
+    target_table: t_mops_request_hour_agent_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_request_hour_dws
+    sql_id: task_request_hour_agent_ads
+
+  # 7.2.2.2 请求追踪Server小时ADS
+  - taskname: task_request_hour_server_ads
+    description: 请求追踪Server小时ADS表
+    source_tables:
+      - t_mops_request_hour_dws
+    target_table: t_mops_request_hour_server_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_request_hour_dws
+    sql_id: task_request_hour_server_ads
+
+  # 7.2.3.1 请求追踪Agent天ADS
+  - taskname: task_request_day_agent_ads
+    description: 请求追踪Agent天ADS表
+    source_tables:
+      - t_mops_request_day_dws
+    target_table: t_mops_request_day_agent_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_request_day_dws
+    sql_id: task_request_day_agent_ads
+
+  # 7.2.3.2 请求追踪Server天ADS
+  - taskname: task_request_day_server_ads
+    description: 请求追踪Server小时ADS表
+    source_tables:
+      - t_mops_request_day_dws
+    target_table: t_mops_request_day_server_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_request_day_dws
+    sql_id: task_request_hour_server_ads
+
+  # 7.2.4.1 请求追踪Agent月ADS
+  - taskname: task_request_month_agent_ads
+    description: 请求追踪Agent月ADS表
+    source_tables:
+      - t_mops_request_month_dws
+    target_table: t_mops_request_month_agent_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_request_month_dws
+    sql_id: task_request_month_agent_ads
+
+  # 7.2.4.2 请求追踪Server月ADS
+  - taskname: task_request_month_server_ads
+    description: 请求追踪Server月ADS表
+    source_tables:
+      - t_mops_request_month_dws
+    target_table: t_mops_request_month_server_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_request_month_dws
+    sql_id: task_request_month_server_ads
+
+# Cron表达式格式说明:
+#   ┌───────────── 分钟 (0-59)
+#   │ ┌───────────── 小时 (0-23)
+#   │ │ ┌───────────── 日 (1-31)
+#   │ │ │ ┌───────────── 月 (1-12)
+#   │ │ │ │ ┌───────────── 星期 (0-6, 0=周日)
+#   │ │ │ │ │
+#   * * * * *
+#
+#   */5 = 每5个单位
+#   5,10 = 第5和第10
+#   1-5 = 1到5
+#
+# 示例:
+#   6,11,16,21,26,31,36,41,46,51,56 * * * *  每5分钟(第6秒开始)
+#   6 * * * *       每小时第6分钟
+#   10 0 * * *      每天00:10
+#   20 0 1 * *      每月1号00:20
+
+# ISO 8601 Duration 格式说明:
+#   PT5M  = 5分钟 (5 Minutes)
+#   PT1H  = 1小时 (1 Hour)
+#   P1D   = 1天 (1 Day)
+#   P1M   = 1月 (1 Month)

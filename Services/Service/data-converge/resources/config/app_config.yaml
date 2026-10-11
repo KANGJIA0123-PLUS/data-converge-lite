@@ -1,0 +1,48 @@
+# 平台部署：保留公司52任务。ClickHouse HTTP端点由Deployment注入。
+clickhouse:
+  host: "${CLICKHOUSE_URL}"
+  port: "${CLICKHOUSE_PORT}"
+  database: modelmate_metric
+  username: nethouse
+  password_file: /opt/its/data-converge/secret/clickhouse/password
+  paas_name: clickhouse-pms-password
+  kms_timeout_seconds: 30
+  # 沿用公司原TLS设置；需核对httpPort实际提供HTTPS还是HTTP。
+  # 如果端点实际是纯HTTP，请显式改为false，URL协议需与此一致。
+  secure: true
+  verify: true
+
+state:
+  directory: /srv/its/MindOpsBOSE/data-converge/data/lite-state
+
+# 本次默认启用DWD就绪门控；5类信号必须全部到齐，超时不会放行半窗。
+# 参考Java security-sdk写database=5，但没有直接端点/拓扑，需现场确认。
+dwd_ready:
+  enabled: true
+  queue_key: modelverse:dwd:ready
+  block_seconds: 1
+  batch_size: 100
+  wait_warning_seconds: 60
+  redis:
+    host: "${DWD_REDIS_HOST}"
+    port: "${DWD_REDIS_PORT}"
+    mode: standalone       # 如果是真RedisCluster，改为cluster且db必须是0。
+    db: 5                  # 必须与生产者写入信号的库一致。
+    password_env: DWD_REDIS_PASSWORD
+    ssl: true              # 核对实际端点；公司CA用SSL_CERT_FILE或系统信任库。
+    ssl_verify: true
+    socket_timeout: 3
+    socket_connect_timeout: 2
+
+scheduler:
+  timezone: Asia/Shanghai
+  default_timeout_seconds: 300
+  max_concurrent_tasks: 4
+  poll_interval_seconds: 5
+  catchup_limit: 100
+  max_attempts: 3
+  retry_delay_seconds: 30
+
+config:
+  convergence_rules_path: resources/config/convergence_rules.yaml
+  sql_directory: resources/sql

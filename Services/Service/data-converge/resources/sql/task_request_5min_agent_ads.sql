@@ -1,0 +1,89 @@
+-- 7.2. request trace  ads 层汇聚逻辑
+-- 7.2.1.1 t_mops_agent_5min_ads 面向agent_id视角的汇聚表
+  -- 由 t_mops_request_5min_dws -> t_mops_agent_5min_ads
+ INSERT INTO modelmate_metric.t_mops_agent_5min_ads
+(
+    window_time,
+    agent_id,
+    agent_name,
+    prefill_time_avg,
+    prefill_time_min,
+    prefill_time_max,
+    prefill_time_sum,
+    decode_time_average_avg,
+    decode_time_average_min,
+    decode_time_average_max,
+    decode_time_average_sum,
+    input_tokens_avg,
+    input_tokens_min,
+    input_tokens_max,
+    input_tokens_sum,
+    output_tokens_avg,
+    output_tokens_min,
+    output_tokens_max,
+    output_tokens_sum,
+    total_tokens_sum,
+    total_time_sum,
+    request_total_sum,
+    sync_flag
+)
+SELECT
+    dws.window_time,
+    dws.agent_id,
+    any(dws.agent_name) AS agent_name,
+
+    -- 加权平均计算
+    toFloat32(
+        CASE WHEN coalesce(sum(dws.request_total_sum), 0) > 0
+             THEN coalesce(sum(dws.prefill_time_sum), 0) / sum(dws.request_total_sum)
+             ELSE 0.00
+        END
+    ) AS prefill_time_avg,
+    min(dws.prefill_time_min) AS prefill_time_min,
+    max(dws.prefill_time_max) AS prefill_time_max,
+    sum(dws.prefill_time_sum) AS prefill_time_sum,
+
+    toFloat32(
+        CASE WHEN coalesce(sum(dws.request_total_sum), 0) > 0
+             THEN coalesce(sum(dws.decode_time_average_sum), 0) / sum(dws.request_total_sum)
+             ELSE 0.00
+        END
+    ) AS decode_time_average_avg,
+    min(dws.decode_time_average_min) AS decode_time_average_min,
+    max(dws.decode_time_average_max) AS decode_time_average_max,
+    sum(dws.decode_time_average_sum) AS decode_time_average_sum,
+
+    toFloat32(
+        CASE WHEN coalesce(sum(dws.request_total_sum), 0) > 0
+             THEN coalesce(sum(dws.input_tokens_sum), 0) / sum(dws.request_total_sum)
+             ELSE 0.00
+        END
+    ) AS input_tokens_avg,
+    min(dws.input_tokens_min) AS input_tokens_min,
+    max(dws.input_tokens_max) AS input_tokens_max,
+    toInt32(sum(dws.input_tokens_sum)) AS input_tokens_sum,
+
+    toFloat32(
+        CASE WHEN coalesce(sum(dws.request_total_sum), 0) > 0
+             THEN coalesce(sum(dws.output_tokens_sum), 0) / sum(dws.request_total_sum)
+             ELSE 0.00
+        END
+    ) AS output_tokens_avg,
+    min(dws.output_tokens_min) AS output_tokens_min,
+    max(dws.output_tokens_max) AS output_tokens_max,
+    toInt32(sum(dws.output_tokens_sum)) AS output_tokens_sum,
+
+    toInt32(sum(dws.total_tokens_sum)) AS total_tokens_sum,
+    sum(dws.total_time_sum) AS total_time_sum,
+    toUInt64(sum(dws.request_total_sum)) AS request_total_sum,
+
+    -- 数据同步标记 (直接透传或按场景取 anyLast)
+    any(dws.sync_flag)                                                    AS sync_flag
+
+FROM modelmate_metric.t_mops_request_5min_dws AS dws
+WHERE dws.window_time >= {start_time:DateTime}
+  AND dws.window_time <  {end_time:DateTime}
+  AND dws.sync_flag = 0 -- 只针对探针实时上报的数据做汇聚
+GROUP BY
+    dws.window_time,
+    dws.agent_id;

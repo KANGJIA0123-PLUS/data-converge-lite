@@ -1,0 +1,478 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{.Chart.Name}}-pre-delete-job
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        {{.Chart.Name}}-server: {{.Chart.Name}}-pre-delete-job
+        istio.io/dataplane-mode: ambient
+    spec:
+      nodeSelector:
+          {{.Values.resource.label_key}}: {{.Values.resource.label_val}}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: {{.Chart.Name}}-server
+                    operator: In
+                    values:
+                      - {{.Chart.Name}}-pre-delete-job
+              topologyKey: "kubernetes.io/hostname"
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 19101
+        fsGroup: 19101
+      # 容器拉取认证
+      {{ if eq .Values.global.image_store_type "hw_cce" }}
+      imagePullSecrets:
+        - name: default-secret
+      {{ else }}
+      imagePullSecrets:
+        - name: {{ .Values.global.current_namespace }}-secret
+      {{ end }}
+      serviceAccount: {{.Chart.Name}}-sa
+      serviceAccountName: {{.Chart.Name}}-sa
+
+      initContainers:
+        - name: {{.Chart.Name}}-init
+          image: {{ if .Values.global.image_registry }}{{ .Values.global.image_registry | trimSuffix "/" }}/{{ end }}{{ .Values.image.image_url }}
+          imagePullPolicy: {{.Values.image.pull_policy}}
+          command:
+            - bash
+            - "/var/scripts/sudo_init.sh"
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: srv-path
+              mountPath: /srv/its
+              readOnly: false
+            - name: sys-log-path
+              mountPath: /var/paas/sys/log
+              readOnly: false
+            - name: modelmate-system-service-certfiles
+              mountPath: /opt/its/data-converge/secret
+              readOnly: false
+            - name: dcc-config
+              mountPath: /opt/its/data-converge/configmap/dcc-config
+              readOnly: true
+            - name: service-crl
+              mountPath: /opt/its/data-converge/configmap
+              readOnly: true
+            - name: lb-configmap
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/lb_service_url
+              readOnly: true
+              subPath: lb_service_url
+            - name: gls-configmap
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/gls_server_url_prefix
+              readOnly: true
+              subPath: gls_server_url_prefix
+            - name: paas-configmap-common-project-id
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/common_project_id
+              readOnly: true
+              subPath: common_project_id
+            - name: paas-configmap-common-project-name
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/common_project_name
+              readOnly: true
+              subPath: common_project_name
+            - name: paas-configmap-fs-project-name
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/fs_project_name
+              readOnly: true
+              subPath: fs_project_name
+            - name: paas-configmap-fs-project-id
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/fs_project_id
+              readOnly: true
+              subPath: fs_project_id
+            - name: paas-configmap-fs-domain-name
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/fs_domain_name
+              readOnly: true
+              subPath: fs_domain_name
+            - name: paas-configmap-fs-domain-id
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/fs_domain_id
+              readOnly: true
+              subPath: fs_domain_id
+            - name: dsp-public-secret
+              mountPath: /opt/its/secret/its-common-secret/gam-auth-default.properties
+              readOnly: true
+              subPath: gam-auth-default.properties
+            - name: minio-secret
+              mountPath: /opt/its/secret/its-common-secret/minio_pwd
+              readOnly: true
+              subPath: minio_pwd
+            - name: redis-cipher-secret-redis-root
+              mountPath: /opt/its/secret/its-common-secret/redis_root.key
+              readOnly: true
+              subPath: redis_root.key
+            - name: redis-cipher-secret-redis-shared
+              mountPath: /opt/its/secret/its-common-secret/redis_shared.key
+              readOnly: true
+              subPath: redis_shared.key
+            - name: xms-service-config-secret
+              mountPath: /opt/its/secret/xms_sdk/config
+              readOnly: true
+            - name: xms-service-secret
+              mountPath: /opt/its/secret/xms_sdk/
+              readOnly: true
+            - name: xms-default-secret
+              mountPath: /opt/its/secret/xms/
+              readOnly: true
+            - name: audit-log
+              mountPath: /var/paas/sys/log/its/
+              readOnly: false
+            - name: run-temp
+              mountPath: /srv/its/MindOpsBOSE/data-converge/temp
+              readOnly: false
+            - name: run-data
+              mountPath: /srv/its/MindOpsBOSE/data-converge/data
+              readOnly: false
+            - name: run-log
+              mountPath: /srv/its/MindOpsBOSE/data-converge/log
+              readOnly: false
+            - name: zoneinfo
+              mountPath: /usr/share/zoneinfo
+              readOnly: true
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+            - name: {{.Chart.Name}}-clickhouse
+              mountPath: /opt/its/data-converge/secret/clickhouse/
+              readOnly: true
+
+      containers:
+        - name: {{.Chart.Name}}-pre-delete-job
+          image: {{ if .Values.global.image_registry }}{{ .Values.global.image_registry | trimSuffix "/" }}/{{ end }}{{ .Values.image.image_url }}
+          imagePullPolicy: {{.Values.image.pull_policy}}
+          securityContext:
+            capabilities:
+              drop:
+                - SETGID
+                - SETUID
+                - SETFCAP
+                - SETPCAP
+                - KILL
+                - CHOWN
+                - DAC_OVERRIDE
+                - DAC_READ_SEARCH
+                - FOWNER
+                - FSETID
+                - NET_ADMIN
+                - IPC_OWNER
+                - SYS_PTRACE
+                - SYS_ADMIN
+          env:
+            - name: DCC_CLIENT_CONFIG_FILE_PATH
+              value: "/opt/its/data-converge/configmap/dcc-config/dcc_client.properties"
+            - name: DEPLOY_AREA
+              value: "{{.Values.global.deploy_area}}"
+            - name: DCS_MULTI_TENANT
+              value: "{{.Values.global.dcs_multi_tenant}}"
+            - name: CFE_IP
+              value: "{{ .Values.global.cfe_ip }}"
+            - name: DCC_CLIENT_SSL_CUSTOM_CLASS
+              value: "com.huawei.its.security.common.utils.DefaultDecryptPlugin"
+            - name: DCC_IS_TLS_ENABLE
+              value: "false"
+            - name: DCC_NAME_SPACE
+              value: "{{ .Values.global.platform_namespace }}"
+            - name: DCC_CRL_PATH
+              value: "/opt/its/data-converge/configmap/service.crl"
+            - name: DCC_CLIENT_SSL_TRUST_STORE_PASSWORD
+              value: "/opt/its/data-converge/secret/root.pwd"
+            - name: DCC_CLIENT_SSL_TRUST_STORE_PATH
+              value: "/opt/its/data-converge/secret/root.p12"
+            - name: DCC_CLIENT_SSL_KEY_STORE_PASSWORD
+              value: "/opt/its/data-converge/secret/server.pwd"
+            - name: DCC_CLIENT_SSL_KEY_STORE_PATH
+              value: "/opt/its/data-converge/secret/server.p12"
+            - name: MM_IDATA_CO_DEPLOYMENT
+              value: "{{ .Values.global.mm_idata_co_deployment }}"
+            - name: USE_MULTI_TENANT_FRAMEWORK
+              value: "{{ .Values.global.use_multi_tenant_framework }}"
+            - name: CAS_SERVER_LOGIN_URL
+              value: ""
+            - name: CAS_CLIENT_HOST_URL
+              value: ""
+            - name: SERVICE_PORT
+              value: "25642"
+            - name: CIPHER_ROOT
+              value: "/opt/its/data-converge/secret/redis-cipher-secret"
+            - name: SERVICE_LOG_PATH
+              value: "/srv/its/MindOpsBOSE/data-converge/log/data-converge.log"
+            - name: GAUSSDB_HOST
+              value: "{{.Values.db.gaussdb_host }}"
+            - name: GAUSSDB_PORT
+              value: "{{.Values.db.gaussdb_port }}"
+            - name: DB_USER
+              value: "{{.Values.db.db_user }}"
+            - name: SERVICE_VERSION
+              value: "27.1.RC1"
+            - name: SERVICE_NAME
+              value: "data-converge"
+            - name: RABBITMQ_NAME
+              value: "{{.Values.secret.rabbitmq_secret | default "rabbitmqservice-password" | replace "-password" ""}}"
+            - name: COMMON_CONFIGMAP_DIR
+              value: "/opt/its/configmap/its-common-cfg-configmap/"
+            - name: COMMON_SECRET_DIR
+              value: "/opt/its/secret/its-common-secret/"
+            - name: CNAI_UPGRADE_MODE
+              value: "{{ .Values.global.cnai_upgrade_mode }}"
+            - name: K8S_PROVIDER
+              value: "{{ .Values.global.image_store_type }}"
+            - name: SVC_HTTPS_WHITELIST
+              value: "{{ .Values.services.svc_https_whitelist }}"
+            - name: DEFAULT_TENANT_ID
+              value: "{{ .Values.global.default_tenant_id }}"
+            - name: BASE_PLATFORM
+              value: "{{ .Values.global.base_platform }}"
+            - name: XMS_SSL_ENABLE
+              value: "{{ .Values.global.xms_ssl_enable }}"
+            - name: SERVER_SECRET_DIR
+              value: "/opt/its/data-converge/secret"
+            - name: SERVER_CONFIGMAP_DIR
+              value: "/opt/its/data-converge/configmap"
+            - name: PROJECT_NAME
+              value: "{{ .Values.global.current_namespace }}"
+            - name: COMMON_PROJECT_NAME
+              value: "{{ .Values.global.platform_namespace }}"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: XMS_SERVICE_URL
+              value: "xms-service.{{ .Values.global.platform_namespace }}.svc.cluster.local:32191"
+            - name: XMS_SDK_SECRET_PATH
+              value: "/opt/its/secret/xms_sdk/"
+            - name: XMS_WORKSPACE_DIR
+              value: "/opt/its/secret/xms/"
+          command: [ "/bin/bash", "/opt/its/{{.Chart.Name}}/bin/pre-delete.sh" ]
+          volumeMounts:
+            - name: modelmate-system-service-certfiles
+              mountPath: /opt/its/data-converge/secret
+              readOnly: false
+            - name: dcc-config
+              mountPath: /opt/its/data-converge/configmap/dcc-config
+              readOnly: true
+            - name: service-crl
+              mountPath: /opt/its/data-converge/configmap
+              readOnly: true
+            - name: lb-configmap
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/lb_service_url
+              readOnly: true
+              subPath: lb_service_url
+            - name: gls-configmap
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/gls_server_url_prefix
+              readOnly: true
+              subPath: gls_server_url_prefix
+            - name: paas-configmap-common-project-id
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/common_project_id
+              readOnly: true
+              subPath: common_project_id
+            - name: paas-configmap-common-project-name
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/common_project_name
+              readOnly: true
+              subPath: common_project_name
+            - name: paas-configmap-fs-project-name
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/fs_project_name
+              readOnly: true
+              subPath: fs_project_name
+            - name: paas-configmap-fs-project-id
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/fs_project_id
+              readOnly: true
+              subPath: fs_project_id
+            - name: paas-configmap-fs-domain-name
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/fs_domain_name
+              readOnly: true
+              subPath: fs_domain_name
+            - name: paas-configmap-fs-domain-id
+              mountPath: /opt/its/configmap/its-common-cfg-configmap/fs_domain_id
+              readOnly: true
+              subPath: fs_domain_id
+            - name: dsp-public-secret
+              mountPath: /opt/its/secret/its-common-secret/gam-auth-default.properties
+              readOnly: true
+              subPath: gam-auth-default.properties
+            - name: minio-secret
+              mountPath: /opt/its/secret/its-common-secret/minio_pwd
+              readOnly: true
+              subPath: minio_pwd
+            - name: redis-cipher-secret-redis-root
+              mountPath: /opt/its/secret/its-common-secret/redis_root.key
+              readOnly: true
+              subPath: redis_root.key
+            - name: redis-cipher-secret-redis-shared
+              mountPath: /opt/its/secret/its-common-secret/redis_shared.key
+              readOnly: true
+              subPath: redis_shared.key
+            - name: xms-service-config-secret
+              mountPath: /opt/its/secret/xms_sdk/config
+              readOnly: true
+            - name: xms-service-secret
+              mountPath: /opt/its/secret/xms_sdk/
+              readOnly: true
+            - name: xms-default-secret
+              mountPath: /opt/its/secret/xms/
+              readOnly: true
+            - name: audit-log
+              mountPath: /var/paas/sys/log/its/
+              readOnly: false
+            - name: run-temp
+              mountPath: /srv/its/MindOpsBOSE/data-converge/temp
+              readOnly: false
+            - name: run-data
+              mountPath: /srv/its/MindOpsBOSE/data-converge/data
+              readOnly: false
+            - name: run-log
+              mountPath: /srv/its/MindOpsBOSE/data-converge/log
+              readOnly: false
+            - name: zoneinfo
+              mountPath: /usr/share/zoneinfo
+              readOnly: true
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+            - name: {{.Chart.Name}}-clickhouse
+              mountPath: /opt/its/data-converge/secret/clickhouse/
+              readOnly: true
+      volumes:
+        - name: srv-path
+          hostPath:
+            path: /srv/its
+        - name: sys-log-path
+          hostPath:
+            path: /var/paas/sys/log
+        - name: modelmate-system-service-certfiles
+          secret:
+            secretName: gde-adapter-certfiles
+            defaultMode: 384
+            optional: true
+        - name: dcc-config
+          configMap:
+            name: {{.Chart.Name}}-dcc-config
+            defaultMode: 384
+            optional: true
+        - name: service-crl
+          configMap:
+            name: {{.Chart.Name}}-crl-cfg
+            defaultMode: 384
+            optional: true
+        - name: lb-configmap
+          configMap:
+            name: {{.Values.configmap.lb_configmap}}
+            defaultMode: 384
+            optional: true
+            items:
+              - key: service_url
+                path: lb_service_url
+        - name: gls-configmap
+          configMap:
+            name: {{.Values.configmap.gls_configmap}}
+            defaultMode: 384
+            optional: true
+        - name: paas-configmap-common-project-id
+          configMap:
+            name: {{.Values.configmap.paas_configmap}}
+            defaultMode: 384
+            optional: true
+        - name: paas-configmap-common-project-name
+          configMap:
+            name: {{.Values.configmap.paas_configmap}}
+            defaultMode: 384
+            optional: true
+        - name: paas-configmap-fs-project-name
+          configMap:
+            name: {{.Values.configmap.paas_configmap}}
+            defaultMode: 384
+            optional: true
+        - name: paas-configmap-fs-project-id
+          configMap:
+            name: {{.Values.configmap.paas_configmap}}
+            defaultMode: 384
+            optional: true
+        - name: paas-configmap-fs-domain-name
+          configMap:
+            name: {{.Values.configmap.paas_configmap}}
+            defaultMode: 384
+            optional: true
+        - name: paas-configmap-fs-domain-id
+          configMap:
+            name: {{.Values.configmap.paas_configmap}}
+            defaultMode: 384
+            optional: true
+        - name: dsp-public-secret
+          secret:
+            secretName: {{.Values.secret.dsp_public_secret}}
+            defaultMode: 384
+            optional: true
+        - name: minio-secret
+          secret:
+            secretName: {{.Values.secret.minio_secret}}
+            defaultMode: 384
+            optional: true
+            items:
+              - key: password
+                path: minio_pwd
+        - name: redis-cipher-secret-redis-root
+          secret:
+            secretName: {{.Values.secret.redis_cipher_secret}}
+            defaultMode: 384
+            optional: true
+            items:
+              - key: redis_root.key
+                path: redis_root.key
+        - name: redis-cipher-secret-redis-shared
+          secret:
+            secretName: {{.Values.secret.redis_cipher_secret}}
+            defaultMode: 384
+            optional: true
+            items:
+              - key: redis_shared.key
+                path: redis_shared.key
+        - name: xms-service-config-secret
+          secret:
+            secretName: xms-service-config-secret
+            defaultMode: 384
+            optional: true
+            items:
+              - key: sec-sdk.properties
+                path: sec-sdk.properties
+        - name: xms-service-secret
+          secret:
+            secretName: xms-service-secret
+            defaultMode: 384
+            optional: true
+        - name: xms-default-secret
+          secret:
+            secretName: xms-default-secret
+            defaultMode: 384
+            optional: true
+        - name: audit-log
+          hostPath:
+            path: {{.Values.host.audit_log_host_path}}
+        - name: run-temp
+          hostPath:
+            path: {{.Values.host.run_temp_host_path}}
+        - name: run-data
+          hostPath:
+            path: {{.Values.host.run_data_host_path}}
+        - name: run-log
+          hostPath:
+            path: {{.Values.host.run_log_host_path}}
+        - name: zoneinfo
+          hostPath:
+            path: /usr/share/zoneinfo
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+        - name: {{.Chart.Name}}-clickhouse
+          secret:
+            secretName: datacube-clickhouse-secret
+            defaultMode: 384
+            optional: true

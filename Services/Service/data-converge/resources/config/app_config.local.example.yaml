@@ -1,0 +1,25 @@
+# 仅用于本地或隔离环境；该配置不创建数据库/表。
+clickhouse:
+  host: 127.0.0.1
+  port: 8123
+  database: modelmate_metric
+  username: default
+  password_env: CLICKHOUSE_PASSWORD
+  secure: false
+  verify: true
+dwd_ready:
+  enabled: false  # 仅本地原流程调试；生产配置默认开启，不可绕过既有账本门控。
+
+state:
+  directory: ./var/lite-state
+scheduler:
+  timezone: Asia/Shanghai
+  default_timeout_seconds: 300
+  max_concurrent_tasks: 4
+  poll_interval_seconds: 5
+  catchup_limit: 100
+  max_attempts: 3
+  retry_delay_seconds: 30
+config:
+  convergence_rules_path: resources/config/convergence_rules.yaml
+  sql_directory: resources/sql
