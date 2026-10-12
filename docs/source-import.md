@@ -15,3 +15,5 @@
 本记录描述导入时的基线；后续轻量化修改由 Git 变更记录追踪。附件不包含完整平台工具链或外部部署配置，因此还原完整性不代表可独立执行原平台发布流程。
 
 2026-10-12 按用户要求恢复原 `Services/build_framework/scripts/build.sh`，保留全部脚本内容，仅去除导出器分隔空行、保留末尾换行。SHA-256：`a476480f2a4a346434f815395d524611a0cff2a5d4d9797144aa1339652254dd`。此后业务修改不调整该构建框架。
+
+同日按用户要求恢复 `Services/Package/images/bin/pyproject.toml` 的原始 Python/依赖版本及源配置，不再添加 APScheduler、redis 的构建声明。原有根 `pyproject.toml`、`requirements.txt`、`pytest.ini` 同样恢复上传原版；只删除新增的 `requirements-dev.txt` 和 `ruff.toml`。业务运行所需的兼容依赖由已有公司环境提供。

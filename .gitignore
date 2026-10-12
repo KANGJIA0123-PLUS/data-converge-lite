@@ -2,7 +2,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.ruff_cache/
 *.egg-info/
 *.whl
 build/
@@ -23,4 +22,3 @@ Services/Package/images/lib/
 Services/Package/images/bin/py/
 Services/Package/images/scripts/dependency_*/
 *.tar.gz
-!requirements*.txt

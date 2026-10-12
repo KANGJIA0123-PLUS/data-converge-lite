@@ -6,6 +6,8 @@
 
 构建要求：核心代码不打 whl；恢复并保留用户上传的 `Services/build_framework/scripts/build.sh`。采用原编译 `.pyc`、删除构建副本源码、复制应用目录的公司流水线；删除另加的独立打包工具。
 
+后续范围约束：以业务代码修改为主，不新增或调整构建、依赖和开发工具配置。已删除新增的 `requirements-dev.txt`、`ruff.toml`；原有根 `pyproject.toml`、`requirements.txt`、`pytest.ini` 及平台依赖清单均恢复上传原版。测试使用现有环境与命令行参数，不为测试改动公司配置。
+
 ## 范围和设计
 
 - 源码以公司提供的合并文件还原结果为基线，保留版权头、Services/Service 和 Services/Package 布局。

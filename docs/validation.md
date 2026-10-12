@@ -4,15 +4,21 @@
 
 本记录已按用户要求更新：核心代码采用上传的原 `build_framework` 编译并复制 `.pyc`，不构建 whl。此前独立打包方式已删除。
 
+公司原有构建、依赖及测试配置恢复上传版本；新增的 `requirements-dev.txt`、`ruff.toml` 已删除。本次测试通过命令行指定业务路径，不修改公司配置。执行命令如下（关闭缓存以避免 pytest 向 `/dev` 写入缓存）：
+
+```bash
+PYTHONPATH="$PWD/Services/Service/data-converge/src" .venv/bin/python -m pytest -c /dev/null -p no:cacheprovider Services/Service/data-converge/test -q -ra --tb=short
+```
+
 ## 最终结果
 
 | 验证 | 结果 |
 |---|---|
-| `.venv/bin/python -m pytest -q` | **289 passed, 1 skipped**，7.31 秒 |
-| `ruff check Services/Service/data-converge/src Services/Service/data-converge/test/test_packaging.py` | 通过 |
+| 上述业务测试命令 | **289 passed, 1 skipped** |
 | Python AST 解析 | 53 个 Python 文件通过 |
 | `bash -n` | 20 个 Shell 脚本通过 |
 | 原始 `build.sh` 一致性 | 与上传附件脚本内容一致，SHA-256 见导入记录 |
+| 公司配置一致性 | 根 `pyproject.toml`、`requirements.txt`、`pytest.ini` 及平台 `bin/pyproject.toml` 与上传原文一致（去除导出分隔空行） |
 | 原框架构建校验 | 在临时源码副本执行原脚本；生成 `.pyc`、删除副本 `.py`、复制到 `images/lib/data-converge`；52 个 SQL 和配置内容一致 |
 | 字节码主入口与启动器 | 在源码目录外运行 `.pyc` 主入口与真实 `start_data_converge.sh`，均返回 `VALID`、52 个任务 |
 | 字节码 XMS helper | 从 `.pyc` 启动隔离子进程，使用合成 SDK 完成解密协议校验 |

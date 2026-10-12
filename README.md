@@ -39,21 +39,20 @@ Services/build_framework/scripts/build.sh  # 上传的原始构建脚本，保�
 deploy/deployment.patch.yaml
 ```
 
-## 本地依赖与离线校验
+## 业务代码离线校验
 
-Python **3.10+**；开发测试使用 Python 3.12。项目运行于 POSIX/Linux，公司运行环境使用已有 GDE Python。
+公司构建、依赖及测试配置保持上传版本，Python 版本按原平台配置使用。业务需要 PyYAML、APScheduler 3.11.x 和 redis-py 5/6（本机验证为 6.4.0），解密使用平台已有 `dsf` SDK。平台 `bin/pyproject.toml` 未声明 APScheduler、redis，原根依赖清单的 redis 版本范围也较宽，需确认已有公司镜像或依赖包提供兼容版本；本次不改动这些配置。测试环境已具备这些依赖及 pytest。
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest
-
 export PYTHONPATH="$PWD/Services/Service/data-converge/src${PYTHONPATH:+:$PYTHONPATH}"
+# 显式指定本次业务路径；不修改公司原测试配置。
+python3 -m pytest -c /dev/null -p no:cacheprovider Services/Service/data-converge/test -q
+
 export CLICKHOUSE_URL=clickhouse.example.internal
 export CLICKHOUSE_PORT=8443
 export DWD_REDIS_HOST=redis.example.internal
 export DWD_REDIS_PORT=6379
-.venv/bin/python -m data_converge.main --validate-only
+python3 -m data_converge.main --validate-only
 ```
 
 离线校验只验证配置、52任务、SQL文件、Cron及窗口依赖，不读取密码、不导入 SDK、不访问 ClickHouse/Redis、不创建状态。上面的域名只用于离线示例，不代表实际服务器。
@@ -143,7 +142,7 @@ python3 -m data_converge.main --config /path/app_config.yaml \
 2. 删除流水线应用目录中的 `.py`。
 3. 将整个 `Services/Service/data-converge` 复制到 `Services/Package/images/lib/data-converge`，保留 `src`、`resources/config` 和 52 个 SQL。
 
-后续镜像及服务包继续由原平台 BuildTool/Maven 流程处理。第三方依赖仍使用平台的 `bin/py/python_pkg.tar.gz` 与公司 SDK 包；`requirements.txt` / `requirements-dev.txt` 只用于安装运行/开发依赖，不安装本项目。
+后续镜像及服务包继续由原平台 BuildTool/Maven 流程处理。第三方依赖仍使用平台的 `bin/py/python_pkg.tar.gz` 与公司 SDK 包；平台 `Services/Package/images/bin/pyproject.toml` 和原有根配置已恢复上传原版。原根配置随公司源码保留，核心交付仍只走上述 `build_framework`，不调用本项目的 whl 构建或安装流程，也不新增依赖清单和工具配置。
 
 流水线需提供 `REPOSITORY_PATH`、`WORKSPACE` 及 `${WORKSPACE}/BuildTool/Services/build_framework/scripts/function.sh`。原脚本会删除构建副本中的源码，且目录变量未加引号，因此应在平台的一次性、无空格工作目录执行；本机测试也只在临时副本运行。构建与运行使用同一 Python 小版本，以保证 `.pyc` 兼容。外部 BuildTool 文件不在上传附件内，本仓库不替换它。
 
