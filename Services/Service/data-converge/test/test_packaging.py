@@ -1,4 +1,4 @@
-"""Exercise the actual archive builder and shell launchers in temporary directories."""
+"""Exercise the unchanged company build and shell launchers in temporary copies."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[4]
 BIN = ROOT / "Services/Package/images/bin"
-BUILD = ROOT / "tools/build_package.py"
+BUILD = ROOT / "Services/build_framework/scripts/build.sh"
 
 
 @pytest.fixture
@@ -169,41 +170,93 @@ def test_probe_does_not_install_dependencies(runtime):
     assert not (home / "bin/py/site-packages").exists()
 
 
-def test_package_contains_source_and_all_sql_without_modifying_checkout(tmp_path):
-    source = ROOT / "Services/Service/data-converge/src/data_converge/main.py"
+
+@pytest.fixture(scope="module")
+def compiled_application(tmp_path_factory):
+    temp = tmp_path_factory.mktemp("company_build")
+    repo = temp / "repo"
+    application = Path("Services/Service/data-converge")
+    shutil.copytree(ROOT / application, repo / application,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info", ".pytest_cache"))
+    script = repo / "Services/build_framework/scripts/build.sh"
+    script.parent.mkdir(parents=True)
+    shutil.copyfile(BUILD, script)
+    workspace = temp / "workspace"
+    external = workspace / "BuildTool/Services/build_framework/scripts/function.sh"
+    external.parent.mkdir(parents=True)
+    external.write_text("# The uploaded framework's external BuildTool boundary.\n:\n")
+    runtime_bin = temp / "runtime"
+    runtime_bin.mkdir()
+    # Preserve the active venv's pyvenv.cfg lookup when the launcher calls python3.
+    python = runtime_bin / "python3"
+    python.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' "$@"\n')
+    python.chmod(0o755)
+    source = ROOT / application / "src/data_converge/main.py"
     before = hashlib.sha256(source.read_bytes()).hexdigest()
-    output = tmp_path / "build outputs/data-converge-lite.tar.gz"
-    result = subprocess.run(
-        [sys.executable, str(BUILD), "--output", str(output)], capture_output=True, text=True
-    )
-    assert result.returncode == 0, result.stderr
+    env = {**os.environ, "REPOSITORY_PATH": str(repo), "WORKSPACE": str(workspace),
+           "PATH": f"{runtime_bin}:{os.environ['PATH']}", "PYTHONDONTWRITEBYTECODE": "1"}
+    built = subprocess.run(["bash", str(script)], cwd=temp, env=env, capture_output=True, text=True)
+    assert built.returncode == 0, built.stderr
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
-    with tarfile.open(output) as archive:
-        members = archive.getnames()
-        assert "bin/start.sh" in members
-        assert "lib/data-converge/src/data_converge/main.py" in members
-        assert "lib/data-converge/resources/config/app_config.yaml" in members
-        assert len([p for p in members if p.startswith("lib/data-converge/resources/sql/") and p.endswith(".sql")]) == 52
-        assert not any("__pycache__" in p or p.endswith(".pyc") for p in members)
-        assert archive.getmember("bin/start.sh").mode & 0o111
+    home = repo / "Services/Package/images"
+    deployed = home / "lib/data-converge"
+    assert not list(deployed.rglob("*.py")), "core is deployed as company-framework bytecode"
+    assert (deployed / "src/data_converge/main.pyc").is_file()
+    assert (deployed / "src/data_converge/__init__.pyc").is_file()
+    sql = list((deployed / "resources/sql").glob("*.sql"))
+    assert len(sql) == 52
+    for path in sql:
+        assert path.read_bytes() == (ROOT / application / "resources/sql" / path.name).read_bytes()
+    assert (deployed / "resources/config/app_config.yaml").read_bytes() == (
+        ROOT / application / "resources/config/app_config.yaml").read_bytes()
+    shutil.copytree(BIN, home / "bin", dirs_exist_ok=True)
+    python_env = temp / "python.env"
+    python_env.write_text(f'export PATH="{runtime_bin}:$PATH"\n')
+    env.update(SERVICE_HOME=str(home), PYTHON_ENV_FILE=str(python_env),
+               APP_CONF_FILE=str(deployed / "resources/config/app_config.yaml"),
+               PYTHONPATH=str(deployed / "src"),
+               CLICKHOUSE_URL="offline.invalid", CLICKHOUSE_PORT="8443",
+               DWD_REDIS_HOST="offline.invalid", DWD_REDIS_PORT="6379")
+    return temp, home, deployed, env
 
 
-def test_builder_rejects_output_that_would_replace_source():
-    target = ROOT / "Services/Service/data-converge/resources/config/app_config.yaml"
-    before = target.read_bytes()
-    result = subprocess.run(
-        [sys.executable, str(BUILD), "--output", str(target)], capture_output=True, text=True
-    )
-    assert result.returncode != 0
-    assert target.read_bytes() == before
-
-
-def test_framework_build_forwards_output_path_without_platform_build_tools(tmp_path):
-    output = tmp_path / "custom path/package.tar.gz"
-    result = subprocess.run(
-        ["bash", str(ROOT / "Services/build_framework/scripts/build.sh"), "--output", str(output)],
-        env={**os.environ, "REPOSITORY_PATH": str(ROOT), "PYTHON_BIN": sys.executable},
-        capture_output=True, text=True,
-    )
+def test_original_framework_bytecode_loads_all_52_tasks_outside_checkout(compiled_application):
+    temp, _, deployed, env = compiled_application
+    result = subprocess.run([sys.executable, "-c",
+        "from pathlib import Path; from data_converge import main; "
+        "assert Path(main.__file__).suffix == '.pyc'; "
+        "assert Path(main.__file__).resolve().is_relative_to(Path(__import__('os').environ['PYTHONPATH'])); "
+        "raise SystemExit(main.main(['--validate-only']))"],
+        cwd=temp, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert tarfile.is_tarfile(output)
+    assert json.loads(result.stdout)["tasks"] == 52
+    assert not list(deployed.rglob("*.whl"))
+
+
+def test_launcher_runs_the_original_framework_bytecode(compiled_application):
+    temp, home, _, env = compiled_application
+    result = subprocess.run(["bash", str(home / "bin/start_data_converge.sh"), "--validate-only"],
+                            cwd=temp, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["tasks"] == 52
+
+
+def test_xms_helper_runs_from_original_framework_bytecode(compiled_application):
+    from .test_credentials import envelope, make_sdk
+    temp, _, _, env = compiled_application
+    sdk_dir = temp / "sdk"
+    make_sdk(sdk_dir, "def xms_decrypt(ciphertext):\n    return " + repr(envelope()) + "\n")
+    cipher = temp / "synthetic-cipher"
+    cipher.write_text("synthetic ciphertext")
+    result = subprocess.run([sys.executable, "-c",
+        "import sys; from pathlib import Path; "
+        "from data_converge.sql_execution import credentials, kms_worker; "
+        "assert Path(credentials.__file__).suffix == '.pyc'; "
+        "assert Path(kms_worker.__file__).suffix == '.pyc'; "
+        "assert credentials.load_password({'password_file': sys.argv[1], "
+        "'kms_timeout_seconds': 5, 'username': 'user', 'paas_name': 'clickhouse-pms-password'}) == ' exact password '; "
+        "print('DECRYPT_OK')", str(cipher)], cwd=temp,
+        env={**env, "PYTHONPATH": env["PYTHONPATH"] + os.pathsep + str(sdk_dir)},
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "DECRYPT_OK"

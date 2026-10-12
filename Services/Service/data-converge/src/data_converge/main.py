@@ -9,7 +9,6 @@ import os
 import signal
 from dataclasses import asdict
 from datetime import datetime, timedelta
-from importlib.resources import files
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -27,8 +26,7 @@ from data_converge.sql_execution.client import execute_sql, load_config
 from data_converge.state import StateStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_source_resources = PROJECT_ROOT / 'resources'
-RESOURCES = _source_resources if _source_resources.is_dir() else Path(str(files('data_converge_assets')))
+RESOURCES = PROJECT_ROOT / 'resources'
 DEFAULT_APP_CONFIG_PATH = RESOURCES / 'config/app_config.yaml'
 logger = logging.getLogger(__name__)
 
@@ -65,7 +63,7 @@ def state_directory(config, config_path):
 def asset_path(value, fallback, config_path):
     if value is None:
         return RESOURCES / fallback
-    # Preserve the company's resources/... convention, including installed wheels.
+    # The company build copies resources alongside src, including bytecode builds.
     if isinstance(value, str) and value.startswith('resources/'):
         return RESOURCES / value[len('resources/'):]
     return resolve_path(value, Path(config_path).parent)

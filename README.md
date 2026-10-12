@@ -35,20 +35,20 @@ Services/Service/data-converge/
 Services/Package/
   images/bin/             # 启动、停止、探针和平台脚本
   charts/templates/       # 原平台模板
-Services/build_framework/scripts/build.sh
-tools/build_package.py    # 不改写源码的交付包构建器
+Services/build_framework/scripts/build.sh  # 上传的原始构建脚本，保持不变
 deploy/deployment.patch.yaml
 ```
 
-## 本地安装与离线校验
+## 本地依赖与离线校验
 
 Python **3.10+**；开发测试使用 Python 3.12。项目运行于 POSIX/Linux，公司运行环境使用已有 GDE Python。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[test]'
+.venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 
+export PYTHONPATH="$PWD/Services/Service/data-converge/src${PYTHONPATH:+:$PYTHONPATH}"
 export CLICKHOUSE_URL=clickhouse.example.internal
 export CLICKHOUSE_PORT=8443
 export DWD_REDIS_HOST=redis.example.internal
@@ -137,17 +137,19 @@ python3 -m data_converge.main --config /path/app_config.yaml \
 
 ## 打包与平台启动
 
-```bash
-python3 tools/build_package.py --output build/data-converge-lite.tar.gz
-# 或公司框架入口：
-bash Services/build_framework/scripts/build.sh --output build/data-converge-lite.tar.gz
-```
+核心代码不构建或安装 whl，直接沿用上传的 `build_framework`。`Services/build_framework/scripts/build.sh` 已恢复原始内容，不增加参数或替换构建步骤。公司流水线按 `build.conf` 调用该脚本：
 
-包内是 `bin/`、`scripts/`、`lib/data-converge/{src,resources}`。构建不删除 `.py`、不覆盖工作区、不要求 Maven。保留的原 Maven/Helm文件用于公司构建链对照，本机交付包不依赖它们。
+1. `python3 -m compileall -b -f` 生成与源码相邻的 `.pyc`。
+2. 删除流水线应用目录中的 `.py`。
+3. 将整个 `Services/Service/data-converge` 复制到 `Services/Package/images/lib/data-converge`，保留 `src`、`resources/config` 和 52 个 SQL。
+
+后续镜像及服务包继续由原平台 BuildTool/Maven 流程处理。第三方依赖仍使用平台的 `bin/py/python_pkg.tar.gz` 与公司 SDK 包；`requirements.txt` / `requirements-dev.txt` 只用于安装运行/开发依赖，不安装本项目。
+
+流水线需提供 `REPOSITORY_PATH`、`WORKSPACE` 及 `${WORKSPACE}/BuildTool/Services/build_framework/scripts/function.sh`。原脚本会删除构建副本中的源码，且目录变量未加引号，因此应在平台的一次性、无空格工作目录执行；本机测试也只在临时副本运行。构建与运行使用同一 Python 小版本，以保证 `.pyc` 兼容。外部 BuildTool 文件不在上传附件内，本仓库不替换它。
 
 启动脚本默认安装路径 `/opt/its/data-converge`，可用 `SERVICE_HOME`、`PYTHON_ENV_FILE`、`APP_CONF_FILE` 覆盖。当存在多个 GDE Python 版本时，必须明确 `PYTHON_ENV_FILE`。依赖可预安装，或由平台提供 `bin/py/python_pkg.tar.gz`（根目录 `site-packages`）以及 `scripts/dependency_x86.tar.gz` / `dependency_arm.tar.gz`（同名根目录）。不从公网下载公司 SDK。
 
-部署与探针最终都使用同一解释器和 PYTHONPATH。`start.sh` 前台 exec 主程序；`liveness_check.sh` 和 `readiness_check.sh` 读取进程心跳，缺失、过期或进程退出均失败。25642是原平台端口声明，本服务没有在该端口实现 HTTP API。
+部署与探针最终都使用同一解释器和 PYTHONPATH。应用搜索路径仍为 `lib/data-converge/src`，`python3 -m data_converge.main` 可直接加载原构建生成的 `main.pyc`，XMS helper 也从 `.pyc` 启动。`start.sh` 前台 exec 主程序；`liveness_check.sh` 和 `readiness_check.sh` 读取进程心跳，缺失、过期或进程退出均失败。25642是原平台端口声明，本服务没有在该端口实现 HTTP API。
 
 ## 部署边界
 
