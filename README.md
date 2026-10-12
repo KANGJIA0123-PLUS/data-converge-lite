@@ -1,6 +1,6 @@
 # data-converge-lite
 
-以公司现有源码为基础的第一阶段主流程迁移。保留 `Services/Service/data-converge`、`Services/Package` 和原有 52 个汇聚任务，运行依赖为 **PyYAML + APScheduler（Cron 解析）+ redis**。ClickHouse 密码解密使用平台已有 Python `dsf` SDK，无需 Java 或 kubectl；Redis 用于消费 DWD 就绪信号。
+以公司现有源码为基础的第一阶段主流程迁移。保留 `Services/Service/data-converge`、`Services/Package` 和原有 52 个汇聚任务。Python 调度依赖 PyYAML、APScheduler（Cron 解析）、redis；ClickHouse 与 Redis PMS 密文使用平台已有 `dsf` XMS 解密。公司 Redis 连接采用 Sentinel + `psf`/`Crypto` 挑战认证，用于消费 DWD 就绪信号。
 
 本阶段交付可启动、可测试、可记录执行状态的汇聚主流程。**尚未完成公司环境联调，也未宣称原有 52 个 SQL 的业务统计口径全部正确**；延期的问题见 [已知问题](docs/known-issues.md)。
 
@@ -41,7 +41,7 @@ deploy/deployment.patch.yaml
 
 ## 业务代码离线校验
 
-公司构建、依赖及测试配置保持上传版本，Python 版本按原平台配置使用。业务需要 PyYAML、APScheduler 3.11.x 和 redis-py 5/6（本机验证为 6.4.0），解密使用平台已有 `dsf` SDK。平台 `bin/pyproject.toml` 未声明 APScheduler、redis，原根依赖清单的 redis 版本范围也较宽，需确认已有公司镜像或依赖包提供兼容版本；本次不改动这些配置。测试环境已具备这些依赖及 pytest。
+公司构建、依赖及测试配置保持上传版本，Python 版本按原平台配置使用。业务需要 PyYAML、APScheduler 3.11.x 和 redis-py 5/6（Sentinel 回环验证使用 5.0.8、6.4.0），公司认证使用已有 `dsf`、`psf` 和 `Crypto`。需确认已有公司镜像或依赖包提供这些模块及兼容版本；本次不修改任何依赖清单、构建框架、打包、启动脚本或 Deployment。测试使用现有环境与命令行参数。
 
 ```bash
 export PYTHONPATH="$PWD/Services/Service/data-converge/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -50,8 +50,6 @@ python3 -m pytest -c /dev/null -p no:cacheprovider Services/Service/data-converg
 
 export CLICKHOUSE_URL=clickhouse.example.internal
 export CLICKHOUSE_PORT=8443
-export DWD_REDIS_HOST=redis.example.internal
-export DWD_REDIS_PORT=6379
 python3 -m data_converge.main --validate-only
 ```
 
@@ -73,7 +71,9 @@ SDK 由公司提供，匹配 CPU 架构及 GDE Python 版本。已有 `XMS_SERVI
 
 [本地配置示例](Services/Service/data-converge/resources/config/app_config.local.example.yaml) 使用 `password_env`，它与 `password_file` 互斥；真实执行前由外部环境提供该变量。
 
-平台配置默认开启 DWD 就绪消费。Redis 端点由 `DWD_REDIS_HOST`、`DWD_REDIS_PORT` 注入，认证值由 Secret 注入 `DWD_REDIS_PASSWORD`；还须确认实际 `mode`、`db`、TLS 和 ACL。参考公司 SDK 使用 database 5，不足以确认真实拓扑；若是真 Redis Cluster，则仅支持 database 0，必须与发布端协调一致。完整协议、配置和恢复方式见 [DWD 就绪消费](docs/dwd-ready.md)。本地示例默认关闭该功能，仅供原流程调试；已有账本不能通过改开关绕过门控。
+平台配置默认开启 DWD 就绪消费，并按最新公司 Python 参考使用 **Sentinel、主节点组 `redis-cluster`、数据库 5**。启动时从 Redis 密文文件经 XMS 解密、Base64/PMS 解析，获取 `IPS` 中的 Sentinel 地址和 `ossdbuser` 密码；每次连接和重连均执行公司 PSM 双向挑战认证。这个主节点组名不表示原生 Redis Cluster。
+
+上传 Deployment 已确认根/工作密钥路径为 `/opt/its/secret/its-common-secret/redis_root.key` 和 `redis_shared.key`。`gde-adapter-certfiles` 整体挂载到 `/opt/its/data-converge/secret`，但没有列出其键名，因此 `dwd_ready.redis.password_file` 使用明确的 `REPLACE_WITH_REDIS_PASSWORD_KEY` 占位，启动前须填成实际密文文件路径。离线校验不检查挂载内容，不代表凭据已就绪。完整配置、认证与恢复方式见 [DWD 就绪消费](docs/dwd-ready.md)。本地示例默认关闭该功能；已有账本不能通过改开关绕过门控。
 
 **保留的公司 SQL 使用 `modelmate_metric` 全限定表名。只修改连接的 `database` 不会改写 SQL 的目标库。** 本阶段不创建或迁移业务表；所有原始表、目标表和资源维表须先按公司合同准备好。禁止把连接参数当作隔离验收库重定向开关。
 
@@ -94,7 +94,7 @@ python3 -m data_converge.main --config /path/app_config.yaml
 
 首次只处理 `data_start >= coverage_start` 的完整窗口：中途启用不会自动补写过去半小时、当天或当月。小时、日、月分别等待第一个完整周期结束。已有库重复初始化不会回退起点、清空记录或重新执行成功窗口。
 
-不要删除账本来解决故障，也不要将完整版的状态库直接复制给轻量版。账本丢失后启动会拒绝运行，需先恢复备份并核对已写入的业务窗口。改变端点、账号、任务窗口/目标定义或 DWD 门控开关/队列绑定会触发检查；普通并发、超时调整不影响绑定。
+不要删除账本来解决故障，也不要将完整版的状态库直接复制给轻量版。账本丢失后启动会拒绝运行，需先恢复备份并核对已写入的业务窗口。改变端点、账号、任务窗口/目标定义或 DWD 门控开关/队列绑定会触发检查；普通并发、超时调整不影响绑定。Sentinel 模式还在启动时绑定 PMS 中的 Sentinel 地址集合、组名、数据库和账号；密码轮换及地址顺序变化不影响该绑定，主节点正常切换也不影响。此前按直连模式初始化的账本不能直接切换模式后继续使用，需停机核验并制定状态迁移方案。
 
 ```bash
 # 只读状态，无需解密或数据库网络，显示计数、最近20个任务及DWD接收窗口。
@@ -152,7 +152,7 @@ python3 -m data_converge.main --config /path/app_config.yaml \
 
 ## 部署边界
 
-[Deployment patch 示例](deploy/deployment.patch.yaml) 对接用户提供的现有 Deployment，**不会自动应用**。先替换固定状态节点名和 DWD Redis 的 ConfigMap/Secret 占位引用，再由公司部署流程审查应用；原有 ClickHouse/XMS 环境变量、Secret、UID 19101 和 run-data挂载保留。
+[Deployment patch 示例](deploy/deployment.patch.yaml) 是此前直连 Redis 的部署建议，**不会自动应用**。其中 `DWD_REDIS_HOST/PORT/PASSWORD` 的占位引用只用于直连模式；本次 Sentinel 配置从已有挂载读取，不能整份照用旧补丁。公司原 Deployment、模板与构建文件均未修改；原有 ClickHouse/XMS 环境变量、Secret、UID 19101 和 run-data 挂载保留。运行互斥与状态目录仍须按以下要求核验。
 
 - 一套目标表只运行一个调度实例。使用 Recreate，并确保旧实例停止、不会因节点失联仍在运行；本机锁不是分布式选主。
 - 沿用 hostPath 时固定状态节点；迁移节点需在停机后迁移整个状态目录并核对结果。不要在新节点自动初始化空账本。

@@ -8,6 +8,8 @@
 
 后续范围约束：以业务代码修改为主，不新增或调整构建、依赖和开发工具配置。已删除新增的 `requirements-dev.txt`、`ruff.toml`；原有根 `pyproject.toml`、`requirements.txt`、`pytest.ini` 及平台依赖清单均恢复上传原版。测试使用现有环境与命令行参数，不为测试改动公司配置。
 
+Redis 接入补充：参考用户提供的 Python Sentinel/PSM 实现，将主节点发现、PMS 凭据选择和挑战认证适配到现有连接层，继续使用 List + SQLite + 五类信号门控。未引入参考项目的 Streams、多进程、全局单例或任务状态/TTL 业务；不改部署及构建文件。已确认两条密钥挂载，Redis 密文键名在 Deployment 中未给出，保留明确的业务配置占位。
+
 ## 范围和设计
 
 - 源码以公司提供的合并文件还原结果为基线，保留版权头、Services/Service 和 Services/Package 布局。

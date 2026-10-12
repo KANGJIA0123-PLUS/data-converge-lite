@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import os
 
+from .psm_crypto import create_psm_codec
+from .redis_auth import make_connect_callback
+from .redis_credentials import load_sentinel_credentials, sentinel_identity
+
 
 class RedisSignalError(RuntimeError):
     """Safe, fixed Redis diagnostic without SDK exception text or raw messages."""
 
 
 class RedisSignalSource:
-    def __init__(self, client, ready_config):
+    def __init__(self, client, ready_config, *, sentinel_clients=(), identity=None):
         self._client = client
         self.queue_key = ready_config["queue_key"]
         self.processing_key = ready_config["processing_key"]
         self.block_seconds = ready_config["block_seconds"]
         self._closed = False
+        self._sentinel_clients = tuple(sentinel_clients)
+        self.identity = identity
 
     def receive(self, block=True) -> str | bytes | None:
         if self._closed:
@@ -49,16 +55,37 @@ class RedisSignalSource:
     def close(self):
         if not self._closed:
             self._closed = True
-            try:
-                self._client.close()
-            except Exception:
-                # Cleanup must not replace a useful failure with private SDK text.
-                pass
+            for client in (self._client, *self._sentinel_clients):
+                _close_client(client)
+
+
+def _close_client(client):
+    # redis-py 5 Sentinel.master_for does not transfer pool ownership to Redis.
+    # Explicitly disconnect our dedicated pool as well as closing the client.
+    try:
+        client.close()
+    except Exception:
+        pass
+    try:
+        client.connection_pool.disconnect()
+    except Exception:
+        pass
+
+
+def bind_sentinel_identity(store, identity):
+    if identity is None:
+        return
+    previous = store.get_meta('dwd_redis_sentinel_binding')
+    if previous is not None and previous != identity:
+        raise ValueError('DWD_REDIS_BINDING_CHANGED') from None
+    if previous is None:
+        store.set_meta('dwd_redis_sentinel_binding', identity)
 
 
 def create_source(ready_config: dict) -> RedisSignalSource:
     """Read credentials only here; disable implicit command retry in redis-py 5/6."""
     client = None
+    sentinel_clients = ()
     failure_code = "DWD_READY_REDIS_CREATE_FAILED"
     try:
         if ready_config.get("enabled") is not True:
@@ -71,11 +98,8 @@ def create_source(ready_config: dict) -> RedisSignalSource:
         if major not in (5, 6):
             raise ValueError
         connection = ready_config["redis"]
-        password = os.environ.get(connection["password_env"])
-        if not isinstance(password, str) or not password:
-            raise ValueError
-        options = {name: connection[name] for name in ("host", "port", "username", "ssl", "socket_timeout", "socket_connect_timeout")}
-        options.update(password=password, retry=Retry(NoBackoff(), 0),
+        options = {name: connection[name] for name in ("ssl", "socket_timeout", "socket_connect_timeout")}
+        options.update(retry=Retry(NoBackoff(), 0),
                        retry_on_error=[], decode_responses=False, health_check_interval=0,
                        max_connections=1)
         if major == 5:
@@ -83,6 +107,26 @@ def create_source(ready_config: dict) -> RedisSignalSource:
         if connection["ssl"]:
             options.update(ssl_cert_reqs="required" if connection["ssl_verify"] else "none",
                            ssl_check_hostname=connection["ssl_verify"])
+        if connection["mode"] == "sentinel":
+            from redis.sentinel import Sentinel
+
+            failure_code = "DWD_READY_REDIS_CREDENTIAL_FAILED"
+            credentials = load_sentinel_credentials(connection)
+            failure_code = "DWD_READY_REDIS_PSM_FAILED"
+            codec = create_psm_codec(connection['root_key_file'], connection['work_key_file'])
+            options.update(password=credentials.password, protocol=2, socket_keepalive=True)
+            sentinel_options = dict(options, redis_connect_func=make_connect_callback(codec, select_db=False))
+            data_options = dict(options, redis_connect_func=make_connect_callback(codec, select_db=True))
+            failure_code = "DWD_READY_REDIS_CREATE_FAILED"
+            manager = Sentinel(credentials.sentinels, sentinel_kwargs=sentinel_options, **data_options)
+            sentinel_clients = manager.sentinels
+            client = manager.master_for(connection['service_name'], db=connection['db'])
+            return RedisSignalSource(client, ready_config, sentinel_clients=sentinel_clients,
+                                     identity=sentinel_identity(connection, credentials))
+        password = os.environ.get(connection["password_env"])
+        if not isinstance(password, str) or not password or '\0' in password:
+            raise ValueError
+        options.update(password=password, **{name: connection[name] for name in ("host", "port", "username")})
         if connection["mode"] == "cluster":
             from redis.cluster import REDIS_ALLOWED_KEYS
             if connection["ssl"] and connection["ssl_verify"] and "ssl_check_hostname" not in REDIS_ALLOWED_KEYS:
@@ -100,8 +144,7 @@ def create_source(ready_config: dict) -> RedisSignalSource:
         return RedisSignalSource(client, ready_config)
     except Exception:
         if client is not None:
-            try:
-                client.close()
-            except Exception:
-                pass
+            _close_client(client)
+        for sentinel_client in sentinel_clients:
+            _close_client(sentinel_client)
         raise RedisSignalError(failure_code) from None

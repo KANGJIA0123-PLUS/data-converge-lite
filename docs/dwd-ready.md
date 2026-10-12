@@ -64,55 +64,77 @@ processing:  {modelverse:dwd:ready}:data-converge:processing
 
 唯一消费者是部署约束，不是 Redis 分布式锁。继续使用单实例、持久状态目录、Recreate，以及 hostPath 对应的固定节点。本机 `flock` 只保护同一状态目录，不能防止另一节点用另一个目录运行消费者。迁移前必须停止旧实例并迁移完整 SQLite 状态，不能在新节点初始化空账本后宣称高可用。
 
-## 配置与部署输入
+## 公司 Sentinel 连接与认证
 
-以下是配置形状示例。`mode`、`db` 和连接信息必须按实际发布端环境填写，示例不代表公司 Redis 的拓扑或数据库选择。
+最新上传的 Python 参考明确使用 `Sentinel(...).master_for("redis-cluster", db=5)`。本次只适配这一连接协议，继续使用原有 List 消费流程。`redis-cluster` 在这里是 Sentinel 主节点组名，不能据此改用 `RedisCluster`。
+
+业务配置如下；不修改公司构建、依赖、启动脚本或 Deployment：
 
 ```yaml
 dwd_ready:
   enabled: true
   queue_key: modelverse:dwd:ready
-  # processing key 自动派生；不支持 processing_key 配置项。
   block_seconds: 1
   batch_size: 100
   wait_warning_seconds: 60
   redis:
-    mode: standalone       # 按实际环境选择 standalone 或 cluster。
-    host: "${DWD_REDIS_HOST}"
-    port: "${DWD_REDIS_PORT}"
-    db: 0                  # standalone 必须与发布端一致；cluster 必须为 0。
-    password_env: DWD_REDIS_PASSWORD
-    ssl: true
+    mode: sentinel
+    service_name: redis-cluster
+    db: 5
+    username: ossdbuser
+    password_file: /opt/its/data-converge/secret/REPLACE_WITH_REDIS_PASSWORD_KEY
+    paas_name: null
+    kms_timeout_seconds: 30
+    root_key_file: /opt/its/secret/its-common-secret/redis_root.key
+    work_key_file: /opt/its/secret/its-common-secret/redis_shared.key
+    ssl: false
     ssl_verify: true
     socket_timeout: 3
     socket_connect_timeout: 2
 ```
 
-只支持 Redis standalone 和 cluster；不把 Sentinel 配置或公司 SDK 的逻辑服务名自动解释为可直连地址。Redis Cluster 只支持数据库 0，不能使用 `SELECT` 切换数据库。[Redis SELECT 文档](https://redis.io/docs/latest/commands/select/)
+### 挂载依据
 
-Cluster 发现后的节点地址也必须从 Pod 可达。默认启用 TLS 并校验证书；公司 CA 应安装到 Python/Redis 客户端使用的信任链中。建议使用已验证的 redis-py **6.4.0**；启用 Cluster TLS 校验时，如果客户端版本不能保留主机名校验选项，程序会拒绝启动，不会静默降低校验强度。
+用户上传的 `apiVersion.txt` 与仓库原平台模板提供了以下映射：
 
-部署侧需要提供：
-
-| 输入 | 用途 |
+| 输入 | 已确认来源 |
 |---|---|
-| `DWD_REDIS_HOST`、`DWD_REDIS_PORT` | 实际 Redis 地址与服务端口，由环境变量注入 |
-| `DWD_REDIS_PASSWORD` | 由部署 Secret 注入；YAML 只保存变量名，不保存密码 |
-| 可选 Redis ACL 用户名 | 使用 ACL 时配置 `redis.username`，与发布端队列权限对应 |
-| CA 证书及信任配置 | 校验 Redis TLS 证书；实际挂载路径由公司部署提供 |
-| 实际 `mode`、`db`、队列名 | 与生产端使用的实例、数据库和 List 一致 |
+| `redis_root.key` | Secret `redis-cipher-secret` 的同名键；挂载 `/opt/its/secret/its-common-secret/redis_root.key` |
+| `redis_shared.key` | Secret `redis-cipher-secret` 的同名键；挂载 `/opt/its/secret/its-common-secret/redis_shared.key` |
+| 服务 Secret 目录 | `gde-adapter-certfiles` 整体挂载 `/opt/its/data-converge/secret`，未列出其中键名 |
+| Redis 密文文件 | 上述 Deployment 没有单独的 Redis 密码 `items`/`subPath`，也没有该 Secret 的内容，无法从文件确定具体键名；业务配置保留明确占位，须填成实际文件路径 |
+| XMS | 沿用原 Deployment 的 `XMS_SERVICE_URL`、SDK 配置及密钥挂载 |
 
-Redis 密码环境变量应是 Redis 客户端能直接使用的认证值；本消费配置不会自动套用 ClickHouse 的 XMS/PMS 解密规则。不得把密码放入命令行、提交到 Git 或输出到日志。所需 Redis 权限至少涵盖就绪队列的转移、processing 恢复与确认；具体 ACL 和 Cluster 拓扑读取权限在公司联调时确认。
+`CIPHER_ROOT=/opt/its/data-converge/secret/redis-cipher-secret` 只是已有环境值；实际单独挂载的根/工作密钥在公共 Secret 目录，所以本实现使用已确认的实际文件路径。没有照搬参考服务的 `/app/cert/...`。
 
-### 本机 modelverse 配置核对结果
+如果 Redis 密文实际来自另一挂载目录，只调整 `password_file` 指向实际路径。`--validate-only`、`--init-state` 不读取秘密文件，因此离线 VALID 不证明密文占位已配置、SDK已安装或服务可连接。
 
-只读检查了提供的 `辅助运营源代码/services/modelverse-exporter` 恢复工程：
+### 凭据与认证流程
 
-- `src/main/resources/application.yml` 的 `its.security.redis` 启用了公司 Redis SDK，包含 `name`、`user`、`master`、连接池参数和 `database: 5`。
-- `pom.xml` 引入 `security-sdk-client-redis` 与 `spring-data-redis`。配置没有提供足以确认部署拓扑的显式 host、port、TLS 或节点清单。
-- 因此不能仅凭逻辑名称或 `master` 字段断言它使用 standalone、Redis Cluster 或 Sentinel，也不能从本机工程推断实际 Secret/ConfigMap 名称和挂载路径。
-- 附件将连接描述为“cluster、database 5”，这与 Redis Cluster 只使用数据库 0 的要求不一致。必须由公司确认 SDK 的实际连接方式及信号所在数据库；不能直接照抄，也不能只把 Python 的 `db` 改为 0 就认为两端已经一致。
-- 本机恢复工程的 `EnrichmentScheduler` 仍直接调用下游聚合，未找到附件所述 `RedisDwdReadyNotifier` 实现。附件说明发布端尚未提交/部署；本次不能据附件认定生产信号已经可用。
+1. 启动时有界读取 Redis 密文文件，复用现有隔离 XMS helper 调用 `dsf.crypto.xms_crypto.xms_decrypt`，继续 Base64 解码 PMS。参考项目的 `get_decrypt` 实现未提供；这里使用本项目已经接入的 XMS 方案，实际 Redis 密文兼容性仍须现场验证。
+2. PMS `IPS` 解析为 Sentinel 地址列表，支持 `host:port` 和 `[IPv6]:port`；最多 8 个节点，拒绝重复、空值和不合法端口。按 `username` 唯一选择账号，保留密码原值；指定 `paas_name` 时按准确服务名选取，未指定时要求恰好一个含 `IPS` 且匹配该账号的服务。不会直接取 `paasconfig[0]`。
+3. `psf` 初始化原根/工作密钥，复用平台 PBKDF2、根物料 XOR 和 `CipherStructureV1`。本适配只处理 Redis 的 1024 字节密钥结构、AES-GCM 和末尾零填充；不把 ClickHouse 密码当作 Redis 密码。
+4. 每次建立 Sentinel 或数据连接时，用原 PSF `gen_random_hex_string(32)` 生成挑战随机数，发送 `AUTH <随机数`，解密服务端挑战并核对回传随机数，再发送 `AUTH >加密应答`。认证失败不会退回明文 AUTH。
+5. Sentinel 连接不执行 SELECT；发现数据主节点后，数据连接才执行 `SELECT 5`。`username` 用于 PMS 账号选择，不作为公司 AUTH 的额外参数。
+6. 数据客户端、Sentinel 客户端及各自连接池在退出时关闭；断连或旧主节点 READONLY 后，由下一轮重新发现主节点并重新认证。隐式命令重试为 0，不自动重发结果不明的队列命令。
+
+参考代码处理 `ERR >` 后又切掉首字符，可能损坏密文。当前实现根据 redis-py 的解析行为，接受 `>hex` 或 `ERR >hex`，只去掉一次完整前缀，并检查随机数和应答结构；AUTH 前不发送健康检查 PING。这里使用每连接回调，没有全局替换 redis-py 方法、导入即连接、全局单例或后台清理进程。
+
+PMS 明文只在内存及受控 helper 管道中传递；应用异常使用固定错误码。PSF/Crypto 只在 Sentinel 运行路径导入，模块导入、离线校验不加载它们。公司 SDK 自身日志策略由平台控制，现场需确认不会输出密钥材料。
+
+参考的 Sentinel 连接没有启用 TLS，本业务配置与之保持一致。PSM 保护认证应答，不替代传输 TLS；现场端点若启用 TLS，设置 `ssl: true`，`ssl_verify: true` 会校验证书和主机名，公司 CA 使用系统信任或 `SSL_CERT_FILE`。同一配置用于 Sentinel 和数据节点；混合 TLS 模式不在本次支持范围。
+
+### 账本绑定与旧模式
+
+Sentinel 模式将配置身份以及解密得到的 Sentinel 地址集合、组名、数据库和账号绑定到账本。密码轮换和地址排序变化不改变身份；正常主节点切换也不改变身份。PMS 变成另一套 Sentinel 地址时启动拒绝继续，避免拿旧的 ready 事实消费另一条数据源。已初始化的直连账本不能直接通过切换 `mode` 复用；需停机核验后做明确的状态迁移，不能删除账本绕过。
+
+原有 `standalone` / 原生 `cluster` 直连仍保留，使用 `host`、`port`、`password_env` 和可选 ACL `username`，不混用 Sentinel 文件参数。直连密码环境变量须为可直接认证的值。原生 Cluster 仍只允许数据库 0；Sentinel 的数据库 5 不受这一限制。[Redis SELECT 文档](https://redis.io/docs/latest/commands/select/)
+
+连接实现支持 redis-py 5/6，实际回环测试覆盖 5.0.8 和 6.4.0。参考接口依据：[redis-py 6.4 Sentinel 文档](https://redis.readthedocs.io/en/v6.4.0/connections.html#sentinel-client)。公司环境需已有 `dsf`、`psf`、`Crypto`，本次没有修改任何依赖清单。旧 `deploy/deployment.patch.yaml` 的 `DWD_REDIS_HOST/PORT/PASSWORD` 段仅适用直连模式，不可整份套到本次 Sentinel 配置。
+
+### 发布端边界
+
+本机恢复的 modelverse 工程仍使用公司 Java Redis SDK；其 `EnrichmentScheduler` 直接调用下游聚合，未找到附件所述 `RedisDwdReadyNotifier` 实现。新增 Python 连接支持不代表发布端已经部署就绪消息，也不代表公司连接联调完成。Sentinel/PSM 模式按最新 Python 参考实现，生产端是否使用同一 Sentinel 主节点组、DB 5 和独占 List，仍需在公司验收。
 
 ## 故障恢复
 
@@ -121,7 +143,9 @@ Redis 密码环境变量应是 Redis 客户端能直接使用的认证值；本�
 | 消息已转到 processing，SQLite 尚未提交时进程退出 | 消息仍在 processing，重启后重新处理 |
 | SQLite 已提交，ACK 前进程退出或 ACK 失败 | 重读消息；就绪事实幂等写入，再确认；不重复执行成功 SQL |
 | 已启动服务的 Redis 轮询失败 | 记录连接故障并稍后重试；未就绪窗口等待，已就绪窗口可继续 |
-| 初次创建 Redis 客户端失败 | 启动失败；尤其是 Cluster 拓扑发现阶段，修复连接或认证后重启 |
+| 初次加载 PMS/PSM 失败 | 启动失败，检查密文路径、XMS/PSF SDK 和密钥挂载；错误信息不包含凭据 |
+| Sentinel 发现、认证失败或旧主节点降级 | 已有 ready 事实仍可使用；其余窗口等待，后续轮询重新发现并挑战认证 |
+| 原生 Cluster 首次客户端创建失败 | 可能在拓扑发现时使启动失败；该分支不使用公司 PSM |
 | 五类信号缺失，包括全部缺失 | 窗口结束 60 秒后告警并持续等待，不执行 partial |
 | SQL 已发出但结果不明 | 沿用 `UNKNOWN` 人工核验流程；不能靠重复 ready 信号重发 SQL |
 | Redis 数据丢失，且信号尚未写入 SQLite | 无法凭消费者还原信号；核验 DWD 完整性和生产端记录后再由受控流程补发 |
@@ -148,4 +172,4 @@ Redis 密码环境变量应是 Redis 客户端能直接使用的认证值；本�
 
 联调需确认实际 Redis 模式、端点、数据库、TLS/ACL 和生产端发布开关，再以完整五类消息验证正确窗口触发。还需覆盖重复和乱序信号、零信号告警、转移后重启、提交后 ACK 失败、Redis 恢复以及 SQL `UNKNOWN` 不重发。联调过程中确认旧 Java 下游调度和消费者的切换安排，避免两套流程同时写同一目标窗口。
 
-本地测试能够验证解析、状态恢复与调度限制。当前机器未安装 `redis-server`，真实 Redis 回环集成测试明确跳过；fake client 和 redis-py 参数检查不等于真实服务验收。公司 SDK 配置映射、真实 Redis Cluster 路由、生产端通知可靠性和目标 SQL 的业务验收仍需在公司环境进行。
+本地测试覆盖解析、状态恢复与调度限制。真实 redis-py 5.0.8/6.4.0 已与本机 RESP 协议服务端验证 Sentinel 发现、两次 AUTH、SELECT 和主节点断连/READONLY 后的恢复。当前机器未安装 `redis-server`，该真实服务测试明确跳过；PSM 使用真实 AES-GCM 与合成 PSF 接口测试，没有真实平台 SDK/生产格式向量。这些不等于公司服务验收。实际密文键名、SDK 兼容性、TLS、Sentinel 故障切换、发布端信号和目标 SQL 仍需公司环境联调。

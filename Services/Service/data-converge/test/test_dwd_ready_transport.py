@@ -238,6 +238,9 @@ def test_factory_reads_password_at_creation_and_disables_driver_retries(tmp_path
     from data_converge.dwd_ready.redis_source import RedisSignalError, create_source
     raw = enabled_config()
     raw["dwd_ready"]["redis"]["mode"] = mode
+    # Older redis-py 5 Cluster TLS cannot preserve hostname verification; that
+    # rejection has its own test. Keep this test about credentials and retries.
+    raw["dwd_ready"]["redis"]["ssl"] = mode != "cluster"
     config = load(raw, tmp_path)
     with pytest.raises(RedisSignalError):
         create_source(config)
@@ -249,9 +252,10 @@ def test_factory_reads_password_at_creation_and_disables_driver_retries(tmp_path
     monkeypatch.setattr(redis, "Redis" if mode == "standalone" else "RedisCluster", create)
     source = create_source(config)
     assert captured["password"] == " private exact password "
-    assert captured["retry"].get_retries() == 0 and captured.get("retry_on_timeout", False) is False
-    assert captured["decode_responses"] is False and captured["ssl"] is True
-    assert captured["ssl_cert_reqs"] == "required" and captured["ssl_check_hostname"] is True
+    assert captured["retry"]._retries == 0 and captured.get("retry_on_timeout", False) is False
+    assert captured["decode_responses"] is False and captured["ssl"] is (mode != "cluster")
+    if mode != "cluster":
+        assert captured["ssl_cert_reqs"] == "required" and captured["ssl_check_hostname"] is True
     assert captured["socket_timeout"] == 3 and captured["socket_connect_timeout"] == 2
     assert ("db" in captured) is (mode == "standalone")
     if mode == "cluster":
@@ -285,7 +289,7 @@ def test_real_standalone_client_configuration_is_lazy_and_has_zero_retries(tmp_p
     source = create_source(config)
     try:
         options = source._client.connection_pool.connection_kwargs
-        assert options["db"] == 5 and options["retry"].get_retries() == 0
+        assert options["db"] == 5 and options["retry"]._retries == 0
         assert options["socket_timeout"] == 3 and options["socket_connect_timeout"] == 2
         assert options["decode_responses"] is False
         assert not source._client.connection_pool._in_use_connections
@@ -305,6 +309,7 @@ def test_redis_five_cluster_uses_both_retry_switches(tmp_path, monkeypatch):
     from data_converge.dwd_ready.redis_source import create_source
     raw = enabled_config()
     raw["dwd_ready"]["redis"]["mode"] = "cluster"
+    raw["dwd_ready"]["redis"]["ssl"] = False
     config = load(raw, tmp_path)
     monkeypatch.setenv("READY_REDIS_PASSWORD", "synthetic")
     monkeypatch.setattr(redis, "__version__", "5.0.8")
@@ -314,7 +319,7 @@ def test_redis_five_cluster_uses_both_retry_switches(tmp_path, monkeypatch):
         return FakeRedis()
     monkeypatch.setattr(redis, "RedisCluster", create)
     source = create_source(config)
-    assert captured["retry"].get_retries() == 0
+    assert captured["retry"]._retries == 0
     assert captured["cluster_error_retry_attempts"] == 0
     source.close()
 

@@ -18,7 +18,7 @@ from data_converge.config import ConfigLoader
 from data_converge.dag import DAGBuilder, DAGExecutor
 from data_converge.dwd_ready.config import load_ready_config
 from data_converge.dwd_ready.coordinator import ReadyCoordinator
-from data_converge.dwd_ready.redis_source import create_source
+from data_converge.dwd_ready.redis_source import bind_sentinel_identity, create_source
 from data_converge.health import Heartbeat, healthcheck
 from data_converge.scheduler import TaskScheduler
 from data_converge.sql_execution import SQLTaskRunner
@@ -119,8 +119,11 @@ def binding(config, dag):
     ready = config['dwd_ready']
     value['dwd_ready'] = {'enabled': ready['enabled']}
     if ready['enabled']:
+        fields = ('host', 'port', 'mode', 'db')
+        if ready['redis']['mode'] == 'sentinel':
+            fields = ('mode', 'db', 'service_name', 'username', 'paas_name', 'password_file')
         value['dwd_ready'].update(queue_key=ready['queue_key'], redis={
-            key: ready['redis'].get(key) for key in ('host', 'port', 'mode', 'db')})
+            key: ready['redis'].get(key) for key in fields})
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
@@ -169,6 +172,7 @@ def build_task_scheduler(app_config_path, definition, store):
         ready = config['dwd_ready']
         source = create_source(ready)
         try:
+            bind_sentinel_identity(store, getattr(source, 'identity', None))
             coordinator = ReadyCoordinator(store, source, parse_time(store.get_meta('coverage_start')),
                                            batch_size=ready['batch_size'],
                                            wait_warning_seconds=ready['wait_warning_seconds'],

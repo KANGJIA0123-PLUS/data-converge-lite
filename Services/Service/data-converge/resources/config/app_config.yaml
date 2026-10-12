@@ -16,7 +16,7 @@ state:
   directory: /srv/its/MindOpsBOSE/data-converge/data/lite-state
 
 # 本次默认启用DWD就绪门控；5类信号必须全部到齐，超时不会放行半窗。
-# 参考Java security-sdk写database=5，但没有直接端点/拓扑，需现场确认。
+# 公司参考使用 Sentinel + PSM 挑战认证；连接信息从 XMS 解密后的 PMS 获取。
 dwd_ready:
   enabled: true
   queue_key: modelverse:dwd:ready
@@ -24,12 +24,20 @@ dwd_ready:
   batch_size: 100
   wait_warning_seconds: 60
   redis:
-    host: "${DWD_REDIS_HOST}"
-    port: "${DWD_REDIS_PORT}"
-    mode: standalone       # 如果是真RedisCluster，改为cluster且db必须是0。
-    db: 5                  # 必须与生产者写入信号的库一致。
-    password_env: DWD_REDIS_PASSWORD
-    ssl: true              # 核对实际端点；公司CA用SSL_CERT_FILE或系统信任库。
+    mode: sentinel
+    service_name: redis-cluster  # Sentinel 主节点组名，不是原生 Redis Cluster。
+    db: 5
+    username: ossdbuser     # PMS 内选取账号；不是 AUTH 的用户名参数。
+    # Deployment 将 gde-adapter-certfiles 挂到此目录，但未列出密码键名。
+    # 将占位文件名替换为该 Secret 中实际的 Redis 密文文件名；不猜测现网路径。
+    password_file: /opt/its/data-converge/secret/REPLACE_WITH_REDIS_PASSWORD_KEY
+    # 若 PMS 内有多个 Redis 服务，填写其准确 name；未填写时要求唯一匹配账号。
+    paas_name: null
+    kms_timeout_seconds: 30
+    # 以下两条路径已由上传的 apiVersion.txt 确认。
+    root_key_file: /opt/its/secret/its-common-secret/redis_root.key
+    work_key_file: /opt/its/secret/its-common-secret/redis_shared.key
+    ssl: false             # 按上传参考的非 TLS 连接；现场启用 TLS 时改为 true。
     ssl_verify: true
     socket_timeout: 3
     socket_connect_timeout: 2

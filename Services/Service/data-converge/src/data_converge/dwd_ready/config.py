@@ -88,35 +88,20 @@ def load_ready_config(raw: dict, config_directory: Path) -> dict:
     if not enabled:
         return config
     connection = section.get("redis")
-    fields = {"host", "port", "mode", "db", "username", "password_env", "ssl", "ssl_verify",
-              "socket_timeout", "socket_connect_timeout"}
+    common = {"mode", "db", "username", "ssl", "ssl_verify", "socket_timeout", "socket_connect_timeout"}
+    sentinel_fields = {"service_name", "password_file", "paas_name", "root_key_file", "work_key_file",
+                       "kms_timeout_seconds"}
+    mode = connection.get("mode") if isinstance(connection, dict) else None
+    fields = common | (sentinel_fields if mode == "sentinel" else {"host", "port", "password_env"})
     if not isinstance(connection, dict) or set(connection) - fields:
         _invalid()
-    host = _expand(connection.get("host"))
-    if not _text(host):
-        _invalid()
-    if ":" in host:
-        try:
-            host = str(ipaddress.IPv6Address(host.strip("[]")))
-        except ValueError:
-            _invalid()
-    elif not re.fullmatch(r"[A-Za-z0-9_.-]+", host):
-        _invalid()
-    port = _expand(connection.get("port"))
-    if isinstance(port, str) and re.fullmatch(r"[0-9]+", port):
-        port = int(port)
-    if type(port) is not int or not 1 <= port <= 65535:
-        _invalid()
-    mode, db = connection.get("mode"), connection.get("db", 0)
-    if mode not in ("standalone", "cluster") or type(db) is not int or db < 0:
+    db = connection.get("db", 0)
+    if mode not in ("standalone", "cluster", "sentinel") or type(db) is not int or db < 0:
         _invalid()
     if mode == "cluster" and db != 0:
         _invalid("DWD_READY_CLUSTER_REQUIRES_DB_ZERO")
     username = connection.get("username")
     if username is not None and not _text(username):
-        _invalid()
-    password_env = connection.get("password_env")
-    if not isinstance(password_env, str) or not re.fullmatch(_ENV_NAME, password_env):
         _invalid()
     secure, verify = connection.get("ssl", True), connection.get("ssl_verify", True)
     if type(secure) is not bool or type(verify) is not bool:
@@ -125,7 +110,40 @@ def load_ready_config(raw: dict, config_directory: Path) -> dict:
     connect_timeout = _number(connection.get("socket_connect_timeout", 2), 5)
     if socket_timeout <= block:
         _invalid("DWD_READY_SOCKET_TIMEOUT_TOO_SHORT")
-    config["redis"] = dict(host=host, port=port, mode=mode, db=db, username=username,
-                           password_env=password_env, ssl=secure, ssl_verify=verify,
-                           socket_timeout=socket_timeout, socket_connect_timeout=connect_timeout)
+    result = dict(mode=mode, db=db, username=username, ssl=secure, ssl_verify=verify,
+                  socket_timeout=socket_timeout, socket_connect_timeout=connect_timeout)
+    if mode == "sentinel":
+        service = connection.get("service_name")
+        paas_name = connection.get("paas_name")
+        if not _text(service) or not _text(username) or (paas_name is not None and not _text(paas_name)):
+            _invalid()
+        result.update(service_name=service, paas_name=paas_name,
+                      kms_timeout_seconds=_number(connection.get("kms_timeout_seconds", 30), 300))
+        for key in ("password_file", "root_key_file", "work_key_file"):
+            value = _expand(connection.get(key))
+            if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 for c in value):
+                _invalid()
+            path = Path(value)
+            result[key] = str(path if path.is_absolute() else (config_directory / path).resolve())
+    else:
+        host = _expand(connection.get("host"))
+        if not _text(host):
+            _invalid()
+        if ":" in host:
+            try:
+                host = str(ipaddress.IPv6Address(host.strip("[]")))
+            except ValueError:
+                _invalid()
+        elif not re.fullmatch(r"[A-Za-z0-9_.-]+", host):
+            _invalid()
+        port = _expand(connection.get("port"))
+        if isinstance(port, str) and re.fullmatch(r"[0-9]+", port):
+            port = int(port)
+        if type(port) is not int or not 1 <= port <= 65535:
+            _invalid()
+        password_env = connection.get("password_env")
+        if not isinstance(password_env, str) or not re.fullmatch(_ENV_NAME, password_env):
+            _invalid()
+        result.update(host=host, port=port, password_env=password_env)
+    config["redis"] = result
     return config
