@@ -1,12 +1,12 @@
--- 4.3 资源粒度ADS表汇聚逻辑，由 t_mops_node_day_ads和resource_config -> t_mops_resource_day_ads
+-- 4.3 资源粒度ADS表汇聚逻辑，由 t_mops_node_day_ads和t_mops_org_resource_flat_local -> t_mops_resource_day_ads
 INSERT INTO modelmate_metric.t_mops_resource_day_ads
 (
     -- 1. 时间窗口与资源维度
     window_time,
-    resource_seqno_path,
-    resource_seqno,
+    org_id_path,
+    org_id,
     -- 2. 非维度汇聚信息
-    resource_name,
+    org_name,
     sync_flag,
 
     -- 3. 算力卡指标汇总
@@ -126,11 +126,11 @@ INSERT INTO modelmate_metric.t_mops_resource_day_ads
 SELECT
     -- 1. 时间窗口与维度
     n.window_time,
-    r.resource_seqno_path,
-    cast(r.resource_seqno as Int32)         AS resource_seqno,
-    
-    -- 非汇聚信息 取维表更新时间最新的 resource_name
-    argMax(r.resource_name, r.update_time)  AS resource_name,
+    r.org_id_path,
+    r.org_id,
+
+    -- 非汇聚信息 取维表更新时间最新的 org_name
+    argMax(r.org_name, r.updated_time) AS org_name,
     -- 非汇聚信息 取任意 sync_flag
     any(n.sync_flag)                        AS sync_flag,
 
@@ -290,7 +290,7 @@ SELECT
     ) AS work_time_ai_core_util_status
 
 FROM modelmate_metric.t_mops_node_day_ads n
-INNER JOIN modelmate_metric.resource_config_local r
+INNER JOIN modelmate_metric.t_mops_org_resource_flat_local r
     ON n.node_ip = r.node_ip
 WHERE n.window_time >= {start_time:DateTime}
   AND n.window_time <  {end_time:DateTime}
@@ -298,6 +298,6 @@ WHERE n.window_time >= {start_time:DateTime}
   AND n.sync_flag = 0
 GROUP BY
     n.window_time,
-    r.resource_seqno_path,
-    r.resource_seqno;
+    r.org_id_path,
+    r.org_id
     
