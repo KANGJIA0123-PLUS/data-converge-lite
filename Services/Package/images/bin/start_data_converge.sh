@@ -56,6 +56,7 @@ function configure_data_converge_runtime() {
 
 function start_data_converge() {
     configure_data_converge_runtime true
+    export LOG_PATH SERVICE_NAME PRODUCT_NAME
     DATA_CONVERGE_PID=
     DATA_CONVERGE_WAIT_INTERRUPTED=false
     # Bash background commands inherit ignored SIGINT. Both signals request

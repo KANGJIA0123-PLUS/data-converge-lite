@@ -9,6 +9,7 @@ from pathlib import Path
 
 from data_converge.application import Application, CommandResult
 from data_converge.config.application import DEFAULT_APP_CONFIG_PATH, StartupError, load_definition
+from data_converge.logging_config import LOG_FORMAT, create_file_handler
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,16 @@ def run(args) -> CommandResult:
 
 def main(argv=None):
     os.umask(0o077)
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     args = arguments(argv)
+    root_logger = logging.getLogger()
+    previous_level = root_logger.level
+    file_handler = None
     try:
+        file_handler = create_file_handler()
+        if file_handler is not None:
+            root_logger.addHandler(file_handler)
+            root_logger.setLevel(logging.INFO)
         result = run(args)
         if result.payload is not None:
             output(result.payload)
@@ -78,6 +86,11 @@ def main(argv=None):
         detail = str(exc) if isinstance(exc, StartupError) else type(exc).__name__
         logger.error('SERVICE_FAILED: %s', detail)
         return 1
+    finally:
+        if file_handler is not None:
+            root_logger.removeHandler(file_handler)
+            file_handler.close()
+            root_logger.setLevel(previous_level)
 
 
 if __name__ == '__main__':

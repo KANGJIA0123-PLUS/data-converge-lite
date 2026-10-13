@@ -95,3 +95,20 @@ def test_runtime_setup_failure_does_not_start_child(launcher):
     assert process.returncode == 1
     assert data is None
     assert "Python environment file does not exist" in stderr
+
+
+def test_launcher_exports_company_log_directory_to_python(launcher):
+    home, _, _, env = launcher
+    for name in ('LOG_PATH', 'PRODUCT_NAME'):
+        env.pop(name, None)
+    with (home / 'bin/function.sh').open('a') as platform:
+        platform.write('PRODUCT_NAME=MindOpsBOSE\n')
+    application = home / 'lib/data-converge/src/data_converge/main.py'
+    application.write_text(
+        'import json, os\nfrom pathlib import Path\n'
+        "data = {key: os.getenv(key) for key in ('LOG_PATH', 'SERVICE_NAME', 'PRODUCT_NAME')}\n"
+        "Path(os.environ['CAPTURE_FILE']).write_text(json.dumps(data))\n"
+    )
+    process, data, _, stderr = run_script(launcher, 'start.sh')
+    assert process.returncode == 0, stderr
+    assert data == {'LOG_PATH': str(home), 'SERVICE_NAME': 'data-converge', 'PRODUCT_NAME': 'MindOpsBOSE'}
