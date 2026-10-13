@@ -148,6 +148,22 @@ def test_cli_http_window_runs_once_across_restart(local_http_app, capsys):
     assert len(seen) == 1
 
 
+def test_run_uses_one_configuration_snapshot(local_http_app, monkeypatch):
+    app, seen = local_http_app
+    base = ['--config', str(app)]
+    assert entry.main(base + ['--init-state', '--start-time', '2026-10-12T10:00:00+08:00']) == 0
+    read_config = entry.load_app_config
+
+    def replace_file_after_read(path):
+        config = read_config(path)
+        app.write_text('replacement: not-a-valid-application-config\n')
+        return config
+
+    monkeypatch.setattr(entry, 'load_app_config', replace_file_after_read)
+    assert entry.main(base + ['--run-once', '--now', '2026-10-12T10:06:00+08:00']) == 0
+    assert len(seen) == 1
+
+
 def enable_ready(app):
     config = yaml.safe_load(app.read_text())
     config['dwd_ready'] = {
@@ -169,12 +185,12 @@ def test_ready_validation_and_init_are_offline(app, monkeypatch):
     assert entry.main(['--config', str(app), '--init-state']) == 0
 
 
-def test_shipped_platform_config_validates_all_52_tasks_with_ready_enabled(monkeypatch, capsys):
+def test_shipped_platform_config_validates_all_48_tasks_with_ready_enabled(monkeypatch, capsys):
     for name, value in {'CLICKHOUSE_URL': 'offline.invalid', 'CLICKHOUSE_PORT': '8443',
                         'DWD_REDIS_HOST': 'offline.invalid', 'DWD_REDIS_PORT': '6379'}.items():
         monkeypatch.setenv(name, value)
     assert entry.main(['--config', str(entry.DEFAULT_APP_CONFIG_PATH), '--validate-only']) == 0
-    assert json.loads(capsys.readouterr().out)['tasks'] == 52
+    assert json.loads(capsys.readouterr().out)['tasks'] == 48
 
 
 def test_ready_cli_event_cron_and_manual_share_gate_and_success_ledger(local_http_app, monkeypatch, capsys):

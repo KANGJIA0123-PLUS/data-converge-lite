@@ -2,129 +2,34 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
 import signal
-from dataclasses import asdict
+from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import yaml
-
-from data_converge.config import ConfigLoader
-from data_converge.dag import DAGBuilder, DAGExecutor
-from data_converge.dwd_ready.config import load_ready_config
+from data_converge.config.application import (
+    DEFAULT_APP_CONFIG_PATH,
+    ApplicationDefinition,
+    StartupError,
+    binding,
+    load_app_config,
+    load_definition,
+    state_directory,
+)
+from data_converge.dag import DAGExecutor, ExecutionReport, TaskStatus
 from data_converge.dwd_ready.coordinator import ReadyCoordinator
 from data_converge.dwd_ready.redis_source import bind_sentinel_identity, create_source
 from data_converge.health import Heartbeat, healthcheck
 from data_converge.scheduler import TaskScheduler
 from data_converge.sql_execution import SQLTaskRunner
-from data_converge.sql_execution.client import execute_sql, load_config
+from data_converge.sql_execution.client import execute_sql
 from data_converge.state import StateStore
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RESOURCES = PROJECT_ROOT / 'resources'
-DEFAULT_APP_CONFIG_PATH = RESOURCES / 'config/app_config.yaml'
 logger = logging.getLogger(__name__)
-
-
-class StartupError(ValueError):
-    """An intentionally public, credential-free startup diagnostic."""
-
-
-def load_app_config(path):
-    try:
-        value = yaml.safe_load(Path(path).read_text())
-        if not isinstance(value, dict):
-            raise ValueError
-        return value
-    except (OSError, ValueError, yaml.YAMLError):
-        raise StartupError('CONFIG_UNREADABLE') from None
-
-
-def resolve_path(value, base):
-    if not isinstance(value, str) or not value:
-        raise StartupError('CONFIG_PATH_INVALID')
-    value = os.path.expandvars(value)
-    if '$' in value:
-        raise StartupError('CONFIG_PATH_ENV_MISSING')
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else Path(base) / path
-
-
-def state_directory(config, config_path):
-    return resolve_path(config.get('state', {}).get('directory', '/srv/its/MindOpsBOSE/data-converge/data'),
-                        Path(config_path).parent)
-
-
-def asset_path(value, fallback, config_path):
-    if value is None:
-        return RESOURCES / fallback
-    # The company build copies resources alongside src, including bytecode builds.
-    if isinstance(value, str) and value.startswith('resources/'):
-        return RESOURCES / value[len('resources/'):]
-    return resolve_path(value, Path(config_path).parent)
-
-
-def settings(config):
-    values = {'timezone': 'Asia/Shanghai', 'default_timeout_seconds': 300,
-              'max_concurrent_tasks': 4, 'poll_interval_seconds': 5,
-              'catchup_limit': 100, 'max_attempts': 3, 'retry_delay_seconds': 30}
-    values.update(config.get('scheduler', {}))
-    if values['timezone'] != 'Asia/Shanghai':
-        raise StartupError('TIMEZONE_MUST_BE_ASIA_SHANGHAI')
-    for key in ('default_timeout_seconds', 'max_concurrent_tasks', 'poll_interval_seconds',
-                'catchup_limit', 'max_attempts', 'retry_delay_seconds'):
-        if type(values[key]) is not int or values[key] <= 0:
-            raise StartupError('SCHEDULER_SETTING_INVALID')
-    if values['default_timeout_seconds'] > 300:
-        raise StartupError('SQL_TIMEOUT_MUST_NOT_EXCEED_300_SECONDS')
-    return values
-
-
-def load_definition(config_path):
-    config = load_config(Path(config_path), resolve_password=False)
-    config['dwd_ready'] = load_ready_config(config, Path(config_path).parent)
-    options = settings(config)
-    section = config.get('config', {})
-    rules = asset_path(section.get('convergence_rules_path'), 'config/convergence_rules.yaml', config_path)
-    sql_dir = asset_path(section.get('sql_directory'), 'sql', config_path)
-    builder = DAGBuilder(ConfigLoader(rules, sql_dir=sql_dir))
-    dag = builder.build()
-    if not dag.tasks:
-        raise StartupError('NO_TASKS_CONFIGURED')
-    if config['dwd_ready']['enabled'] and any(
-            not task.depends_on and task.aggregation_interval != 'PT5M' for task in dag.tasks.values()):
-        raise StartupError('DWD_READY_REQUIRES_FIVE_MINUTE_ROOT_TASKS')
-    anchor = datetime(2000, 3, 1, tzinfo=ZoneInfo(options['timezone']))
-    for taskname in dag.topological_order:
-        builder.create_instance(dag, taskname, anchor)
-    # Cron and interval validation runs without a runner, state directory or SDK.
-    preview = TaskScheduler(dag, builder, DAGExecutor(dag, runner=lambda _: None),
-                            timezone=options['timezone'])
-    preview.register_jobs()
-    return config, options, builder, dag, sql_dir
-
-
-def binding(config, dag):
-    from data_converge.sql_execution.client import _connection
-    endpoint = _connection(config['clickhouse'])[0]
-    value = {'endpoint': endpoint, 'database': config['clickhouse']['database'],
-             'username': config['clickhouse']['username'],
-             'tasks': [{key: item for key, item in asdict(dag.tasks[name]).items()
-                        if key != 'description'} for name in sorted(dag.tasks)]}
-    ready = config['dwd_ready']
-    value['dwd_ready'] = {'enabled': ready['enabled']}
-    if ready['enabled']:
-        fields = ('host', 'port', 'mode', 'db')
-        if ready['redis']['mode'] == 'sentinel':
-            fields = ('mode', 'db', 'service_name', 'username', 'paas_name', 'password_file')
-        value['dwd_ready'].update(queue_key=ready['queue_key'], redis={
-            key: ready['redis'].get(key) for key in fields})
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
 def parse_time(value):
@@ -156,9 +61,11 @@ def initialize_state(store, fingerprint, start_time):
     store.set_meta('binding', fingerprint)
 
 
-def build_task_scheduler(app_config_path, definition, store):
-    config, options, builder, dag, sql_dir = definition
-    runner = SQLTaskRunner(Path(app_config_path), sql_dir, timeout=options['default_timeout_seconds'])
+def build_task_scheduler(app_config_path: Path, definition: ApplicationDefinition, store: StateStore):
+    config, options = definition.config, definition.options
+    builder, dag = definition.builder, definition.dag
+    runner = SQLTaskRunner(app_config_path, definition.sql_dir,
+                           timeout=options['default_timeout_seconds'], config=config)
     executor = DAGExecutor(dag, runner, state_store=store,
                            max_concurrent_tasks=options['max_concurrent_tasks'],
                            max_attempts=options['max_attempts'],
@@ -176,7 +83,7 @@ def build_task_scheduler(app_config_path, definition, store):
             coordinator = ReadyCoordinator(store, source, parse_time(store.get_meta('coverage_start')),
                                            batch_size=ready['batch_size'],
                                            wait_warning_seconds=ready['wait_warning_seconds'],
-                                           should_stop=lambda: scheduler._stop_requested)
+                                           should_stop=lambda: scheduler.stop_requested)
             executor.readiness_check = coordinator.reason
             scheduler.ready_poller = coordinator.poll
         except BaseException:
@@ -217,31 +124,72 @@ def output(value):
     print(json.dumps(value, ensure_ascii=False, default=str))
 
 
-def run(args):
+@contextmanager
+def service_runtime(config_path: Path, definition: ApplicationDefinition,
+                    store: StateStore, directory: Path):
+    """Own runtime resources and restore signal handlers even if cleanup fails."""
+    with Heartbeat(directory) as heartbeat, ExitStack() as cleanup:
+        scheduler = None
+
+        def stop(signum, _frame):
+            # Signal handlers must not acquire locks or perform file I/O.
+            heartbeat.ready = False
+            if scheduler is None:
+                raise SystemExit(128 + signum)
+            scheduler.shutdown(wait=False)
+
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous = signal.signal(signum, stop)
+            cleanup.callback(signal.signal, signum, previous)
+        scheduler, runner, coordinator = build_task_scheduler(config_path, definition, store)
+        if coordinator is not None:
+            cleanup.callback(coordinator.close)
+        yield scheduler, runner, heartbeat
+
+
+def report_result(report: ExecutionReport) -> int:
+    output({'instances': [{'id': item.instance_id, 'status': item.status.value,
+                           'query_id': item.query_id}
+                          for item in report.instances.values()]})
+    return int(any(item.status != TaskStatus.SUCCESS for item in report.instances.values()))
+
+
+def execute_mode(args, scheduler: TaskScheduler, runner: SQLTaskRunner,
+                 heartbeat: Heartbeat) -> int:
+    if args.run_task:
+        scheduled = parse_time(args.scheduled_time)
+        report = scheduler.run_task(args.run_task, scheduled)
+        return report_result(report)
+    if args.run_once:
+        report = scheduler.tick(parse_time(args.now) if args.now else None)
+        return report_result(report)
+    execute_sql(runner.config, 'SELECT 1', timeout=10)
+    if not scheduler.stop_requested:
+        heartbeat.set_ready(True)
+        scheduler.start()
+    return 0
+
+
+def run(args) -> int:
     raw = load_app_config(args.config)
     directory = state_directory(raw, args.config)
     if args.healthcheck:
         return 0 if healthcheck(directory, args.healthcheck) else 1
     if args.status:
-        store = StateStore(directory / 'state.sqlite3')
-        try:
+        with closing(StateStore(directory / 'state.sqlite3')) as store:
             output({'coverage_start': store.get_meta('coverage_start'),
                     'counts': store.status_counts(), 'instances': store.list_instances(limit=20),
                     'dwd_windows': store.list_dwd_windows(limit=20)})
-        finally:
-            store.close()
         return 0
-    definition = load_definition(args.config)
-    config, _, _, dag, _ = definition
-    fingerprint = binding(config, dag)
+    definition = load_definition(args.config, raw_config=raw)
+    fingerprint = binding(definition.config, definition.dag)
     if args.validate_only:
-        output({'status': 'VALID', 'tasks': len(dag.tasks)})
+        output({'status': 'VALID', 'tasks': len(definition.dag.tasks)})
         return 0
     start_time = parse_time(args.start_time) if args.start_time else None
     if start_time and next_boundary(start_time) != start_time:
         raise StartupError('START_TIME_MUST_BE_A_FIVE_MINUTE_BOUNDARY')
-    store = StateStore(directory / 'state.sqlite3', create=args.init_state)
-    try:
+    with closing(StateStore(directory / 'state.sqlite3', create=args.init_state)) as store:
         store.acquire_lock()
         if args.init_state:
             initialize_state(store, fingerprint, start_time)
@@ -254,52 +202,13 @@ def run(args):
             store.resolve(args.resolve_instance, 'SUCCESS' if args.resolution == 'success' else 'PENDING', args.note)
             output({'status': 'RESOLVED', 'instance_id': args.resolve_instance})
             return 0
-        with Heartbeat(directory) as heartbeat:
-            scheduler = None
-            coordinator = None
-            previous = {}
-            stopping = False
-
-            def stop(signum, _frame):
-                nonlocal stopping
-                # Python handlers may interrupt code holding a non-reentrant lock.
-                # Keep this path free of file I/O and Event/Condition locks.
-                stopping = True
-                heartbeat.ready = False
-                if scheduler is None:
-                    raise SystemExit(128 + signum)
-                scheduler.shutdown(wait=False)
-
-            for signum in (signal.SIGTERM, signal.SIGINT):
-                previous[signum] = signal.signal(signum, stop)
-            try:
-                scheduler, runner, coordinator = build_task_scheduler(args.config, definition, store)
-                if args.run_task:
-                    scheduled = parse_time(args.scheduled_time)
-                    candidate = scheduler.dag_builder.create_instance(dag, args.run_task, scheduled)
-                    if candidate.data_start < parse_time(store.get_meta('coverage_start')):
-                        raise StartupError('WINDOW_PRECEDES_COVERAGE_START')
-                    report = scheduler.run_task(args.run_task, scheduled)
-                elif args.run_once:
-                    report = scheduler.tick(parse_time(args.now) if args.now else None)
-                else:
-                    execute_sql(runner.config, 'SELECT 1', timeout=10)
-                    if stopping:
-                        return 0
-                    heartbeat.set_ready(True)
-                    scheduler.start()
-                    return 0
-                output({'instances': [{'id': item.instance_id, 'status': item.status.value,
-                                       'query_id': getattr(item, 'query_id', None)}
-                                      for item in report.instances.values()]})
-                return int(any(item.status.value != 'SUCCESS' for item in report.instances.values()))
-            finally:
-                if coordinator is not None:
-                    coordinator.close()
-                for signum, handler in previous.items():
-                    signal.signal(signum, handler)
-    finally:
-        store.close()
+        if args.run_task:
+            candidate = definition.builder.create_instance(
+                definition.dag, args.run_task, parse_time(args.scheduled_time))
+            if candidate.data_start < parse_time(store.get_meta('coverage_start')):
+                raise StartupError('WINDOW_PRECEDES_COVERAGE_START')
+        with service_runtime(args.config, definition, store, directory) as (scheduler, runner, heartbeat):
+            return execute_mode(args, scheduler, runner, heartbeat)
 
 
 def main(argv=None):

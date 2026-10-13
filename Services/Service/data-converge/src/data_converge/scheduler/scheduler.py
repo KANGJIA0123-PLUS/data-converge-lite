@@ -343,6 +343,11 @@ class TaskScheduler:
                          instance.instance_id, instance.status.value, instance.query_id, instance.error)
         return report
 
+    @property
+    def stop_requested(self) -> bool:
+        """Expose shutdown state without sharing the scheduler's internal storage."""
+        return self._stop_requested
+
     def shutdown(self, wait: bool = True) -> None:
         """Signal-safe request: no locks, logging or I/O in this call."""
         self._stop_requested = True

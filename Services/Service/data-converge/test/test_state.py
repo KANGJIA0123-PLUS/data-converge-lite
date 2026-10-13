@@ -340,6 +340,26 @@ def test_dwd_migration_does_not_turn_an_invalid_database_into_a_ledger(tmp_path)
         assert not conn.execute("SELECT name FROM sqlite_master WHERE name='dwd_ready_signals'").fetchall()
 
 
+def test_mark_blocked_only_writes_when_status_or_reason_changes(tmp_path):
+    builder, dag = graph()
+    instance = builder.create_instance(dag, "root", NOW)
+    store = open_store(tmp_path / "state.db")
+    try:
+        store.enqueue_and_advance([instance], {})
+        assert store.claim(instance.instance_id, now=NOW)
+        store.finish(instance.instance_id, TaskStatus.FAILED, error="WAITING_DWD",
+                     retryable=True, next_retry_at=NOW + timedelta(seconds=30), now=NOW)
+        previous = store.get_instance(instance.instance_id)
+        changes = store._connection().total_changes
+
+        for reason, expected_changes in (("WAITING_DWD", 1), ("WAITING_DWD", 1), ("WAITING_PARENT", 2)):
+            store.mark_blocked(instance.instance_id, reason)
+            assert store._connection().total_changes == changes + expected_changes
+            assert store.get_instance(instance.instance_id) == previous | {"status": "BLOCKED", "error": reason}
+    finally:
+        store.close()
+
+
 def test_readiness_gate_blocks_claim_then_releases_persisted_window(tmp_path):
     builder, dag = graph()
     store = open_store(tmp_path / "state.db")

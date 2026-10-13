@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from copy import deepcopy
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -90,16 +91,28 @@ def _connection(clickhouse):
         raise ValueError("CLICKHOUSE_CONNECTION_INVALID") from None
 
 
+def connection_origin(clickhouse: dict[str, Any]) -> str:
+    """Return the validated endpoint used for execution and deployment binding."""
+    return _connection(clickhouse)[0]
+
+
 def load_config(config_path: Path, *, resolve_password: bool = True) -> dict[str, Any]:
-    """Validate offline, or resolve and cache a credential in this returned config."""
+    """Read and validate a configuration, optionally resolving its credential."""
     config_path = Path(config_path)
     try:
         with config_path.open("r", encoding="utf-8") as stream:
             config = yaml.safe_load(stream)
     except (OSError, UnicodeError, yaml.YAMLError):
         raise ValueError("CONFIG_UNREADABLE") from None
+    return validate_config(config, config_path, resolve_password=resolve_password)
+
+
+def validate_config(config: dict[str, Any], config_path: Path, *,
+                    resolve_password: bool = True) -> dict[str, Any]:
+    """Validate an independent snapshot without rereading the configuration file."""
     if not isinstance(config, dict) or not isinstance(config.get("clickhouse"), dict):
         raise ValueError("CLICKHOUSE_CONFIG_MISSING") from None
+    config = deepcopy(config)
     clickhouse = config["clickhouse"]
     for field in ("host", "port"):
         clickhouse[field] = _expand(clickhouse.get(field))
@@ -110,10 +123,17 @@ def load_config(config_path: Path, *, resolve_password: bool = True) -> dict[str
             raise ValueError("CLICKHOUSE_IDENTITY_INVALID") from None
     if ":" in clickhouse["username"]:
         raise ValueError("CLICKHOUSE_IDENTITY_INVALID") from None
-    validate_provider(clickhouse, config_path.parent)
-    if resolve_password:
+    validate_provider(clickhouse, Path(config_path).parent)
+    return resolve_credentials(config) if resolve_password else config
+
+
+def resolve_credentials(config: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a validated snapshot's password without modifying the snapshot."""
+    resolved = deepcopy(config)
+    clickhouse = resolved["clickhouse"]
+    if "password" not in clickhouse:
         clickhouse["password"] = load_password(clickhouse)
-    return config
+    return resolved
 
 
 def load_sql(sql_file: Path) -> str:

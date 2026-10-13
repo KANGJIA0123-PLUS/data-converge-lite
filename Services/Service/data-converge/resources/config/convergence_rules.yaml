@@ -643,7 +643,7 @@ convergence_rules:
     cron: "10 0 * * *"
     depends_on:
       - task_request_day_dws
-    sql_id: task_request_hour_server_ads
+    sql_id: task_request_day_server_ads
 
   # 7.2.4.1 请求追踪Agent月ADS
   - taskname: task_request_month_agent_ads

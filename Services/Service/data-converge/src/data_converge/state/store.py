@@ -242,7 +242,8 @@ class StateStore:
         conn = self._connection(write=True)
         with conn:
             conn.execute("""UPDATE task_instances SET status='BLOCKED', error=?
-                WHERE instance_id=? AND status IN ('PENDING', 'BLOCKED', 'FAILED')""", (reason, instance_id))
+                WHERE instance_id=? AND status IN ('PENDING', 'BLOCKED', 'FAILED')
+                AND (status!='BLOCKED' OR error IS NOT ?)""", (reason, instance_id, reason))
 
     def recover_running(self) -> int:
         conn = self._connection(write=True)

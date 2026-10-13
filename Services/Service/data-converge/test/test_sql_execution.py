@@ -120,6 +120,45 @@ def test_execute_sql_requires_complete_data_window():
         client_module.execute_sql(make_clickhouse_config(), "SELECT 1", start_time=datetime(2026, 9, 9))
 
 
+def test_validate_config_normalizes_an_independent_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_CH_HOST", "127.0.0.1")
+    raw = {"clickhouse": dict(host="${TEST_CH_HOST}", port="8123", database="metrics",
+                              username="user", password_env="TEST_CH_PASSWORD"),
+           "scheduler": {"max_concurrent_tasks": 4}}
+    config = client_module.validate_config(raw, tmp_path / "app.yaml", resolve_password=False)
+    assert raw["clickhouse"]["host"] == "${TEST_CH_HOST}"
+    assert raw["clickhouse"]["port"] == "8123"
+    assert "password" not in config["clickhouse"]
+    raw["clickhouse"]["host"] = "changed.example"
+    raw["scheduler"]["max_concurrent_tasks"] = 99
+    assert client_module.connection_origin(config["clickhouse"]) == "http://127.0.0.1:8123/"
+    assert config["scheduler"]["max_concurrent_tasks"] == 4
+
+
+def test_runner_uses_snapshot_without_rereading_or_mutating_it(tmp_path, monkeypatch):
+    path = tmp_path / "app.yaml"
+    monkeypatch.setenv("TEST_CH_HOST", "127.0.0.1")
+    monkeypatch.setenv("TEST_CH_PASSWORD", "first password")
+    config = client_module.validate_config({"clickhouse": dict(
+        host="${TEST_CH_HOST}", port=8123, database="metrics", username="user",
+        password_env="TEST_CH_PASSWORD")}, path, resolve_password=False)
+    path.write_text("invalid replacement configuration")
+    monkeypatch.setenv("TEST_CH_HOST", "replacement.example")
+    (tmp_path / "hour.sql").write_text("SELECT 1")
+    calls, _ = capture_http(monkeypatch)
+    runner = runner_module.SQLTaskRunner(path, tmp_path, config=config)
+    assert "password" not in config["clickhouse"]
+    config["clickhouse"]["host"] = "mutated.example"
+    monkeypatch.setenv("TEST_CH_PASSWORD", "changed password")
+    instance = SimpleNamespace(task=SimpleNamespace(sql_id="hour"), data_start=None, data_end=None)
+    runner(instance)
+    runner(instance)
+    assert len(calls) == 2
+    for request, _ in calls:
+        assert request.full_url.startswith("http://127.0.0.1:8123/?")
+        assert base64.b64decode(request.get_header("Authorization").split()[1]) == b"user:first password"
+
+
 def test_runner_resolves_password_once_and_preserves_window(tmp_path, monkeypatch):
     path = tmp_path / "app.yaml"
     path.write_text(yaml.safe_dump({"clickhouse": dict(host="127.0.0.1", port=8123, database="metrics",

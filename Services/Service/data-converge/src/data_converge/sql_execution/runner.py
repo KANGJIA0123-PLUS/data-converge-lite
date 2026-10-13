@@ -7,7 +7,7 @@ from typing import Any
 
 from data_converge.dag import TaskInstance
 
-from .client import execute_sql, load_config, load_sql
+from .client import execute_sql, load_config, load_sql, resolve_credentials
 
 
 class SQLTaskRunner:
@@ -18,13 +18,17 @@ class SQLTaskRunner:
         config_path: Path,
         sql_directory: Path,
         timeout: int = 300,
+        *,
+        config: dict[str, Any] | None = None,
     ):
         self.config_path = Path(config_path)
         self.sql_directory = Path(sql_directory)
         self.timeout = timeout
 
-        # 配置只需要在启动时读取一次
-        self.config: dict[str, Any] = load_config(self.config_path)
+        # Reuse the validated startup snapshot so binding and execution agree.
+        self.config: dict[str, Any] = (
+            load_config(self.config_path) if config is None else resolve_credentials(config)
+        )
 
     def __call__(self, instance: TaskInstance) -> None:
         sql_id = instance.task.sql_id
