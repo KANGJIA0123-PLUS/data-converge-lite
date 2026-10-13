@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from .psm_crypto import create_psm_codec
 from .redis_auth import make_connect_callback
 from .redis_credentials import load_sentinel_credentials, sentinel_identity
+
+logger = logging.getLogger(__name__)
 
 
 class RedisSignalError(RuntimeError):
@@ -65,11 +68,14 @@ def _close_client(client):
     try:
         client.close()
     except Exception:
-        pass
+        logger.warning("DWD_READY_REDIS_CLOSE_FAILED")
     try:
-        client.connection_pool.disconnect()
+        # Cluster clients close their node pools internally and have no pool here.
+        pool = getattr(client, "connection_pool", None)
+        if pool is not None:
+            pool.disconnect()
     except Exception:
-        pass
+        logger.warning("DWD_READY_REDIS_DISCONNECT_FAILED")
 
 
 def bind_sentinel_identity(store, identity):

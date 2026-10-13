@@ -69,7 +69,7 @@ def _connection(clickhouse):
         parsed = urllib.parse.urlsplit(host if has_scheme else "//" + host)
         secure = clickhouse.get("secure", parsed.scheme == "https" if has_scheme else False)
         verify = clickhouse.get("verify", True)
-        if type(secure) is not bool or type(verify) is not bool:
+        if not isinstance(secure, bool) or not isinstance(verify, bool):
             raise ValueError
         scheme = "https" if secure else "http"
         if has_scheme and parsed.scheme != scheme:
@@ -346,7 +346,7 @@ def execute_sql(config: dict[str, Any], sql: str, timeout: int = 300,
             "CLICKHOUSE_AUTH_FAILED" if code == 401 else "CLICKHOUSE_HTTP_FAILED")
         raise SQLExecutionError(message, outcome_unknown=deadline.expired or code != 401,
                                 query_id=query_id) from None
-    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as error:
+    except (OSError, http.client.HTTPException, ValueError) as error:
         reason = error.reason if isinstance(error, urllib.error.URLError) else error
         unsent = not deadline.expired and not response_started and (
             isinstance(reason, (ConnectionRefusedError, socket.gaierror)) or (
@@ -371,5 +371,5 @@ def _decode_query_response(body, remaining, query_id):
         if not isinstance(document, dict) or "exception" in document or not isinstance(document.get("data"), list):
             raise ValueError
         return document["data"]
-    except (ValueError, UnicodeError, RecursionError):
+    except (ValueError, RecursionError):
         raise SQLExecutionError("CLICKHOUSE_RESPONSE_INVALID", outcome_unknown=True, query_id=query_id) from None

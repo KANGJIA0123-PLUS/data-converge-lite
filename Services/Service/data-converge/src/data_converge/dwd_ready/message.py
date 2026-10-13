@@ -35,7 +35,7 @@ def parse_message(raw: str | bytes) -> ReadyMessage:
         if start.minute % 5:
             raise ValueError
         return ReadyMessage(start, data_type)
-    except (ValueError, TypeError, UnicodeError):
+    except (ValueError, TypeError):
         raise ReadyMessageError("DWD_MESSAGE_INVALID") from None
 
 

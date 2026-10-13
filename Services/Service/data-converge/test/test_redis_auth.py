@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from redis import AuthenticationError, ConnectionError, ResponseError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from redis.connection import Connection
 
 
@@ -223,11 +224,13 @@ def test_post_auth_failures_are_safe_connection_errors(nonce_sdk, client_name):
     assert caught.value.__suppress_context__
 
 
-def test_io_failure_is_safe_and_does_not_retry_auth(nonce_sdk):
-    connection = ScriptedConnection([ConnectionError(PASSWORD)])
+@pytest.mark.parametrize("error_type", [ConnectionError, RedisTimeoutError, OSError])
+def test_io_failure_is_safe_and_does_not_retry_auth(nonce_sdk, error_type):
+    connection = ScriptedConnection([error_type(PASSWORD)])
     with pytest.raises(ConnectionError) as caught:
         invoke(connection)
     assert not isinstance(caught.value, AuthenticationError)
+    assert str(caught.value) == "DWD_READY_REDIS_CONNECT_FAILED"
     assert PASSWORD not in "".join(traceback.format_exception(caught.value))
     assert len(connection.events) == 2
 

@@ -92,7 +92,7 @@ def parse_pms_password(plaintext, username, paas_name="clickhouse-pms-password")
         if not isinstance(password, str) or not password or "\0" in password:
             raise ValueError("invalid password")
         return password
-    except (ValueError, TypeError, KeyError, UnicodeError, RecursionError):
+    except (ValueError, TypeError, KeyError, RecursionError):
         raise ValueError("KMS_PMS_INVALID") from None
 
 
@@ -217,7 +217,7 @@ def run_decryptor(command, ciphertext, timeout):
         if not 0 < len(payload) <= MAX_SECRET_BYTES:
             raise ValueError("invalid plaintext length")
         return payload.decode("utf-8")
-    except (ValueError, UnicodeError):
+    except ValueError:
         raise ValueError("KMS_PROTOCOL_INVALID") from None
 
 

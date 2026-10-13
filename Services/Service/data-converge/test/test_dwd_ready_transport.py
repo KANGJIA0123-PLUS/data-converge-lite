@@ -1,5 +1,6 @@
 """DWD wire protocol and durable Redis-list transfer, using synthetic data."""
 
+import logging
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -230,6 +231,54 @@ def test_close_is_idempotent_and_never_leaks_sdk_errors(tmp_path, capsys):
         source.receive()
     captured = capsys.readouterr()
     assert "private" not in captured.out + captured.err
+
+
+class CleanupRedis:
+    def __init__(self, name, events, failed_operations=()):
+        self.name = name
+        self.events = events
+        self.failed_operations = failed_operations
+        self.connection_pool = self
+
+    def close(self):
+        self.events.append((self.name, "close"))
+        if "close" in self.failed_operations:
+            raise RuntimeError("private close credentials")
+
+    def disconnect(self):
+        self.events.append((self.name, "disconnect"))
+        if "disconnect" in self.failed_operations:
+            raise RuntimeError("private disconnect credentials")
+
+
+@pytest.mark.parametrize("failed_operations, expected_codes", [
+    ((), []),
+    (("close",), ["DWD_READY_REDIS_CLOSE_FAILED"]),
+    (("disconnect",), ["DWD_READY_REDIS_DISCONNECT_FAILED"]),
+    (("close", "disconnect"), ["DWD_READY_REDIS_CLOSE_FAILED", "DWD_READY_REDIS_DISCONNECT_FAILED"]),
+])
+def test_cleanup_warns_safely_and_continues_through_all_clients(tmp_path, caplog, failed_operations, expected_codes):
+    from data_converge.dwd_ready.redis_source import RedisSignalSource
+    events = []
+    client = CleanupRedis("data", events, failed_operations)
+    sentinels = (CleanupRedis("sentinel1", events, failed_operations), CleanupRedis("sentinel2", events))
+    source = RedisSignalSource(client, load(enabled_config(), tmp_path), sentinel_clients=sentinels)
+    with caplog.at_level(logging.WARNING, logger="data_converge.dwd_ready.redis_source"):
+        source.close()
+        source.close()
+    assert events == [("data", "close"), ("data", "disconnect"), ("sentinel1", "close"),
+                      ("sentinel1", "disconnect"), ("sentinel2", "close"), ("sentinel2", "disconnect")]
+    assert [record.getMessage() for record in caplog.records] == expected_codes * 2
+    assert all(record.levelno == logging.WARNING and record.exc_info is None for record in caplog.records)
+    assert "private" not in caplog.text
+
+
+def test_client_without_dedicated_pool_closes_without_false_warning(tmp_path, caplog):
+    source, client, _ = make_source(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="data_converge.dwd_ready.redis_source"):
+        source.close()
+    assert client.closed == 1
+    assert not caplog.records
 
 
 @pytest.mark.parametrize("mode", ["standalone", "cluster"])

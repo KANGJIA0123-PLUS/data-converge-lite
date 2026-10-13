@@ -220,7 +220,8 @@ class TaskScheduler:
 
     def _plan_due(self, cursors: Mapping[str, datetime | None], now: datetime) -> SchedulePlan:
         """Calculate complete due windows without changing state or executing work."""
-        assert self.start_time is not None
+        if self.start_time is None:
+            raise ValueError("Initialized coverage_start is required; use --init-state")
         instances = []
         next_cursors = {}
         for taskname in self.dag.topological_order:

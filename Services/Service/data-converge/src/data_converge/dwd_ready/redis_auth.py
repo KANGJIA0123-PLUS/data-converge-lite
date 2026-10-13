@@ -29,21 +29,24 @@ def _client_nonce():
     return value
 
 
-def _authenticate(connection, codec):
+def _read_challenge(connection):
     from redis.exceptions import ResponseError
 
+    try:
+        connection.read_response()
+    except ResponseError as error:
+        return str(error)
+    # The company challenge is an error reply, never a success/bulk reply.
+    raise ValueError
+
+
+def _authenticate(connection, codec):
     password = connection.password
     if not isinstance(password, str) or not password:
         raise ValueError
     client_nonce = _client_nonce()
     connection.send_command("AUTH", "<" + client_nonce, check_health=False)
-    try:
-        connection.read_response()
-    except ResponseError as error:
-        challenge = str(error)
-    else:
-        # The company challenge is an error reply, never a success/bulk reply.
-        raise ValueError
+    challenge = _read_challenge(connection)
 
     # redis-py's RESP parser normally removes "ERR ". Some supported parsers
     # retain it. Strip exactly one complete prefix; never discard a cipher digit.
@@ -80,19 +83,21 @@ def make_connect_callback(codec, *, select_db: bool):
     connections must use select_db=False; only data connections select a DB.
     SDK and server errors are replaced with fixed, credential-free diagnostics.
     """
-    from redis.exceptions import AuthenticationError, ConnectionError, TimeoutError
+    from redis.exceptions import AuthenticationError
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
 
     def connect(connection):
         try:
             connection._parser.on_connect(connection)
         except Exception:
-            raise ConnectionError("DWD_READY_REDIS_CONNECT_FAILED") from None
+            raise RedisConnectionError("DWD_READY_REDIS_CONNECT_FAILED") from None
         try:
             _authenticate(connection, codec)
         except AuthenticationError:
             raise AuthenticationError("DWD_READY_REDIS_AUTH_FAILED") from None
-        except (ConnectionError, TimeoutError, OSError):
-            raise ConnectionError("DWD_READY_REDIS_CONNECT_FAILED") from None
+        except (RedisConnectionError, RedisTimeoutError, OSError):
+            raise RedisConnectionError("DWD_READY_REDIS_CONNECT_FAILED") from None
         except Exception:
             raise AuthenticationError("DWD_READY_REDIS_AUTH_FAILED") from None
 
@@ -106,6 +111,6 @@ def make_connect_callback(codec, *, select_db: bool):
                 if connection.read_response() not in (b"OK", "OK"):
                     raise ValueError
         except Exception:
-            raise ConnectionError("DWD_READY_REDIS_SESSION_FAILED") from None
+            raise RedisConnectionError("DWD_READY_REDIS_SESSION_FAILED") from None
 
     return connect

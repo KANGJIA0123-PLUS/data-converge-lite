@@ -76,7 +76,7 @@ def parse_sentinel_credentials(plaintext, username, paas_name=None):
         if len(set(endpoints)) != len(endpoints):
             raise ValueError
         return SentinelCredentials(endpoints, password)
-    except (ValueError, TypeError, KeyError, UnicodeError, RecursionError):
+    except (ValueError, TypeError, KeyError, RecursionError):
         raise ValueError('DWD_REDIS_PMS_INVALID') from None
 
 

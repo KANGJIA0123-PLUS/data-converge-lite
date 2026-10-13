@@ -125,7 +125,7 @@ def _redis_config(connection, block, config_directory):
     if username is not None and not _text(username):
         _invalid()
     secure, verify = connection.get("ssl", True), connection.get("ssl_verify", True)
-    if type(secure) is not bool or type(verify) is not bool:
+    if not isinstance(secure, bool) or not isinstance(verify, bool):
         _invalid()
     socket_timeout = _number(connection.get("socket_timeout", 3), 5)
     connect_timeout = _number(connection.get("socket_connect_timeout", 2), 5)
@@ -149,7 +149,7 @@ def load_ready_config(raw: dict, config_directory: Path) -> dict:
     if not isinstance(section, dict) or set(section) - allowed:
         _invalid()
     enabled = section.get("enabled", False)
-    if type(enabled) is not bool:
+    if not isinstance(enabled, bool):
         _invalid()
     queue = section.get("queue_key", "modelverse:dwd:ready")
     if not _text(queue) or len(queue) > 1024:

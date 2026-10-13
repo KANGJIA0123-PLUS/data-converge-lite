@@ -374,6 +374,12 @@ def persistent_scheduler(tmp_path, calls, coverage_start, *, create=True, catchu
     return scheduler, store
 
 
+def test_plan_due_requires_initialized_coverage_start():
+    scheduler = build_scheduler(lambda instance: None)
+    with pytest.raises(ValueError, match="coverage_start"):
+        scheduler._plan_due({}, datetime(2026, 10, 12, 10, 6, tzinfo=SHANGHAI))
+
+
 def test_plan_due_preserves_cursor_snapshot_without_persisting_or_executing(tmp_path):
     coverage = datetime(2026, 10, 12, 10, 3, tzinfo=SHANGHAI)
     calls = []

@@ -70,7 +70,7 @@ def load_app_config(path: Path) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise ValueError
         return value
-    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+    except (OSError, ValueError, yaml.YAMLError):
         raise StartupError('CONFIG_UNREADABLE') from None
 
 
@@ -140,9 +140,9 @@ def binding(config: dict[str, Any], dag: DAG) -> str:
     ready = config['dwd_ready']
     value['dwd_ready'] = {'enabled': ready['enabled']}
     if ready['enabled']:
-        fields = ('host', 'port', 'mode', 'db')
+        redis_fields = ('host', 'port', 'mode', 'db')
         if ready['redis']['mode'] == 'sentinel':
-            fields = ('mode', 'db', 'service_name', 'username', 'paas_name', 'password_file')
+            redis_fields = ('mode', 'db', 'service_name', 'username', 'paas_name', 'password_file')
         value['dwd_ready'].update(queue_key=ready['queue_key'], redis={
-            key: ready['redis'].get(key) for key in fields})
+            key: ready['redis'].get(key) for key in redis_fields})
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
