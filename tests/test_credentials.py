@@ -11,6 +11,8 @@ import yaml
 
 from data_converge.sql_execution.client import load_config
 
+from .paths import SOURCE_ROOT
+
 
 def write_config(tmp_path, **changes):
     values = dict(host="${TEST_CH_HOST}", port="${TEST_CH_PORT}", database="metrics",
@@ -101,8 +103,7 @@ def make_sdk(tmp_path, body):
 
 
 def sdk_path(monkeypatch, tmp_path):
-    source = Path(__file__).resolve().parents[1] / "src"
-    monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(tmp_path), str(source))))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(tmp_path), str(SOURCE_ROOT))))
 
 
 def test_real_worker_decrypts_file_and_suppresses_sdk_output(tmp_path, monkeypatch, capfd):

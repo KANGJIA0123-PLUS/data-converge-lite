@@ -73,9 +73,9 @@ def report_result(report: ExecutionReport) -> CommandResult:
 class Application:
     """Use cases share validated inputs; only execution opens remote resources."""
 
-    def __init__(self, config_path: Path):
+    def __init__(self, config_path: Path, *, raw_config: dict[str, Any] | None = None):
         self.config_path = Path(config_path)
-        self._raw_config = load_app_config(self.config_path)
+        self._raw_config = load_app_config(self.config_path) if raw_config is None else raw_config
         self.directory = state_directory(self._raw_config, self.config_path)
 
     @cached_property

@@ -15,6 +15,8 @@ from redis import AuthenticationError, ConnectionError, ResponseError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 from redis.connection import Connection
 
+from .paths import SOURCE_ROOT
+
 
 PASSWORD = "private-password-with-@-separator"
 CLIENT_NONCE = "abcdef0123456789" * 2
@@ -22,7 +24,6 @@ SERVER_NONCE = "fedcba9876543210" * 2
 
 
 def test_offline_main_and_config_import_without_redis_or_crypto_sdks(tmp_path):
-    source_dir = Path(__file__).resolve().parents[1] / "src"
     script = """
 import builtins
 import sys
@@ -49,7 +50,7 @@ ready = load_ready_config({'dwd_ready': {'enabled': True, 'redis': {
 assert ready['redis']['mode'] == 'sentinel' and ready['redis']['db'] == 5
 assert not (blocked & set(sys.modules))
 """
-    result = subprocess.run([sys.executable, "-I", "-c", script, str(source_dir), str(tmp_path)],
+    result = subprocess.run([sys.executable, "-I", "-c", script, str(SOURCE_ROOT), str(tmp_path)],
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 

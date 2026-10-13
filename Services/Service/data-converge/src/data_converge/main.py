@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import logging
 import os
 from pathlib import Path
 
 from data_converge.application import Application, CommandResult
-from data_converge.config.application import DEFAULT_APP_CONFIG_PATH, StartupError, load_definition
-from data_converge.logging_config import LOG_FORMAT, create_file_handler
+from data_converge.config.application import (
+    DEFAULT_APP_CONFIG_PATH, StartupError, load_app_config, load_definition,
+)
+from data_converge.observability.logging import LOG_FORMAT, LoggingSession
+from data_converge.observability.settings import LoggingSettings
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +50,8 @@ def output(value):
     print(json.dumps(value, ensure_ascii=False, default=str))
 
 
-def run(args) -> CommandResult:
-    application = Application(args.config)
+def run(args, *, raw_config=None) -> CommandResult:
+    application = Application(args.config, raw_config=raw_config)
     if args.healthcheck:
         return application.check_health(args.healthcheck)
     if args.status:
@@ -69,28 +73,20 @@ def main(argv=None):
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     args = arguments(argv)
-    root_logger = logging.getLogger()
-    previous_level = root_logger.level
-    file_handler = None
-    try:
-        file_handler = create_file_handler()
-        if file_handler is not None:
-            root_logger.addHandler(file_handler)
-            root_logger.setLevel(logging.INFO)
-        result = run(args)
-        if result.payload is not None:
-            output(result.payload)
-        return result.exit_code
-    except (Exception, KeyboardInterrupt) as exc:
-        # Untrusted SDK/server/SQL exception bodies never reach application logs.
-        detail = str(exc) if isinstance(exc, StartupError) else type(exc).__name__
-        logger.error('SERVICE_FAILED: %s', detail)
-        return 1
-    finally:
-        if file_handler is not None:
-            root_logger.removeHandler(file_handler)
-            file_handler.close()
-            root_logger.setLevel(previous_level)
+    with ExitStack() as cleanup:
+        try:
+            logs = cleanup.enter_context(LoggingSession())
+            config = load_app_config(args.config)
+            logs.configure(LoggingSettings.from_mapping(config.get('logging')))
+            result = run(args, raw_config=config)
+            if result.payload is not None:
+                output(result.payload)
+            return result.exit_code
+        except (Exception, KeyboardInterrupt) as exc:
+            # Log before cleanup; untrusted SDK/server/SQL bodies stay private.
+            detail = str(exc) if isinstance(exc, StartupError) else type(exc).__name__
+            logger.error('SERVICE_FAILED: %s', detail)
+            return 1
 
 
 if __name__ == '__main__':

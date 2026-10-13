@@ -7,6 +7,8 @@ from apscheduler.triggers.cron import CronTrigger
 from data_converge.dag import DAGBuilder, DAGExecutor, TaskStatus
 from data_converge.scheduler import TaskScheduler
 
+from .paths import RESOURCES_ROOT, SOURCE_ROOT
+
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -535,7 +537,7 @@ def test_signal_shutdown_cannot_deadlock_when_wait_condition_is_locked():
         scheduler.start()
         print('stopped')
     ''')
-    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    env = dict(os.environ, PYTHONPATH=str(SOURCE_ROOT))
     result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
                             text=True, timeout=3)
     assert result.returncode == 0, result.stderr
@@ -546,8 +548,7 @@ def test_ready_event_registers_all_twelve_five_minute_tasks_before_cron(tmp_path
     from pathlib import Path
     from data_converge.config import ConfigLoader
     from data_converge.state import StateStore
-    resources = Path(__file__).resolve().parents[1] / "resources"
-    builder = DAGBuilder(ConfigLoader(resources / "config/convergence_rules.yaml", resources / "sql"))
+    builder = DAGBuilder(ConfigLoader(RESOURCES_ROOT / "config/convergence_rules.yaml", RESOURCES_ROOT / "sql"))
     dag = builder.build()
     store = StateStore(tmp_path / "state.db", create=True)
     store.acquire_lock()
@@ -632,7 +633,7 @@ def test_stop_requested_during_ready_poll_prevents_manual_submission(tmp_path):
 
 @pytest.mark.parametrize("scheduled_offset", [6, 66])
 def test_manual_schedule_uses_actual_clock_for_current_signals_and_readiness(tmp_path, monkeypatch, scheduled_offset):
-    from data_converge.scheduler import scheduler as scheduler_module
+    from data_converge.scheduler import service as scheduler_module
     start = datetime(2026, 10, 12, 10, 0, tzinfo=SHANGHAI)
     actual_now = start + timedelta(minutes=16)
     scheduler, store = persistent_scheduler(tmp_path, [], start)
@@ -666,7 +667,7 @@ def test_manual_schedule_uses_actual_clock_for_current_signals_and_readiness(tmp
 
 @pytest.mark.parametrize("mode", ["tick", "manual"])
 def test_ready_poll_crossing_window_boundary_advances_planning_and_gate_clock(tmp_path, monkeypatch, mode):
-    from data_converge.scheduler import scheduler as scheduler_module
+    from data_converge.scheduler import service as scheduler_module
     start = datetime(2026, 10, 12, 10, 0, tzinfo=SHANGHAI)
     before_poll = start + timedelta(minutes=4, seconds=59, microseconds=500000)
     after_poll = start + timedelta(minutes=5, microseconds=100000)

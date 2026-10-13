@@ -15,8 +15,10 @@ import tarfile
 
 import pytest
 
+from .paths import REPOSITORY_ROOT, RESOURCES_ROOT
 
-ROOT = Path(__file__).resolve().parents[4]
+
+ROOT = REPOSITORY_ROOT
 BIN = ROOT / "Services/Package/images/bin"
 BUILD = ROOT / "Services/build_framework/scripts/build.sh"
 
@@ -227,9 +229,6 @@ def test_probe_does_not_install_dependencies(runtime):
     process, _, _, stderr = run_script(runtime, "liveness_check.sh", exit_code="17")
     assert process.returncode == 17, stderr
     assert not (home / "bin/py/site-packages").exists()
-
-
-
 @pytest.fixture(scope="module")
 def compiled_application(tmp_path_factory):
     temp = tmp_path_factory.mktemp("company_build")
@@ -259,15 +258,7 @@ def compiled_application(tmp_path_factory):
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
     home = repo / "Services/Package/images"
     deployed = home / "lib/data-converge"
-    assert not list(deployed.rglob("*.py")), "core is deployed as company-framework bytecode"
-    assert (deployed / "src/data_converge/main.pyc").is_file()
-    assert (deployed / "src/data_converge/__init__.pyc").is_file()
-    sql = list((deployed / "resources/sql").glob("*.sql"))
-    assert len(sql) == 52
-    for path in sql:
-        assert path.read_bytes() == (ROOT / application / "resources/sql" / path.name).read_bytes()
-    assert (deployed / "resources/config/app_config.yaml").read_bytes() == (
-        ROOT / application / "resources/config/app_config.yaml").read_bytes()
+    assert_compiled_artifacts(deployed)
     shutil.copytree(BIN, home / "bin", dirs_exist_ok=True)
     python_env = temp / "python.env"
     python_env.write_text(f'export PATH="{runtime_bin}:$PATH"\n')
@@ -279,7 +270,27 @@ def compiled_application(tmp_path_factory):
     return temp, home, deployed, env
 
 
-def test_original_framework_bytecode_loads_all_52_tasks_outside_checkout(compiled_application):
+def assert_compiled_artifacts(deployed):
+    assert not list(deployed.rglob("*.py")), "core is deployed as company-framework bytecode"
+    assert (deployed / "src/data_converge/main.pyc").is_file()
+    assert (deployed / "src/data_converge/__init__.pyc").is_file()
+    expected = {path.name for path in (RESOURCES_ROOT / "sql").glob("*.sql")}
+    sql = list((deployed / "resources/sql").glob("*.sql"))
+    assert len(expected) == 48
+    assert {path.name for path in sql} == expected
+    for path in sql:
+        assert path.read_bytes() == (RESOURCES_ROOT / "sql" / path.name).read_bytes()
+    assert (deployed / "resources/config/app_config.yaml").read_bytes() == (
+        RESOURCES_ROOT / "config/app_config.yaml").read_bytes()
+
+
+def test_original_framework_excludes_tests_from_image(compiled_application):
+    _, home, _, _ = compiled_application
+    assert not [path for path in home.rglob('*') if path.is_dir() and path.name in ('test', 'tests')]
+    assert not list(home.rglob('test_*.pyc'))
+
+
+def test_original_framework_bytecode_loads_all_48_tasks_outside_checkout(compiled_application):
     temp, _, deployed, env = compiled_application
     result = subprocess.run([sys.executable, "-c",
         "from pathlib import Path; from data_converge import main; "
@@ -288,7 +299,7 @@ def test_original_framework_bytecode_loads_all_52_tasks_outside_checkout(compile
         "raise SystemExit(main.main(['--validate-only']))"],
         cwd=temp, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["tasks"] == 52
+    assert json.loads(result.stdout)["tasks"] == 48
     assert not list(deployed.rglob("*.whl"))
 
 
@@ -297,7 +308,7 @@ def test_launcher_runs_the_original_framework_bytecode(compiled_application):
     result = subprocess.run(["bash", str(home / "bin/start_data_converge.sh"), "--validate-only"],
                             cwd=temp, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["tasks"] == 52
+    assert json.loads(result.stdout)["tasks"] == 48
 
 
 def test_xms_helper_runs_from_original_framework_bytecode(compiled_application):

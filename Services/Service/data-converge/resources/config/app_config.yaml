@@ -1,4 +1,9 @@
-# 平台部署：保留公司52任务。ClickHouse HTTP端点由Deployment注入。
+# 平台部署：保留公司48任务。ClickHouse HTTP端点由Deployment注入。
+logging:
+  max_bytes: 20971520     # 20 MiB，单条超限日志仍完整保留。
+  backup_count: 10       # 最多10个历史文件，不含当前日志。
+  retention_days: 7      # 按归档文件最后写入时间清理，重启不重置期限。
+
 clickhouse:
   host: "${CLICKHOUSE_URL}"
   port: "${CLICKHOUSE_PORT}"

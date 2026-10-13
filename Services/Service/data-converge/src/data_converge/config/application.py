@@ -15,7 +15,7 @@ import yaml
 
 from data_converge.dag import DAG, DAGBuilder
 from data_converge.dwd_ready.config import load_ready_config
-from data_converge.sql_execution.client import connection_origin, validate_config
+from data_converge.sql_execution.config import connection_origin, validate_config
 
 from .loader import ConfigLoader
 from .cron import compile_cron_groups

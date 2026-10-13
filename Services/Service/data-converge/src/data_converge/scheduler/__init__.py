@@ -4,4 +4,4 @@ __all__ = [
     "TaskScheduler",
 ]
 
-from .scheduler import TaskScheduler
+from .service import TaskScheduler

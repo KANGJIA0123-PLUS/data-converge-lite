@@ -11,5 +11,6 @@
 ## 验证
 
 - 使用现有测试与标准库完成验证，测试保持简单，不引入新的测试框架或开发依赖。
-- 函数行数由 `Services/Service/data-converge/test/test_code_rules.py` 检查。
+- 测试统一放在仓库根目录 `tests/`，不进入公司构建脚本复制到镜像的业务目录。
+- 函数行数由 `tests/test_code_rules.py` 检查。
 - 提交前运行相关业务测试及 `git diff --check`。如有已有失败，核对基线并如实说明，不通过放宽断言隐藏失败。

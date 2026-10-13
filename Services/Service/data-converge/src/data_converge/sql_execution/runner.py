@@ -7,7 +7,8 @@ from typing import Any
 
 from data_converge.dag import TaskInstance
 
-from .client import execute_sql, load_config, load_sql, resolve_credentials
+from .client import execute_sql, load_sql
+from .config import load_config, resolve_credentials
 
 
 class SQLTaskRunner:
