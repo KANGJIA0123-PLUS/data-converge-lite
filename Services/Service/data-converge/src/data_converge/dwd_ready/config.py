@@ -100,7 +100,9 @@ def load_ready_config(raw: dict, config_directory: Path) -> dict:
         _invalid()
     if mode == "cluster" and db != 0:
         _invalid("DWD_READY_CLUSTER_REQUIRES_DB_ZERO")
-    username = connection.get("username")
+    # In company Sentinel mode this selects a PMS account, not an ACL AUTH user.
+    # Keep direct modes' optional ACL username unchanged.
+    username = connection.get("username", "admin" if mode == "sentinel" else None)
     if username is not None and not _text(username):
         _invalid()
     secure, verify = connection.get("ssl", True), connection.get("ssl_verify", True)

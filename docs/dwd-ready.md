@@ -66,7 +66,7 @@ processing:  {modelverse:dwd:ready}:data-converge:processing
 
 ## 公司 Sentinel 连接与认证
 
-最新上传的 Python 参考明确使用 `Sentinel(...).master_for("redis-cluster", db=5)`。本次只适配这一连接协议，继续使用原有 List 消费流程。`redis-cluster` 在这里是 Sentinel 主节点组名，不能据此改用 `RedisCluster`。
+公司 Python 参考使用 `Sentinel(...).master_for("redis-cluster", db=5)`，用户已在容器中验证这条连接路径。本实现继续使用原有 List 消费流程。`redis-cluster` 在这里是 Sentinel 主节点组名，不能据此改用 `RedisCluster`，也不固定某次发现的主节点 IP。
 
 业务配置如下；不修改公司构建、依赖、启动脚本或 Deployment：
 
@@ -81,8 +81,8 @@ dwd_ready:
     mode: sentinel
     service_name: redis-cluster
     db: 5
-    username: ossdbuser
-    password_file: /opt/its/data-converge/secret/REPLACE_WITH_REDIS_PASSWORD_KEY
+    username: admin  # 可配置；Sentinel 模式省略时默认 admin。
+    password_file: /opt/its/data-converge/secret/redis/password
     paas_name: null
     kms_timeout_seconds: 30
     root_key_file: /opt/its/secret/its-common-secret/redis_root.key
@@ -95,28 +95,31 @@ dwd_ready:
 
 ### 挂载依据
 
-用户上传的 `apiVersion.txt` 与仓库原平台模板提供了以下映射：
+用户上传的 `apiVersion.txt`、原平台模板及现场命令回执确认了以下映射：
 
 | 输入 | 已确认来源 |
 |---|---|
 | `redis_root.key` | Secret `redis-cipher-secret` 的同名键；挂载 `/opt/its/secret/its-common-secret/redis_root.key` |
 | `redis_shared.key` | Secret `redis-cipher-secret` 的同名键；挂载 `/opt/its/secret/its-common-secret/redis_shared.key` |
-| 服务 Secret 目录 | `gde-adapter-certfiles` 整体挂载 `/opt/its/data-converge/secret`，未列出其中键名 |
-| Redis 密文文件 | 上述 Deployment 没有单独的 Redis 密码 `items`/`subPath`，也没有该 Secret 的内容，无法从文件确定具体键名；业务配置保留明确占位，须填成实际文件路径 |
+| 服务 Secret 目录 | `gde-adapter-certfiles` 整体挂载 `/opt/its/data-converge/secret`，现场列出的键均为证书及其配套材料，不含 Redis 密码 |
+| Redis 密文来源 | `kube-system/its-redis-pwd-secret` 的 `password` 键，已通过 XMS 解密并完成连接验证 |
+| Redis 密文文件 | 业务配置约定 `/opt/its/data-converge/secret/redis/password`；原 Deployment 尚未挂载，需发布时补齐，或将 `password_file` 改为实际挂载文件 |
 | XMS | 沿用原 Deployment 的 `XMS_SERVICE_URL`、SDK 配置及密钥挂载 |
 
 `CIPHER_ROOT=/opt/its/data-converge/secret/redis-cipher-secret` 只是已有环境值；实际单独挂载的根/工作密钥在公共 Secret 目录，所以本实现使用已确认的实际文件路径。没有照搬参考服务的 `/app/cert/...`。
 
-如果 Redis 密文实际来自另一挂载目录，只调整 `password_file` 指向实际路径。`--validate-only`、`--init-state` 不读取秘密文件，因此离线 VALID 不证明密文占位已配置、SDK已安装或服务可连接。
+密码文件内容是 Secret `password` 键投影出的原始密文，不是诊断用的 Secret JSON，也不是明文密码。若挂载到另一目录，只调整 `password_file`。此次只修改业务代码与配置，未代改 Deployment；诊断临时文件不作为正式密码来源。`--validate-only`、`--init-state` 不读取秘密文件，因此离线 VALID 不证明挂载、SDK 或连接已就绪。
 
 ### 凭据与认证流程
 
-1. 启动时有界读取 Redis 密文文件，复用现有隔离 XMS helper 调用 `dsf.crypto.xms_crypto.xms_decrypt`，继续 Base64 解码 PMS。参考项目的 `get_decrypt` 实现未提供；这里使用本项目已经接入的 XMS 方案，实际 Redis 密文兼容性仍须现场验证。
-2. PMS `IPS` 解析为 Sentinel 地址列表，支持 `host:port` 和 `[IPv6]:port`；最多 8 个节点，拒绝重复、空值和不合法端口。按 `username` 唯一选择账号，保留密码原值；指定 `paas_name` 时按准确服务名选取，未指定时要求恰好一个含 `IPS` 且匹配该账号的服务。不会直接取 `paasconfig[0]`。
+1. 启动时有界读取 Redis 密文文件，复用现有隔离 XMS helper 调用 `dsf.crypto.xms_crypto.xms_decrypt`，继续 Base64 解码 PMS。现场已经验证实际 Redis 密文可由该 XMS 方案解密。
+2. PMS `IPS` 解析为 Sentinel 地址列表，支持 `host:port` 和 `[IPv6]:port`；最多 8 个节点，拒绝重复、空值和不合法端口。按 `username` 唯一选择账号，默认 `admin`，可显式改为 `ossdbuser` 等已有账号；空值、缺失账号或重复匹配均拒绝，不自动回退账号。保留密码原值；指定 `paas_name` 时按准确服务名选取，未指定时要求恰好一个含 `IPS` 且匹配该账号的服务。不会直接取 `paasconfig[0]`。
 3. `psf` 初始化原根/工作密钥，复用平台 PBKDF2、根物料 XOR 和 `CipherStructureV1`。本适配只处理 Redis 的 1024 字节密钥结构、AES-GCM 和末尾零填充；不把 ClickHouse 密码当作 Redis 密码。
 4. 每次建立 Sentinel 或数据连接时，用原 PSF `gen_random_hex_string(32)` 生成挑战随机数，发送 `AUTH <随机数`，解密服务端挑战并核对回传随机数，再发送 `AUTH >加密应答`。认证失败不会退回明文 AUTH。
 5. Sentinel 连接不执行 SELECT；发现数据主节点后，数据连接才执行 `SELECT 5`。`username` 用于 PMS 账号选择，不作为公司 AUTH 的额外参数。
 6. 数据客户端、Sentinel 客户端及各自连接池在退出时关闭；断连或旧主节点 READONLY 后，由下一轮重新发现主节点并重新认证。隐式命令重试为 0，不自动重发结果不明的队列命令。
+
+现场 `admin` 凭据已通过 Sentinel 和数据节点认证，但数据节点 `ACL WHOAMI` 返回 `default`。`username` 是 PMS 凭据选择，不等于服务端 ACL 身份；不因为 WHOAMI 的返回值改写配置或推断所有管理权限。正常消费无需执行 WHOAMI，不新增这条命令的权限要求。
 
 参考代码处理 `ERR >` 后又切掉首字符，可能损坏密文。当前实现根据 redis-py 的解析行为，接受 `>hex` 或 `ERR >hex`，只去掉一次完整前缀，并检查随机数和应答结构；AUTH 前不发送健康检查 PING。这里使用每连接回调，没有全局替换 redis-py 方法、导入即连接、全局单例或后台清理进程。
 
@@ -128,13 +131,78 @@ PMS 明文只在内存及受控 helper 管道中传递；应用异常使用固�
 
 Sentinel 模式将配置身份以及解密得到的 Sentinel 地址集合、组名、数据库和账号绑定到账本。密码轮换和地址排序变化不改变身份；正常主节点切换也不改变身份。PMS 变成另一套 Sentinel 地址时启动拒绝继续，避免拿旧的 ready 事实消费另一条数据源。已初始化的直连账本不能直接通过切换 `mode` 复用；需停机核验后做明确的状态迁移，不能删除账本绕过。
 
+默认 `admin` 面向新部署；已经用 `ossdbuser` 初始化账本的部署，升级时继续显式保留 `username: ossdbuser` 及原密码路径。更改账号或密码文件路径会触发绑定检查，不能通过重新初始化或删除账本绕过。配置账号后重启生效，不支持运行中切换身份。
+
 原有 `standalone` / 原生 `cluster` 直连仍保留，使用 `host`、`port`、`password_env` 和可选 ACL `username`，不混用 Sentinel 文件参数。直连密码环境变量须为可直接认证的值。原生 Cluster 仍只允许数据库 0；Sentinel 的数据库 5 不受这一限制。[Redis SELECT 文档](https://redis.io/docs/latest/commands/select/)
 
 连接实现支持 redis-py 5/6，实际回环测试覆盖 5.0.8 和 6.4.0。参考接口依据：[redis-py 6.4 Sentinel 文档](https://redis.readthedocs.io/en/v6.4.0/connections.html#sentinel-client)。公司环境需已有 `dsf`、`psf`、`Crypto`，本次没有修改任何依赖清单。旧 `deploy/deployment.patch.yaml` 的 `DWD_REDIS_HOST/PORT/PASSWORD` 段仅适用直连模式，不可整份套到本次 Sentinel 配置。
 
 ### 发布端边界
 
-本机恢复的 modelverse 工程仍使用公司 Java Redis SDK；其 `EnrichmentScheduler` 直接调用下游聚合，未找到附件所述 `RedisDwdReadyNotifier` 实现。新增 Python 连接支持不代表发布端已经部署就绪消息，也不代表公司连接联调完成。Sentinel/PSM 模式按最新 Python 参考实现，生产端是否使用同一 Sentinel 主节点组、DB 5 和独占 List，仍需在公司验收。
+本机恢复的 modelverse 工程仍使用公司 Java Redis SDK；其 `EnrichmentScheduler` 直接调用下游聚合，未找到附件所述 `RedisDwdReadyNotifier` 实现。这是本机源码状态，不能据此断言当前集群未部署通知。用户现场已验证 Python 认证连接；检查时 DB 5 的 `modelverse:dwd:ready` 不存在，仅表示当时没有该键。生产端是否实际发布、是否使用同一 Sentinel 主节点组/DB/独占 List，以及五类齐全后的 SQL 执行，仍需主流程验收。
+
+### 容器运行条件
+
+当前容器已具备 Redis 认证连接条件：Python 3.12.10、redis-py 5.2.1、架构依赖目录中的 `dsf` / `psf` / `Crypto`、XMS 环境、两条 PSM 密钥和 Sentinel 网络均已现场成功。正式交付仍需：
+
+- 将 `its-redis-pwd-secret/password` 持久挂载，并部署包含 `data_converge.dwd_ready` 的新版业务包。先前镜像未发现该模块。
+- 由原公司依赖交付方式保留 redis-py 5/6，以及 PyYAML、APScheduler 3.11.x；用户目录临时安装成功不证明镜像重建后仍存在。本次不修改构建或依赖清单。
+- 确认 SQLite、Asia/Shanghai 时区、可写持久状态目录和唯一消费者；首次按约定边界初始化状态，已有状态继续保留。
+- 通过真实就绪消息验证 `LINDEX`、`BRPOPLPUSH`、`RPOPLPUSH`、`LREM` 权限和业务流程。此前 PING/TYPE/LLEN 成功不能代替消费验收。
+
+以下命令全部在 **data-converge 容器内**执行，不需要上传文件；只检查运行条件，不读取密码内容、不消费消息。平台环境必须先加载，`PYTHONPATH` 才能找到 SDK 和业务模块：
+
+```bash
+cd /opt/gde/python/python-3.12.10
+source ./python.env </dev/null
+
+DC_SERVICE_HOME=/opt/its/data-converge
+case "$(uname -m)" in
+  aarch64|arm64) DC_DEP="$DC_SERVICE_HOME/scripts/dependency_arm" ;;
+  x86_64|amd64) DC_DEP="$DC_SERVICE_HOME/scripts/dependency_x86" ;;
+esac
+export PYTHONPATH="$DC_SERVICE_HOME/lib/data-converge/src:$DC_SERVICE_HOME/bin/py/site-packages:$DC_DEP:$DC_DEP/gaussdb_client${PYTHONPATH:+:$PYTHONPATH}"
+export LD_LIBRARY_PATH="$DC_DEP/gaussdb_client${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PYTHONDONTWRITEBYTECODE=1
+cd "$DC_SERVICE_HOME"
+
+command -v python3
+python3 --version
+python3 -c '
+import os, sys
+from importlib.util import find_spec
+from importlib.metadata import version, PackageNotFoundError
+from pathlib import Path
+print("解释器 =", sys.executable)
+for name in ("redis", "dsf", "psf", "Crypto", "yaml", "apscheduler", "data_converge.dwd_ready"):
+    try:
+        spec = find_spec(name)
+        print("模块", name, "=", spec.origin if spec else "缺失")
+    except ModuleNotFoundError:
+        print("模块", name, "= 缺失")
+for package in ("redis", "PyYAML", "APScheduler"):
+    try:
+        print("版本", package, "=", version(package))
+    except PackageNotFoundError:
+        print("版本", package, "= 未找到安装信息")
+for value in (
+    "/opt/its/data-converge/secret/redis/password",
+    "/opt/its/secret/its-common-secret/redis_root.key",
+    "/opt/its/secret/its-common-secret/redis_shared.key",
+):
+    print("文件", value, "存在 =", Path(value).is_file(), "可读 =", os.access(value, os.R_OK))
+import sqlite3
+from zoneinfo import ZoneInfo
+with sqlite3.connect(":memory:") as db:
+    print("SQLite =", db.execute("select sqlite_version()").fetchone()[0])
+print("时区 =", ZoneInfo("Asia/Shanghai"))
+'
+
+# 新业务包部署后执行；只校验配置，不连接 Redis/ClickHouse，不创建账本。
+python3 -m data_converge.main --config "$DC_SERVICE_HOME/lib/data-converge/resources/config/app_config.yaml" --validate-only
+```
+
+若修改了 `password_file`，文件检查命令中的密码路径也要相应替换。平台 `CLICKHOUSE_URL`、`CLICKHOUSE_PORT` 沿用 Deployment 注入。`VALID` 仅说明业务配置可加载；正式运行仍需上述持久挂载、状态准备和消息联调。
 
 ## 故障恢复
 

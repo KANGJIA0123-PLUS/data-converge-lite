@@ -1,6 +1,6 @@
 # 本次交付验证记录
 
-日期：2026-10-12。环境：macOS ARM64、Python 3.12.14、redis-py 6.4.0；连接兼容性另以 5.0.8 验证。测试使用临时目录、合成凭据、本机 HTTP(S)/RESP 服务和测试 SDK，没有连接公司服务或执行生产 SQL。
+初始交付日期：2026-10-12。环境：macOS ARM64、Python 3.12.14、redis-py 6.4.0；连接兼容性另以 5.0.8 验证。测试使用临时目录、合成凭据、本机 HTTP(S)/RESP 服务和测试 SDK，没有连接公司服务或执行生产 SQL。2026-10-13 的改动和用户现场结果单列如下。
 
 本记录已按用户要求更新：核心代码采用上传的原 `build_framework` 编译并复制 `.pyc`，不构建 whl。此前独立打包方式已删除。
 
@@ -10,7 +10,21 @@
 PYTHONPATH="$PWD/Services/Service/data-converge/src" .venv/bin/python -m pytest -c /dev/null -p no:cacheprovider Services/Service/data-converge/test -q -ra --tb=short
 ```
 
-## 最终结果
+## 2026-10-13：可配置账号，默认 admin
+
+- Sentinel 未填写 `username` 时默认选择 PMS `admin` 凭据；显式填写其他账号继续按该账号选择。公司 AUTH 不传用户名，直连模式的 ACL 用户名语义不变。
+- 业务默认配置改为 `admin`，密码文件约定 `/opt/its/data-converge/secret/redis/password`。现场已确认来源是 `kube-system/its-redis-pwd-secret` 的 `password` 键；原 Deployment 尚无该挂载，文档明确区分约定路径和现有路径。
+- 将已有 Sentinel 故障切换测试接入真实配置解析、PMS 账号选择和密码文件读取；仅替换公司 XMS/PSF 边界。未配账号、显式 admin、显式 ossdbuser 均验证实际 AUTH、消费、ACK 和故障恢复。修改前省略账号的两种场景失败；增加默认值后通过。
+- 完整业务测试 **433 passed, 1 skipped**（redis-py 6.4.0，8.62 秒）；跳过项仍是缺少 redis-server 的真实服务测试，本地 RESP 回环测试均执行。
+- 使用与现场相同的 redis-py **5.2.1**，认证、Sentinel、主节点切换和 List 传输兼容回归 **159 passed, 1 skipped**（1.44 秒）。该版本只安装在本机临时目录，不修改项目依赖。
+- 默认业务配置的 `--validate-only` 返回 `VALID`、52 个任务。
+- 相对 `e03ad8a`，公司构建框架、Services/Package、依赖清单、测试配置、Deployment 和 52 个 SQL 均无变更。
+
+用户在公司容器回传的结果独立于上述本地测试：Python 3.12.10、redis-py 5.2.1、真实 dsf/psf/Crypto 及挂载密钥已完成 XMS、PSM、Sentinel 和数据节点认证，普通账号与 admin 凭据均可连接 DB 5；admin 凭据的 `ACL WHOAMI` 返回 `default`。这验证了连接与只读检查，不代表全部管理权限、正式部署或消费流程已验收。队列检查时不存在，不据此判断发布端从未发送过消息。
+
+正式运行仍需部署新业务包、持久挂载密码、保留兼容依赖，并验证消费命令权限及五类消息到 SQL 的流程。已有 ossdbuser 账本继续显式保留原账号及密码路径；本次不修改或绕过账本绑定。详见 [容器运行条件](dwd-ready.md#容器运行条件)。
+
+## 2026-10-12 初始交付结果
 
 | 验证 | 结果 |
 |---|---|
@@ -51,10 +65,10 @@ PSM 的 46 项测试使用真实 PyCryptodome AES-GCM 与按参考接口构造�
 
 ## 尚需公司环境验收
 
-1. GDE Python 与实际 ARM/x86 `dsf`、`psf`、`Crypto` 的兼容性、XMS 网络及真实 Redis PMS/PSM 格式；确认公司 SDK 自身日志不输出密钥。
+1. 当前 ARM 容器的 GDE Python、`dsf`、`psf`、`Crypto`、XMS 及 Redis PMS/PSM 格式已有用户现场连接证据；正式镜像、其他架构、SDK 日志和主流程仍需验收。
 2. ClickHouse 实际 HTTP(S) 端口、CA、账号权限、表引擎和字段合同，以及 52 个 SQL 的业务结果。
-3. 确认 `gde-adapter-certfiles` 中实际 Redis 密文键名，替换 `password_file` 占位；核验参考 Sentinel 主节点组 `redis-cluster`、DB 5、TLS、命令权限与生产者发布开关。两条根/工作密钥路径已经 Deployment 确认。
+3. 持久挂载 `kube-system/its-redis-pwd-secret` 的 `password` 键并与 `password_file` 一致。Sentinel 主节点组 `redis-cluster`、DB 5、非 TLS 连接已验证；消费命令权限和生产者发布开关仍需验收。根/工作密钥沿用已确认挂载。
 4. 确认 data-converge 独占消息 List，停用会重复写入同一目标的旧链路，核验缺失信号的补发流程。
 5. 公司完整 BuildTool/Maven/镜像构建链，构建与运行 Python 小版本一致；UID/目录权限、持久存储、固定节点、Recreate、探针、SIGTERM 宽限和停机迁移账本。
 
-本次未部署公司集群，未声称完成生产切换、真实 Redis 联调或全部统计口径修正。详见 [DWD 消费](dwd-ready.md) 与 [已知问题](known-issues.md)。
+本地开发未部署公司集群；用户已经完成现场 Redis 认证连接检查，尚未完成生产切换、端到端消费或全部统计口径修正。详见 [DWD 消费](dwd-ready.md) 与 [已知问题](known-issues.md)。

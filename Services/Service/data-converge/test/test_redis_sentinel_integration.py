@@ -5,6 +5,8 @@ post-replication state available on a promoted master; this is not a replication
 test and does not require redis-server or company credentials.
 """
 
+import base64
+import json
 import socket
 import sys
 import threading
@@ -155,10 +157,16 @@ class RespPeer:
 
 
 @pytest.mark.parametrize("failure", ["readonly", "disconnect"])
-def test_real_sentinel_recovers_processing_after_master_failover(monkeypatch, failure):
+@pytest.mark.parametrize("account_config,selected_user", [
+    ({}, "admin"), ({"username": "admin"}, "admin"), ({"username": "ossdbuser"}, "ossdbuser"),
+])
+def test_real_sentinel_recovers_processing_after_master_failover(
+        tmp_path, monkeypatch, failure, account_config, selected_user):
+    from data_converge.dwd_ready.config import load_ready_config
+    from data_converge.dwd_ready import redis_credentials as credentials_module
     from data_converge.dwd_ready import redis_source as source_module
 
-    # Replace only private SDK/credential boundaries; redis-py remains real.
+    # Replace only private SDK boundaries; config, PMS selection and redis-py remain real.
     nonce_module = types.ModuleType("psf.security_api.random_security")
     nonce_calls = []
 
@@ -205,13 +213,21 @@ def test_real_sentinel_recovers_processing_after_master_failover(monkeypatch, fa
         new_master = stack.enter_context(RespPeer("data", lambda cmd: data_command(cmd, old_master=False)))
         sentinel = stack.enter_context(RespPeer("sentinel", sentinel_command))
         state["master"] = old_master.address
-        credentials = types.SimpleNamespace(sentinels=(sentinel.address,), password=PASSWORD)
-        monkeypatch.setattr(source_module, "load_sentinel_credentials", lambda config: credentials)
-        config = {"enabled": True, "queue_key": QUEUE.decode(), "processing_key": PROCESSING.decode(),
+        host, port = sentinel.address
+        document = base64.b64encode(json.dumps({"paasconfig": [{
+            "name": "synthetic-redis", "IPS": f"{host}:{port}", "info": [
+                {"user": name, "password": PASSWORD if name == selected_user else "wrong-account-password"}
+                for name in ("ossdbuser", "admin")
+            ],
+        }]}).encode()).decode()
+        (tmp_path / "synthetic-pwd").write_bytes(b"synthetic-ciphertext")
+        monkeypatch.setattr(credentials_module, "run_decryptor", lambda *_: document)
+        raw = {"enabled": True, "queue_key": QUEUE.decode(),
             "block_seconds": 1, "redis": {"mode": "sentinel", "db": 5, "service_name": "redis-cluster",
-                "username": "ossdbuser", "password_file": "synthetic-pwd", "paas_name": None,
+                **account_config, "password_file": "synthetic-pwd", "paas_name": None,
                 "root_key_file": "root.key", "work_key_file": "shared.key", "ssl": False,
                 "ssl_verify": True, "socket_timeout": 2, "socket_connect_timeout": 2, "kms_timeout_seconds": 30}}
+        config = load_ready_config({"dwd_ready": raw}, tmp_path)
         source = source_module.create_source(config)
         try:
             assert source.receive(block=True) == MESSAGE

@@ -27,10 +27,10 @@ dwd_ready:
     mode: sentinel
     service_name: redis-cluster  # Sentinel 主节点组名，不是原生 Redis Cluster。
     db: 5
-    username: ossdbuser     # PMS 内选取账号；不是 AUTH 的用户名参数。
-    # Deployment 将 gde-adapter-certfiles 挂到此目录，但未列出密码键名。
-    # 将占位文件名替换为该 Secret 中实际的 Redis 密文文件名；不猜测现网路径。
-    password_file: /opt/its/data-converge/secret/REPLACE_WITH_REDIS_PASSWORD_KEY
+    username: admin        # 可改为其他 PMS 账号；省略时默认 admin，不作为 AUTH 用户名。
+    # 约定挂载路径：需将 kube-system/its-redis-pwd-secret 的 password 键挂到此文件。
+    # 原 Deployment 尚无该挂载；gde-adapter-certfiles 只有证书，不能代替 Redis 密码。
+    password_file: /opt/its/data-converge/secret/redis/password
     # 若 PMS 内有多个 Redis 服务，填写其准确 name；未填写时要求唯一匹配账号。
     paas_name: null
     kms_timeout_seconds: 30
