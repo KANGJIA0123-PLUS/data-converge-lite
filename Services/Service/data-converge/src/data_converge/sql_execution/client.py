@@ -25,19 +25,15 @@ from typing import Any
 
 import yaml
 
+from data_converge.errors import TaskExecutionError
+
 from .credentials import load_password, validate_provider
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
-class SQLExecutionError(RuntimeError):
+class SQLExecutionError(TaskExecutionError):
     """Safe diagnostic plus the evidence needed for retry/recovery decisions."""
-
-    def __init__(self, message, *, retryable=False, outcome_unknown=False, query_id=None):
-        super().__init__(message)
-        self.retryable = retryable
-        self.outcome_unknown = outcome_unknown
-        self.query_id = query_id
 
 
 def _expand(value):

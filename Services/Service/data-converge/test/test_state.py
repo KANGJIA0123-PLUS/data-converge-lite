@@ -28,6 +28,56 @@ def open_store(path, create=True):
     return store
 
 
+@pytest.mark.parametrize("status, attempts, retryable, delay, expected", [
+    (TaskStatus.PENDING, 3, False, 30, True),
+    (TaskStatus.BLOCKED, 0, False, 30, True),
+    (TaskStatus.BLOCKED, 1, True, 0, True),
+    (TaskStatus.BLOCKED, 1, True, 1, False),
+    (TaskStatus.BLOCKED, 1, False, None, False),
+    (TaskStatus.BLOCKED, 3, True, None, False),
+    (TaskStatus.FAILED, 1, True, None, True),
+    (TaskStatus.FAILED, 1, True, -1, True),
+    (TaskStatus.FAILED, 1, True, 0, True),
+    (TaskStatus.FAILED, 1, True, 1, False),
+    (TaskStatus.FAILED, 1, False, None, False),
+    (TaskStatus.FAILED, 3, True, None, False),
+    (TaskStatus.RUNNING, 1, True, None, False),
+    (TaskStatus.SUCCESS, 1, True, None, False),
+    (TaskStatus.UNKNOWN, 1, True, None, False),
+])
+def test_memory_retry_eligibility_agrees_with_durable_claim(
+        tmp_path, status, attempts, retryable, delay, expected):
+    builder, dag = graph()
+    instance = builder.create_instance(dag, "root", NOW)
+    deadline = None if delay is None else NOW + timedelta(seconds=delay)
+    instance.status = status
+    executor = DAGExecutor(dag, lambda i: None)
+    executor._memory[instance.instance_id] = dict(
+        status=status, attempts=attempts, retryable=retryable, next_retry_at=deadline)
+    assert executor._eligible(instance, NOW) is expected
+
+    store = open_store(tmp_path / "state.db")
+    try:
+        store.enqueue_and_advance([instance], {})
+        conn = store._connection(write=True)
+        with conn:
+            conn.execute("""UPDATE task_instances SET status=?, attempts=?, retryable=?,
+                next_retry_at=? WHERE instance_id=?""",
+                (status.value, attempts, int(retryable),
+                 deadline.isoformat() if deadline else None, instance.instance_id))
+        before = store.get_instance(instance.instance_id)
+        assert store.claim(instance.instance_id, now=NOW, max_attempts=3) is expected
+        after = store.get_instance(instance.instance_id)
+        if expected:
+            assert after["status"] == "RUNNING"
+            assert after["attempts"] == attempts + 1
+            assert not store.claim(instance.instance_id, now=NOW, max_attempts=3)
+        else:
+            assert after == before
+    finally:
+        store.close()
+
+
 def test_missing_state_requires_explicit_initialization(tmp_path):
     from data_converge.state import StateStore
     with pytest.raises(FileNotFoundError, match="init-state"):

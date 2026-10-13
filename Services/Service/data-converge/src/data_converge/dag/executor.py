@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Mapping, Optional
 
+from data_converge.errors import TaskExecutionError
+
 from .models import DAG, TaskInstance, TaskStatus
+from .retry import can_start_attempt
 
 if TYPE_CHECKING:
     from data_converge.state import StateStore
@@ -124,19 +127,14 @@ class DAGExecutor:
             instance.status = self.known_statuses[instance.instance_id]
 
     def _eligible(self, instance: TaskInstance, now: datetime) -> bool:
-        if instance.status == TaskStatus.PENDING:
-            return True
-        if instance.status not in (TaskStatus.BLOCKED, TaskStatus.FAILED):
-            return False
-        record = self.state_store.get_instance(instance.instance_id) if self.state_store else self._memory.get(instance.instance_id)
-        if instance.status == TaskStatus.BLOCKED and (not record or record.get("attempts", 0) == 0):
-            return True
-        if not record or not record.get("retryable") or record["attempts"] >= self.max_attempts:
-            return False
-        deadline = record.get("next_retry_at")
-        if isinstance(deadline, str):
-            deadline = datetime.fromisoformat(deadline)
-        return deadline is None or deadline <= now
+        record = None
+        if instance.status in (TaskStatus.BLOCKED, TaskStatus.FAILED):
+            record = self.state_store.get_instance(instance.instance_id) if self.state_store else self._memory.get(instance.instance_id)
+        return can_start_attempt(
+            instance.status, record.get("attempts", 0) if record else 0,
+            record.get("retryable", False) if record else False,
+            record.get("next_retry_at") if record else None,
+            now=now, max_attempts=self.max_attempts)
 
     def _claim(self, instance: TaskInstance, now: datetime) -> bool:
         if self.state_store:
@@ -179,8 +177,7 @@ class DAGExecutor:
 
     @staticmethod
     def _classify_error(exc: Exception) -> tuple[TaskStatus, bool, str]:
-        from data_converge.sql_execution.client import SQLExecutionError
-        if isinstance(exc, SQLExecutionError):
+        if isinstance(exc, TaskExecutionError):
             if exc.outcome_unknown:
                 return TaskStatus.UNKNOWN, False, str(exc)
             return TaskStatus.FAILED, exc.retryable, str(exc)

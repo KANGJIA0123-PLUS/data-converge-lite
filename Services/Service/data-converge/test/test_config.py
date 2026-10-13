@@ -6,6 +6,18 @@ from pathlib import Path
 from data_converge.config import ConfigLoader, CronValidator
 
 
+@pytest.mark.parametrize('policy', [
+    {'max_attempts': True},
+    {'poll_interval_seconds': 0},
+    {'default_timeout_seconds': 301},
+])
+def test_application_rejects_invalid_scheduling_policy(policy):
+    from data_converge.config.application import StartupError, settings
+
+    with pytest.raises(StartupError):
+        settings({'scheduler': policy})
+
+
 class TestCronValidator:
     """Cron表达式验证器测试"""
 

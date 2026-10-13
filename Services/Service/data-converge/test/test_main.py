@@ -6,6 +6,9 @@ import pytest
 import yaml
 
 from data_converge import main as entry
+from data_converge import application as operations
+from data_converge import runtime
+from data_converge.health import Heartbeat
 
 
 @pytest.fixture
@@ -31,10 +34,21 @@ def app(tmp_path):
 def test_offline_validation_does_not_decrypt_or_create_state(app, monkeypatch, capsys):
     def forbidden(*args, **kwargs):
         pytest.fail("offline validation must not construct SQL runner")
-    monkeypatch.setattr(entry, "SQLTaskRunner", forbidden)
+    monkeypatch.setattr(runtime, "SQLTaskRunner", forbidden)
     assert entry.main(["--config", str(app), "--validate-only"]) == 0
     assert not (app.parent / "state").exists()
     assert json.loads(capsys.readouterr().out)["tasks"] == 1
+
+
+def test_application_returns_results_without_writing_cli_output(app, capsys):
+    from data_converge.application import Application
+
+    application = Application(app)
+    result = application.validate()
+    assert result.exit_code == 0
+    assert result.payload == {'status': 'VALID', 'tasks': 1}
+    assert capsys.readouterr().out == ''
+    assert not (app.parent / 'state').exists()
 
 
 def test_state_init_is_explicit_and_cannot_reset_coverage(app, capsys):
@@ -78,7 +92,7 @@ def test_health_rejects_missing_dead_or_stale_heartbeat(app):
 def test_heartbeat_tracks_readiness_and_removes_on_shutdown(app):
     state = app.parent / "state"
     state.mkdir()
-    with entry.Heartbeat(state, interval=0.02) as heartbeat:
+    with Heartbeat(state, interval=0.02) as heartbeat:
         assert entry.main(["--config", str(app), "--healthcheck", "liveness"]) == 0
         assert entry.main(["--config", str(app), "--healthcheck", "readiness"]) == 1
         heartbeat.set_ready(True)
@@ -88,8 +102,8 @@ def test_heartbeat_tracks_readiness_and_removes_on_shutdown(app):
 
 def test_next_boundary_preserves_an_already_aligned_time():
     value = datetime.fromisoformat("2026-10-12T10:00:00+08:00")
-    assert entry.next_boundary(value) == value
-    assert entry.next_boundary(value.replace(minute=3)).minute == 5
+    assert operations.next_boundary(value) == value
+    assert operations.next_boundary(value.replace(minute=3)).minute == 5
 
 
 @pytest.fixture
@@ -152,14 +166,14 @@ def test_run_uses_one_configuration_snapshot(local_http_app, monkeypatch):
     app, seen = local_http_app
     base = ['--config', str(app)]
     assert entry.main(base + ['--init-state', '--start-time', '2026-10-12T10:00:00+08:00']) == 0
-    read_config = entry.load_app_config
+    read_config = operations.load_app_config
 
     def replace_file_after_read(path):
         config = read_config(path)
         app.write_text('replacement: not-a-valid-application-config\n')
         return config
 
-    monkeypatch.setattr(entry, 'load_app_config', replace_file_after_read)
+    monkeypatch.setattr(operations, 'load_app_config', replace_file_after_read)
     assert entry.main(base + ['--run-once', '--now', '2026-10-12T10:06:00+08:00']) == 0
     assert len(seen) == 1
 
@@ -180,7 +194,7 @@ def test_ready_validation_and_init_are_offline(app, monkeypatch):
     def forbidden(*_, **__):
         pytest.fail('offline commands must not connect Redis or read its password')
 
-    monkeypatch.setattr(entry, 'create_source', forbidden)
+    monkeypatch.setattr(runtime, 'create_source', forbidden)
     assert entry.main(['--config', str(app), '--validate-only']) == 0
     assert entry.main(['--config', str(app), '--init-state']) == 0
 
@@ -199,7 +213,7 @@ def test_ready_cli_event_cron_and_manual_share_gate_and_success_ledger(local_htt
     app, seen = local_http_app
     enable_ready(app)
     source = Source(signals()[:4])
-    monkeypatch.setattr(entry, 'create_source', lambda _: source)
+    monkeypatch.setattr(runtime, 'create_source', lambda _: source)
     base = ['--config', str(app)]
     assert entry.main(base + ['--init-state', '--start-time', '2026-10-12T10:00:00+08:00']) == 0
     run = base + ['--run-once', '--now', '2026-10-12T10:06:00+08:00']
@@ -217,6 +231,28 @@ def test_ready_cli_event_cron_and_manual_share_gate_and_success_ledger(local_htt
     status = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert len(status['dwd_windows'][0]['types']) == 5
     assert source.closed
+
+
+def test_partial_runtime_startup_releases_source_heartbeat_and_signal_handlers(local_http_app, monkeypatch):
+    import signal
+    from .test_dwd_ready_coordinator import Source
+
+    app, _ = local_http_app
+    enable_ready(app)
+    source = Source([])
+    handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
+    monkeypatch.setattr(runtime, 'create_source', lambda _: source)
+
+    def fail_coordinator(*args, **kwargs):
+        raise RuntimeError('coordinator startup failed')
+
+    monkeypatch.setattr(runtime, 'ReadyCoordinator', fail_coordinator)
+    base = ['--config', str(app)]
+    assert entry.main(base + ['--init-state']) == 0
+    assert entry.main(base + ['--run-once']) == 1
+    assert source.closed
+    assert not (app.parent / 'state' / 'heartbeat.json').exists()
+    assert all(signal.getsignal(signum) is handler for signum, handler in handlers.items())
 
 
 def test_ready_mode_cannot_be_disabled_to_bypass_existing_state(app):

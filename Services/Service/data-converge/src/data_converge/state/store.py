@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from data_converge.dag.models import TaskInstance, TaskStatus
+from data_converge.dag.retry import can_start_attempt
 
 
 def _stamp(value: datetime) -> str:
@@ -210,12 +211,9 @@ class StateStore:
             if not row:
                 raise KeyError(instance_id)
             status = TaskStatus(row["status"])
-            if status == TaskStatus.FAILED or (status == TaskStatus.BLOCKED and row["attempts"] > 0):
-                if not row["retryable"] or row["attempts"] >= max_attempts:
-                    return False
-                if row["next_retry_at"] and datetime.fromisoformat(row["next_retry_at"]) > now:
-                    return False
-            elif status not in (TaskStatus.PENDING, TaskStatus.BLOCKED):
+            if not can_start_attempt(status, row["attempts"], row["retryable"],
+                                     row["next_retry_at"] or None, now=now,
+                                     max_attempts=max_attempts):
                 return False
             updated = conn.execute("""UPDATE task_instances SET status='RUNNING',
                 attempts=attempts+1, started_at=?, finished_at=NULL, error=NULL,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,12 +13,12 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from data_converge.dag import DAG, DAGBuilder, DAGExecutor
+from data_converge.dag import DAG, DAGBuilder
 from data_converge.dwd_ready.config import load_ready_config
-from data_converge.scheduler import TaskScheduler
 from data_converge.sql_execution.client import connection_origin, validate_config
 
 from .loader import ConfigLoader
+from .cron import compile_cron_groups
 
 RESOURCES = Path(__file__).resolve().parents[3] / 'resources'
 DEFAULT_APP_CONFIG_PATH = RESOURCES / 'config/app_config.yaml'
@@ -29,11 +29,36 @@ class StartupError(ValueError):
 
 
 @dataclass(frozen=True)
+class SchedulerSettings:
+    """Validated scheduling policy; YAML dictionaries stop at this boundary."""
+
+    timezone: str = 'Asia/Shanghai'
+    default_timeout_seconds: int = 300
+    max_concurrent_tasks: int = 4
+    poll_interval_seconds: int = 5
+    catchup_limit: int = 100
+    max_attempts: int = 3
+    retry_delay_seconds: int = 30
+
+    def __post_init__(self) -> None:
+        if self.timezone != 'Asia/Shanghai':
+            raise StartupError('TIMEZONE_MUST_BE_ASIA_SHANGHAI')
+        for option in fields(self):
+            if option.name == 'timezone':
+                continue
+            value = getattr(self, option.name)
+            if type(value) is not int or value <= 0:
+                raise StartupError('SCHEDULER_SETTING_INVALID')
+        if self.default_timeout_seconds > 300:
+            raise StartupError('SQL_TIMEOUT_MUST_NOT_EXCEED_300_SECONDS')
+
+
+@dataclass(frozen=True)
 class ApplicationDefinition:
     """Validated inputs shared by deployment binding and runtime construction."""
 
     config: dict[str, Any] = field(repr=False)
-    options: dict[str, Any]
+    options: SchedulerSettings
     builder: DAGBuilder
     dag: DAG
     sql_dir: Path
@@ -73,20 +98,14 @@ def asset_path(value: str | None, fallback: str, config_path: Path) -> Path:
     return resolve_path(value, Path(config_path).parent)
 
 
-def settings(config: dict[str, Any]) -> dict[str, Any]:
-    values = {'timezone': 'Asia/Shanghai', 'default_timeout_seconds': 300,
-              'max_concurrent_tasks': 4, 'poll_interval_seconds': 5,
-              'catchup_limit': 100, 'max_attempts': 3, 'retry_delay_seconds': 30}
-    values.update(config.get('scheduler', {}))
-    if values['timezone'] != 'Asia/Shanghai':
-        raise StartupError('TIMEZONE_MUST_BE_ASIA_SHANGHAI')
-    for key in ('default_timeout_seconds', 'max_concurrent_tasks', 'poll_interval_seconds',
-                'catchup_limit', 'max_attempts', 'retry_delay_seconds'):
-        if type(values[key]) is not int or values[key] <= 0:
-            raise StartupError('SCHEDULER_SETTING_INVALID')
-    if values['default_timeout_seconds'] > 300:
-        raise StartupError('SQL_TIMEOUT_MUST_NOT_EXCEED_300_SECONDS')
-    return values
+def settings(config: dict[str, Any]) -> SchedulerSettings:
+    values = config.get('scheduler', {})
+    if not isinstance(values, dict):
+        raise StartupError('SCHEDULER_SETTING_INVALID')
+    return SchedulerSettings(**{
+        option.name: values[option.name]
+        for option in fields(SchedulerSettings) if option.name in values
+    })
 
 
 def load_definition(config_path: Path, *, raw_config: dict[str, Any] | None = None) -> ApplicationDefinition:
@@ -104,12 +123,10 @@ def load_definition(config_path: Path, *, raw_config: dict[str, Any] | None = No
     if config['dwd_ready']['enabled'] and any(
             not task.depends_on and task.aggregation_interval != 'PT5M' for task in dag.tasks.values()):
         raise StartupError('DWD_READY_REQUIRES_FIVE_MINUTE_ROOT_TASKS')
-    anchor = datetime(2000, 3, 1, tzinfo=ZoneInfo(options['timezone']))
+    anchor = datetime(2000, 3, 1, tzinfo=ZoneInfo(options.timezone))
     for taskname in dag.topological_order:
         builder.create_instance(dag, taskname, anchor)
-    preview = TaskScheduler(dag, builder, DAGExecutor(dag, runner=lambda _: None),
-                            timezone=options['timezone'])
-    preview.register_jobs()
+    compile_cron_groups(dag, options.timezone)
     return ApplicationDefinition(config, options, builder, dag, sql_dir)
 
 

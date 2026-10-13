@@ -88,6 +88,19 @@ def test_registers_one_job_for_each_cron_group():
         assert isinstance(job.trigger, CronTrigger)
 
 
+def test_register_jobs_is_idempotent_and_returns_a_snapshot():
+    scheduler = build_scheduler(lambda instance: None)
+    scheduler.register_jobs()
+    scheduler.register_jobs()
+
+    jobs = scheduler.get_jobs()
+    assert [job.id for job in jobs] == ["cron_group_001", "cron_group_002"]
+    jobs.clear()
+    assert len(scheduler.get_jobs()) == 2
+    with pytest.raises(TypeError):
+        scheduler.get_jobs()[0].kwargs["tasknames"] = ("different_task",)
+
+
 def test_same_cron_tasks_execute_as_one_dependency_group():
     """相同 Cron 的上下游应进入同一批次按依赖执行。"""
     rules = make_rules()
@@ -279,7 +292,7 @@ def test_hour_task_is_blocked_when_upstream_has_not_succeeded():
     assert executed_instances == []
 
 
-def test_upstream_sql_failure_blocks_hour_task():
+def test_upstream_sql_failure_blocks_hour_task(caplog):
     """上游执行失败后，同批次小时任务应被阻塞。"""
     def failing_runner(instance):
         if instance.taskname == "task_5min":
@@ -313,6 +326,7 @@ def test_upstream_sql_failure_blocks_hour_task():
 
     assert len(parent_report.unknown) == 1
     assert parent_report.unknown[0].error == "UNEXPECTED_RUNNER_ERROR:RuntimeError"
+    assert "status=UNKNOWN" in caplog.text
 
     assert len(child_report.blocked) == 1
     assert child_report.blocked[0].status == TaskStatus.BLOCKED
@@ -354,6 +368,29 @@ def persistent_scheduler(tmp_path, calls, coverage_start, *, create=True, catchu
     scheduler = TaskScheduler(dag, builder, executor, state_store=store,
                               start_time=coverage_start, catchup_limit=catchup_limit)
     return scheduler, store
+
+
+def test_plan_due_preserves_cursor_snapshot_without_persisting_or_executing(tmp_path):
+    coverage = datetime(2026, 10, 12, 10, 3, tzinfo=SHANGHAI)
+    calls = []
+    scheduler, store = persistent_scheduler(tmp_path, calls, coverage, catchup_limit=2)
+    scheduler.register_jobs()
+    cursors = {"task_5min": None, "task_hour": None}
+    try:
+        plan = scheduler._plan_due(cursors, coverage + timedelta(minutes=18))
+        assert [i.instance_id for i in plan.instances] == [
+            "task_5min@2026-10-12T10:10:00+08:00",
+        ]
+        assert plan.next_cursors == {
+            "task_5min": datetime(2026, 10, 12, 10, 16, tzinfo=SHANGHAI),
+            "task_hour": datetime(2026, 10, 12, 11, 3, tzinfo=SHANGHAI),
+        }
+        assert cursors == {"task_5min": None, "task_hour": None}
+        assert store.get_cursor("task_5min") is None
+        assert store.status_counts() == {}
+        assert calls == []
+    finally:
+        store.close()
 
 
 def test_missed_crons_recovered_from_durable_cursor_without_replaying_success(tmp_path):

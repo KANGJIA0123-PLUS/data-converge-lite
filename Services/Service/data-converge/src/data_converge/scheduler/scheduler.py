@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Callable, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
-from apscheduler.executors.pool import ThreadPoolExecutor
-from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from data_converge.config.cron import CronGroup, compile_cron_groups
 from data_converge.dag import (
     DAG,
     DAGBuilder,
@@ -24,7 +23,14 @@ from data_converge.dag import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from data_converge.dag import TaskInstance
     from data_converge.state import StateStore
+
+
+@dataclass(frozen=True)
+class SchedulePlan:
+    instances: tuple[TaskInstance, ...]
+    next_cursors: Mapping[str, datetime]
 
 
 class TaskScheduler:
@@ -65,85 +71,28 @@ class TaskScheduler:
         self.ready_poller = ready_poller
         self._stop_requested = False
         self._triggers: dict[str, CronTrigger] = {}
-
-        # Retain cron registration/introspection for the existing CLI. Production
-        # dispatch uses the persistent cursor loop, never APScheduler misfires.
-        self._scheduler = BlockingScheduler(
-            timezone=self.timezone,
-            executors={
-                "default": ThreadPoolExecutor(max_workers=1),
-            },
-        )
-
+        self._jobs: tuple[CronGroup, ...] = ()
         self._registered = False
 
     def register_jobs(self) -> None:
-        """Group tasks by identical Cron expressions and register jobs."""
-        cron_groups = self._build_cron_groups()
-
-        for index, (cron_expression, tasknames) in enumerate(
-            cron_groups.items(),
-            start=1,
-        ):
-            try:
-                trigger = CronTrigger.from_crontab(
-                    cron_expression,
-                    timezone=self.timezone,
-                )
-            except ValueError as exc:
-                raise ValueError(
-                    "任务组的 Cron 表达式无效："
-                    f"cron={cron_expression}, "
-                    f"tasks={tasknames}"
-                ) from exc
-
-            job_id = f"cron_group_{index:03d}"
-            for taskname in tasknames:
-                self._triggers[taskname] = trigger
-
-            self._scheduler.add_job(
-                func=self.run_group,
-                trigger=trigger,
-                kwargs={
-                    "tasknames": tuple(tasknames),
-                },
-                id=job_id,
-                name=(
-                    f"Cron任务组[{cron_expression}]"
-                ),
-                replace_existing=True,
-                max_instances=1,
-                coalesce=True,
-                misfire_grace_time=self.misfire_grace_time,
-            )
-
+        """Compile cron metadata for inspection and durable cursor planning."""
+        jobs = compile_cron_groups(self.dag, self.timezone)
+        self._triggers = {
+            taskname: job.trigger
+            for job in jobs
+            for taskname in job.tasknames
+        }
+        self._jobs = jobs
+        for job in jobs:
             logger.info(
-                "已注册Cron任务组：job_id=%s, cron=%s, "
+                "已注册Cron任务组：job_id=%s, name=%s, "
                 "task_count=%s, tasks=%s",
-                job_id,
-                cron_expression,
-                len(tasknames),
-                tasknames,
+                job.id,
+                job.name,
+                len(job.tasknames),
+                job.tasknames,
             )
-
         self._registered = True
-
-    def _build_cron_groups(
-        self,
-    ) -> OrderedDict[str, list[str]]:
-        """Group task names by their exact Cron expression."""
-        groups: OrderedDict[str, list[str]] = OrderedDict()
-
-        # 使用拓扑顺序，保证组内任务顺序稳定。
-        for taskname in self.dag.topological_order:
-            task = self.dag.get_task(taskname)
-
-            groups.setdefault(
-                task.cron,
-                [],
-            ).append(taskname)
-
-        return groups
 
     def run_group(
         self,
@@ -181,22 +130,14 @@ class TaskScheduler:
 
         logger.info(
             "Cron任务组执行结束：scheduled_time=%s, "
-            "success=%s, failed=%s, blocked=%s",
+            "success=%s, failed=%s, blocked=%s, unknown=%s",
             normalized_time,
             [i.taskname for i in report.succeeded],
             [i.taskname for i in report.failed],
             [i.taskname for i in report.blocked],
+            [i.taskname for i in report.unknown],
         )
-
-        for instance in report.failed:
-            logger.error(
-                "任务执行失败：taskname=%s, "
-                "instance_id=%s, error=%s",
-                instance.taskname,
-                instance.instance_id,
-                instance.error,
-            )
-
+        self._log_execution_errors(report)
         for instance in report.blocked:
             logger.warning(
                 "任务执行阻塞：taskname=%s, "
@@ -249,7 +190,7 @@ class TaskScheduler:
             "DAG定时调度器启动：timezone=%s, "
             "cron_group_count=%s",
             self.timezone.key,
-            len(self._scheduler.get_jobs()),
+            len(self._jobs),
         )
 
         while not self._stop_requested:
@@ -268,11 +209,22 @@ class TaskScheduler:
             self.register_jobs()
         now = self._normalize_time(now)
         now = self._poll_ready(now)
+        cursors = {
+            taskname: self.state_store.get_cursor(taskname)
+            for taskname in self.dag.topological_order
+        }
+        plan = self._plan_due(cursors, now)
+        self.state_store.enqueue_and_advance(plan.instances, plan.next_cursors)
+        return self.run_pending(now=now)
+
+    def _plan_due(self, cursors: Mapping[str, datetime | None], now: datetime) -> SchedulePlan:
+        """Calculate complete due windows without changing state or executing work."""
+        assert self.start_time is not None
         instances = []
-        cursors = {}
+        next_cursors = {}
         for taskname in self.dag.topological_order:
             trigger = self._triggers[taskname]
-            cursor = self.state_store.get_cursor(taskname)
+            cursor = cursors.get(taskname)
             if cursor is None:
                 cursor = trigger.get_next_fire_time(None, self.start_time)
             count = 0
@@ -285,9 +237,8 @@ class TaskScheduler:
                 count += 1
                 cursor = trigger.get_next_fire_time(cursor, cursor)
             if cursor is not None:
-                cursors[taskname] = cursor
-        self.state_store.enqueue_and_advance(instances, cursors)
-        return self.run_pending(now=now)
+                next_cursors[taskname] = cursor
+        return SchedulePlan(tuple(instances), next_cursors)
 
     def _poll_ready(self, now: datetime) -> datetime:
         if self.ready_poller is not None and not self._stop_requested:
@@ -338,10 +289,14 @@ class TaskScheduler:
         # cannot monopolize a LIMIT query and starve unrelated ready windows.
         report = self.dag_executor.execute(instances, now=now, max_executions=self.catchup_limit,
                                            should_stop=lambda: self._stop_requested)
+        self._log_execution_errors(report)
+        return report
+
+    @staticmethod
+    def _log_execution_errors(report: ExecutionReport) -> None:
         for instance in report.failed + report.unknown:
             logger.error("任务执行结果：instance=%s status=%s query_id=%s error=%s",
                          instance.instance_id, instance.status.value, instance.query_id, instance.error)
-        return report
 
     @property
     def stop_requested(self) -> bool:
@@ -352,5 +307,5 @@ class TaskScheduler:
         """Signal-safe request: no locks, logging or I/O in this call."""
         self._stop_requested = True
 
-    def get_jobs(self):
-        return self._scheduler.get_jobs()
+    def get_jobs(self) -> list[CronGroup]:
+        return list(self._jobs)

@@ -1,5 +1,9 @@
 from datetime import datetime, timedelta
+import subprocess
+import sys
 import unittest
+
+import pytest
 
 from data_converge.dag import DAGBuilder, DAGExecutor, TaskStatus
 
@@ -109,3 +113,44 @@ def test_successful_instance_is_not_executed_twice_in_memory():
     for _ in range(2):
         executor.execute([builder.create_instance(dag, "five_min", datetime(2026, 9, 8, 10, 1))])
     assert calls == ["five_min@2026-09-08T10:00:00"]
+
+
+@pytest.mark.parametrize("retryable, unknown, status", [
+    (False, False, TaskStatus.FAILED),
+    (True, False, TaskStatus.FAILED),
+    (False, True, TaskStatus.UNKNOWN),
+    (True, True, TaskStatus.UNKNOWN),
+])
+def test_runner_error_contract_preserves_sql_compatibility(retryable, unknown, status):
+    from data_converge.errors import TaskExecutionError
+    from data_converge.sql_execution import SQLExecutionError
+    from data_converge.sql_execution.client import SQLExecutionError as ClientError
+
+    assert SQLExecutionError is ClientError
+    builder = DAGBuilder(FakeConfigLoader())
+    dag = builder.build()
+    for error_type in (TaskExecutionError, SQLExecutionError):
+        error = error_type("SAFE_FAILURE", retryable=retryable,
+                           outcome_unknown=unknown, query_id="query-1")
+
+        def fail(instance):
+            raise error
+
+        instance = builder.create_instance(dag, "five_min", datetime(2026, 9, 8, 10, 1))
+        executor = DAGExecutor(dag, fail)
+        result = executor.execute([instance])
+        assert result.instances[instance.instance_id].status == status
+        assert instance.error == "SAFE_FAILURE"
+        assert executor._memory[instance.instance_id]["retryable"] is (retryable and not unknown)
+        assert error.query_id == "query-1"
+
+
+def test_unknown_runner_failure_does_not_load_sql_transport():
+    result = subprocess.run([sys.executable, "-c", """
+import sys
+from data_converge.dag import DAGExecutor, TaskStatus
+assert DAGExecutor._classify_error(RuntimeError('private details')) == (
+    TaskStatus.UNKNOWN, False, 'UNEXPECTED_RUNNER_ERROR:RuntimeError')
+assert 'data_converge.sql_execution.client' not in sys.modules
+"""], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
