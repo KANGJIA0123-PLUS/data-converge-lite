@@ -8,7 +8,7 @@ from collections import OrderedDict
 from datetime import timedelta
 
 from .message import DWD_TYPES, ReadyMessageError, parse_message
-from .redis_source import RedisSignalError
+from .ports import ReadinessState, ReadySignalSource, SignalSourceError
 
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class ReadyCoordinator:
     sole authority for SUCCESS, retry, UNKNOWN and duplicate suppression.
     """
 
-    def __init__(self, store, source, coverage_start, *, batch_size=100,
+    def __init__(self, store: ReadinessState, source: ReadySignalSource, coverage_start, *, batch_size=100,
                  wait_warning_seconds=60, should_stop=None):
         self.store = store
         self.source = source
@@ -42,7 +42,7 @@ class ReadyCoordinator:
                 break
             try:
                 raw = self.source.receive(block=index == 0)
-            except RedisSignalError:
+            except SignalSourceError:
                 logger.warning('DWD_REDIS_UNAVAILABLE: waiting for source readiness')
                 break
             if raw is None:
@@ -70,7 +70,7 @@ class ReadyCoordinator:
                         completed.add(start)
             try:
                 self.source.ack(raw)
-            except RedisSignalError:
+            except SignalSourceError:
                 # Committed facts are idempotent; recovery can persist them again.
                 logger.warning('DWD_REDIS_ACK_PENDING: durable signal will be replayed')
                 break

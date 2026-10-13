@@ -20,7 +20,7 @@ from data_converge.config.application import (
 )
 from data_converge.dag import ExecutionReport, TaskStatus
 from data_converge.health import healthcheck
-from data_converge.runtime import open_runtime
+from data_converge.runtime import RuntimeDependencies, open_runtime
 from data_converge.state import StateStore
 
 
@@ -73,10 +73,12 @@ def report_result(report: ExecutionReport) -> CommandResult:
 class Application:
     """Use cases share validated inputs; only execution opens remote resources."""
 
-    def __init__(self, config_path: Path, *, raw_config: dict[str, Any] | None = None):
+    def __init__(self, config_path: Path, *, raw_config: dict[str, Any] | None = None,
+                 dependencies: RuntimeDependencies | None = None):
         self.config_path = Path(config_path)
         self._raw_config = load_app_config(self.config_path) if raw_config is None else raw_config
         self.directory = state_directory(self._raw_config, self.config_path)
+        self.dependencies = dependencies
 
     @cached_property
     def definition(self) -> ApplicationDefinition:
@@ -130,8 +132,9 @@ class Application:
         return CommandResult(payload={'status': 'RESOLVED', 'instance_id': instance_id})
 
     def _runtime(self, store: StateStore):
+        optional = {} if self.dependencies is None else {'dependencies': self.dependencies}
         return open_runtime(self.config_path, self.definition, store, self.directory,
-                            parse_time(store.get_meta('coverage_start')))
+                            parse_time(store.get_meta('coverage_start')), **optional)
 
     def run_task(self, taskname: str, scheduled_time: str) -> CommandResult:
         with self._active_state() as store:

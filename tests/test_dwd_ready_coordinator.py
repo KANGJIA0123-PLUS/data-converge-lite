@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+import subprocess
+import sys
 
 import pytest
 
@@ -163,3 +165,34 @@ def test_extreme_future_timestamp_is_poison_not_a_service_crash(store):
     source = Source(['9999-12-31T23:55:GPU_REALTIME'])
     assert coordinator(store, source).poll(NOW) == []
     assert len(source.acknowledged) == 1
+
+
+def test_readiness_core_does_not_load_redis_adapter():
+    result = subprocess.run([sys.executable, '-c', '''
+import sys
+from data_converge.dwd_ready.coordinator import ReadyCoordinator
+assert 'data_converge.dwd_ready.redis_source' not in sys.modules
+assert 'data_converge.dwd_ready.redis_auth' not in sys.modules
+assert 'data_converge.dwd_ready.psm_crypto' not in sys.modules
+'''], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('operation', ['receive', 'ack'])
+def test_source_port_failure_preserves_commit_before_ack(store, caplog, operation):
+    from data_converge.dwd_ready.ports import SignalSourceError
+
+    class AlternateSource(Source):
+        def receive(self, block=True):
+            if operation == 'receive':
+                raise SignalSourceError('private source details')
+            return super().receive(block)
+
+        def ack(self, raw):
+            raise SignalSourceError('private acknowledgement details')
+
+    source = AlternateSource(signals())
+    assert coordinator(store, source).poll(NOW) == []
+    assert len(store.get_dwd_types(START)) == (1 if operation == 'ack' else 0)
+    assert source.acknowledged == []
+    assert 'private' not in caplog.text

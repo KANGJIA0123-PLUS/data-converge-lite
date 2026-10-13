@@ -5,17 +5,14 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Mapping, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, Optional
 
 from data_converge.errors import TaskExecutionError
 
+from .memory import InMemoryExecutionRepository
 from .models import DAG, TaskInstance, TaskStatus
+from .ports import ExecutionRepository, TaskRunner
 from .retry import can_start_attempt
-
-if TYPE_CHECKING:
-    from data_converge.state import StateStore
-
-TaskRunner = Callable[[TaskInstance], None]
 
 
 @dataclass(frozen=True)
@@ -42,7 +39,7 @@ class ExecutionReport:
 class DAGExecutor:
     def __init__(self, dag: DAG, runner: TaskRunner,
                  known_statuses: Optional[Dict[str, TaskStatus]] = None,
-                 max_concurrent_tasks: int = 1, *, state_store: StateStore | None = None,
+                 max_concurrent_tasks: int = 1, *, state_store: ExecutionRepository | None = None,
                  max_attempts: int = 3, retry_delay_seconds: float = 30,
                  readiness_check: Callable[[TaskInstance, datetime], str | None] | None = None):
         if max_concurrent_tasks <= 0 or max_attempts <= 0 or retry_delay_seconds < 0:
@@ -55,7 +52,9 @@ class DAGExecutor:
         self.max_attempts = max_attempts
         self.retry_delay_seconds = retry_delay_seconds
         self.readiness_check = readiness_check
-        self._memory: dict[str, dict] = {}
+        memory = InMemoryExecutionRepository(self.known_statuses)
+        self.repository: ExecutionRepository = state_store if state_store is not None else memory
+        self._memory = memory.records
 
     def execute(self, instances: Iterable[TaskInstance], *, now: datetime | None = None,
                 max_executions: int | None = None,
@@ -67,8 +66,7 @@ class DAGExecutor:
         if not instance_list:
             return ExecutionReport({})
         now = now or self._now(instance_list[0])
-        if self.state_store:
-            self.state_store.enqueue_and_advance(instance_list, {})
+        self.repository.enqueue_and_advance(instance_list, {})
         for instance in instance_list:
             self._restore(instance)
 
@@ -107,15 +105,10 @@ class DAGExecutor:
     def _mark_blocked(self, instance: TaskInstance, reason: str) -> None:
         instance.status = TaskStatus.BLOCKED
         instance.error = reason
-        if self.state_store:
-            self.state_store.mark_blocked(instance.instance_id, reason)
-        else:
-            self.known_statuses[instance.instance_id] = instance.status
-            if instance.instance_id in self._memory:
-                self._memory[instance.instance_id].update(status=instance.status, error=reason)
+        self.repository.mark_blocked(instance.instance_id, reason)
 
     def _restore(self, instance: TaskInstance) -> None:
-        record = self.state_store.get_instance(instance.instance_id) if self.state_store else self._memory.get(instance.instance_id)
+        record = self.repository.get_instance(instance.instance_id)
         if record:
             instance.status = TaskStatus(record["status"])
             instance.error = record.get("error")
@@ -123,13 +116,15 @@ class DAGExecutor:
             for attr in ("started_at", "finished_at"):
                 value = record.get(attr)
                 setattr(instance, attr, datetime.fromisoformat(value) if isinstance(value, str) else value)
-        elif instance.instance_id in self.known_statuses:
-            instance.status = self.known_statuses[instance.instance_id]
+        else:
+            status = self.repository.get_status(instance.instance_id)
+            if status is not None:
+                instance.status = status
 
     def _eligible(self, instance: TaskInstance, now: datetime) -> bool:
         record = None
         if instance.status in (TaskStatus.BLOCKED, TaskStatus.FAILED):
-            record = self.state_store.get_instance(instance.instance_id) if self.state_store else self._memory.get(instance.instance_id)
+            record = self.repository.get_instance(instance.instance_id)
         return can_start_attempt(
             instance.status, record.get("attempts", 0) if record else 0,
             record.get("retryable", False) if record else False,
@@ -137,17 +132,9 @@ class DAGExecutor:
             now=now, max_attempts=self.max_attempts)
 
     def _claim(self, instance: TaskInstance, now: datetime) -> bool:
-        if self.state_store:
-            if not self.state_store.claim(instance.instance_id, now=now, max_attempts=self.max_attempts):
-                self._restore(instance)
-                return False
-            self._restore(instance)
-        else:
-            record = self._memory.setdefault(instance.instance_id, {"attempts": 0})
-            record.update(status=TaskStatus.RUNNING, attempts=record["attempts"] + 1)
-            instance.status = TaskStatus.RUNNING
-            instance.started_at = now
-        return True
+        claimed = self.repository.claim(instance.instance_id, now=now, max_attempts=self.max_attempts)
+        self._restore(instance)
+        return claimed
 
     def _execute_ready_instances(self, instances: List[TaskInstance], now: datetime) -> None:
         with ThreadPoolExecutor(max_workers=len(instances), thread_name_prefix="dag-task") as pool:
@@ -166,14 +153,9 @@ class DAGExecutor:
                 next_retry_at = instance.finished_at + timedelta(seconds=self.retry_delay_seconds) if retryable else None
                 # A failed success commit must stop dispatch, leaving RUNNING for recovery.
                 # Keep persistence outside the runner exception handler.
-                if self.state_store:
-                    self.state_store.finish(instance.instance_id, instance.status, error=instance.error,
-                                            retryable=retryable, next_retry_at=next_retry_at,
-                                            now=instance.finished_at)
-                else:
-                    self._memory[instance.instance_id].update(status=instance.status, error=instance.error,
-                                                              retryable=retryable, next_retry_at=next_retry_at)
-                    self.known_statuses[instance.instance_id] = instance.status
+                self.repository.finish(instance.instance_id, instance.status, error=instance.error,
+                                       retryable=retryable, next_retry_at=next_retry_at,
+                                       now=instance.finished_at)
 
     @staticmethod
     def _classify_error(exc: Exception) -> tuple[TaskStatus, bool, str]:
@@ -186,9 +168,7 @@ class DAGExecutor:
     def _status(self, instance_id: str, current: Mapping[str, TaskInstance]) -> TaskStatus | None:
         if instance_id in current:
             return current[instance_id].status
-        if self.state_store:
-            return self.state_store.get_status(instance_id)
-        return self.known_statuses.get(instance_id)
+        return self.repository.get_status(instance_id)
 
     def _upstreams_succeeded(self, instance: TaskInstance,
                             current_instances: Mapping[str, TaskInstance]) -> bool:

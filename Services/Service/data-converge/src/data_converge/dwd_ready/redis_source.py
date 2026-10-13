@@ -6,13 +6,14 @@ import logging
 import os
 
 from .psm_crypto import create_psm_codec
+from .ports import SignalSourceError
 from .redis_auth import make_connect_callback
 from .redis_credentials import load_sentinel_credentials, sentinel_identity
 
 logger = logging.getLogger(__name__)
 
 
-class RedisSignalError(RuntimeError):
+class RedisSignalError(SignalSourceError):
     """Safe, fixed Redis diagnostic without SDK exception text or raw messages."""
 
 

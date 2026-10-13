@@ -31,6 +31,8 @@ tests/                      # 仓库测试，不进入镜像
 
 `Application` 作为用例门面；运行时工厂负责装配，`ExitStack` 管理资源释放；SQL/Redis 适配器连接外部系统；`StateStore` 管理持久化；日志策略与文件操作分别维护。旧的 `logging_config`、`scheduler.scheduler` 和 ClickHouse `client` 配置函数保留兼容导出。
 
+任务执行、执行状态和就绪消息源通过 `Protocol` 定义契约；运行依赖可通过 `RuntimeDependencies` 显式注入。扩展方式、故障保证与高可用边界见 [业务架构与扩展约定](docs/architecture.md)。当前仍为单写实例运行模型。
+
 ## 日志
 
 业务日志优先写入 `${LOG_PATH}/${SERVICE_NAME}.log`，同时保留 stderr 输出。没有 `LOG_PATH` 时兼容部署注入的完整文件名 `SERVICE_LOG_PATH`，再按 `PRODUCT_NAME` 拼接平台路径。本地没有平台日志变量时只输出到 stderr。公司启动日志 `start.log` 继续由平台管理。
