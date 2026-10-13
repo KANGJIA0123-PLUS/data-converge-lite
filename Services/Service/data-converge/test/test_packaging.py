@@ -30,12 +30,17 @@ def runtime(tmp_path):
     # Keep the launcher real and replace only that external platform boundary.
     (bin_dir / "function.sh").write_text(
         'export SERVICE_NAME=data-converge\n'
-        'printf initialized > "$PLATFORM_INIT_RECORD"\n'
-        'LOG_FILE="$PLATFORM_INIT_RECORD"\n'
-        'show_title() { :; }\nlog() { :; }\n'
-        'pre_check_service() { :; }\ninit_python() { :; }\n'
-        'service_status_summary() { :; }\ncheck_result() { return "$1"; }\n'
+        'printf "init_env\\n" > "$PLATFORM_INIT_RECORD"\n'
+        'LOG_FILE="$SERVICE_HOME/start.log"\n'
+        'LOG_PATH="$SERVICE_HOME"\n'
+        'show_title() { printf "title:%s\\n" "$1" >> "$PLATFORM_INIT_RECORD"; touch "$LOG_FILE"; }\n'
+        'log() { :; }\n'
+        'pre_check_service() { printf "pre_check\\n" >> "$PLATFORM_INIT_RECORD"; return "${PRECHECK_EXIT_CODE:-0}"; }\n'
+        'init_python() { printf "init_python\\n" >> "$PLATFORM_INIT_RECORD"; return "${INIT_PYTHON_EXIT_CODE:-0}"; }\n'
+        'service_status_summary() { printf "status:%s\\n" "$1" >> "$PLATFORM_INIT_RECORD"; }\n'
+        'check_result() { return "$1"; }\n'
     )
+    (bin_dir / "py").mkdir()
     src = home / "lib/data-converge/src/data_converge"
     src.mkdir(parents=True)
     (src / "__init__.py").write_text("")
@@ -58,9 +63,19 @@ def runtime(tmp_path):
     runtime_bin = tmp_path / "gde runtime"
     runtime_bin.mkdir()
     (runtime_bin / "python3").symlink_to(sys.executable)
-    # Old start.sh must not chmod anything outside the test directory.
+    # Exercise real permissions, but forbid startup chmod outside this fixture.
     chmod = runtime_bin / "chmod"
-    chmod.write_text('#!/bin/sh\necho "unexpected startup chmod" >&2\nexit 92\n')
+    chmod.write_text(
+        '#!/bin/bash\n'
+        'for target in "$@"; do\n'
+        '  case "$target" in\n'
+        '    -v|[0-7][0-7][0-7]) ;;\n'
+        '    "$SERVICE_HOME"/*) ;;\n'
+        '    *) echo "startup chmod escaped test directory" >&2; exit 92 ;;\n'
+        '  esac\n'
+        'done\n'
+        'exec /bin/chmod "$@"\n'
+    )
     chmod.chmod(0o755)
     python_env = tmp_path / "python.env"
     python_env.write_text(
@@ -119,7 +134,41 @@ def test_start_forwards_config_and_arguments_and_replaces_shell(runtime):
         str(home / "lib/data-converge/src"), str(home / "bin/py/site-packages")
     ]
     assert env["PYTHONPATH"] in data["pythonpath"].split(os.pathsep)
-    assert Path(env["PLATFORM_INIT_RECORD"]).read_text() == "initialized"
+    assert Path(env["PLATFORM_INIT_RECORD"]).read_text().splitlines() == [
+        "init_env", "title:start@data-converge", "pre_check", "init_python", "status:start",
+    ]
+
+
+@pytest.mark.parametrize("failure,expected_hooks", [
+    ("PRECHECK_EXIT_CODE", ["init_env", "title:start@data-converge", "pre_check"]),
+    ("INIT_PYTHON_EXIT_CODE", ["init_env", "title:start@data-converge", "pre_check", "init_python"]),
+])
+def test_platform_start_failure_prevents_application_and_start_status(runtime, failure, expected_hooks):
+    _, _, _, env = runtime
+    env[failure] = "47"
+    process, data, _, _ = run_script(runtime, "start.sh")
+    assert process.returncode == 47
+    assert data is None
+    assert Path(env["PLATFORM_INIT_RECORD"]).read_text().splitlines() == expected_hooks
+
+
+def test_platform_start_restores_company_file_permissions(runtime):
+    home, _, _, _ = runtime
+    package = home / "bin/py/site-packages/example"
+    package.mkdir(parents=True)
+    module = package / "module.py"
+    module.write_text("VALUE = 1\n")
+    certificates = [package / ("test" + suffix) for suffix in (".pem", ".crt", ".key")]
+    for certificate in certificates:
+        certificate.write_text("synthetic")
+    process, _, _, stderr = run_script(runtime, "start.sh")
+    assert process.returncode == 0, stderr
+    assert (home / "start.log").is_file()
+    for path in (home / "bin", home / "lib", *home.glob("bin/*.sh")):
+        assert path.stat().st_mode & 0o777 == 0o500
+    assert package.stat().st_mode & 0o777 == 0o700
+    assert module.stat().st_mode & 0o777 == 0o500
+    assert all(path.stat().st_mode & 0o777 == 0o400 for path in certificates)
 
 
 @pytest.mark.parametrize("script,mode", [
@@ -138,7 +187,7 @@ def test_probe_uses_same_interpreter_and_returns_application_exit(runtime, scrip
     ("x86_64", "dependency_x86", "dependency_arm"),
     ("aarch64", "dependency_arm", "dependency_x86"),
 ])
-def test_start_unpacks_correct_arch_and_restarts_without_archives(runtime, machine, expected, other):
+def test_business_launcher_unpacks_correct_arch_and_restarts_without_archives(runtime, machine, expected, other):
     home, runtime_bin, _, _ = runtime
     uname = runtime_bin / "uname"
     uname.write_text(f"#!/bin/sh\nprintf '%s\\n' {machine}\n")
@@ -146,7 +195,9 @@ def test_start_unpacks_correct_arch_and_restarts_without_archives(runtime, machi
     for name in [expected, other]:
         dependency_archive(home / "scripts" / f"{name}.tar.gz", name, name)
     dependency_archive(home / "bin/py/python_pkg.tar.gz", "site-packages", "site-packages")
-    process, data, _, stderr = run_script(runtime, "start.sh")
+    # The platform start.sh separately calls its original init_python, which
+    # requires python_pkg.tar.gz; archive-free reuse belongs to the direct helper.
+    process, data, _, stderr = run_script(runtime, "start_data_converge.sh")
     assert process.returncode == 0, stderr
     assert (home / "scripts" / expected / "company_marker.py").exists()
     assert not (home / "scripts" / other).exists()
@@ -158,7 +209,7 @@ def test_start_unpacks_correct_arch_and_restarts_without_archives(runtime, machi
         archive.unlink()
     for directory in [home / "bin", home / "bin/py", home / "scripts"]:
         directory.chmod(0o555)
-    process, _, _, stderr = run_script(runtime, "start.sh")
+    process, _, _, stderr = run_script(runtime, "start_data_converge.sh")
     assert process.returncode == 0, stderr
 
 

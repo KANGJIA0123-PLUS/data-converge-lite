@@ -18,11 +18,21 @@ PYTHONPATH="$PWD/Services/Service/data-converge/src" .venv/bin/python -m pytest 
 - 完整业务测试 **433 passed, 1 skipped**（redis-py 6.4.0，8.62 秒）；跳过项仍是缺少 redis-server 的真实服务测试，本地 RESP 回环测试均执行。
 - 使用与现场相同的 redis-py **5.2.1**，认证、Sentinel、主节点切换和 List 传输兼容回归 **159 passed, 1 skipped**（1.44 秒）。该版本只安装在本机临时目录，不修改项目依赖。
 - 默认业务配置的 `--validate-only` 返回 `VALID`、52 个任务。
-- 相对 `e03ad8a`，公司构建框架、Services/Package、依赖清单、测试配置、Deployment 和 52 个 SQL 均无变更。
+- 该项提交 `984e5e7` 相对 `e03ad8a`，公司构建框架、Services/Package、依赖清单、测试配置、Deployment 和 52 个 SQL 均无变更；后续挂载与启动入口调整另见对应提交和下节。
 
 用户在公司容器回传的结果独立于上述本地测试：Python 3.12.10、redis-py 5.2.1、真实 dsf/psf/Crypto 及挂载密钥已完成 XMS、PSM、Sentinel 和数据节点认证，普通账号与 admin 凭据均可连接 DB 5；admin 凭据的 `ACL WHOAMI` 返回 `default`。这验证了连接与只读检查，不代表全部管理权限、正式部署或消费流程已验收。队列检查时不存在，不据此判断发布端从未发送过消息。
 
 正式运行仍需部署新业务包、持久挂载密码、保留兼容依赖，并验证消费命令权限及五类消息到 SQL 的流程。已有 ossdbuser 账本继续显式保留原账号及密码路径；本次不修改或绕过账本绑定。详见 [容器运行条件](dwd-ready.md#容器运行条件)。
+
+## 2026-10-13：恢复公司启动流程
+
+此前将 `start.sh` 简化为 source 后直接启动 Python，遗漏了公司原入口的启动标题、权限配置、`pre_check_service`、`init_python` 和 `service_status_summary`。`function.sh` 被 source 时仅执行 `init_env`，不会代替这些步骤。
+
+已恢复公司 `main → start_service` 组织与调用顺序，权限沿用原值；保留业务启动器前台 exec 和参数透传，未恢复占位 sleep 或应用退出后无限休眠。公共 `function.sh`、`service.conf`、`start_data_converge.sh` 和构建框架均未修改。
+
+新增回归先在旧入口复现 4 项失败：生命周期调用顺序缺失、前置检查失败仍启动、Python 初始化失败仍启动、日志及权限未恢复。修正后启动与原框架字节码测试 **12 passed**；同时检查真实文件权限、业务 PID、参数与退出行为。完整业务测试 **436 passed, 1 skipped**（12.76 秒，跳过项仍为缺少 redis-server 的真实服务测试）；Shell 语法和差异空白检查通过。
+
+测试在临时目录执行真实入口和权限命令，平台 `function.sh` 使用替身模拟检查/初始化/日志边界；因此不宣称已验证公司环境的 Python 初始化、真实依赖解压或平台日志写入。原 `init_python` 仍依赖唯一的 `/opt/gde/python/python-3.*`、`CURRENT_PATH/py/python_pkg.tar.gz`；归档必须保留。无归档的已展开依赖复用只由直接业务启动器测试，不代表正式平台入口可跳过公司初始化。`SERVICE_HOME` 不重定位原公共函数中的平台路径。
 
 ## 2026-10-12 初始交付结果
 
@@ -58,7 +68,7 @@ PSM 的 46 项测试使用真实 PyCryptodome AES-GCM 与按参考接口构造�
 - DWD 五种类型严格解析、去重、持久化与 ACK 顺序；SQLite 失败不确认，ACK 失败可重读；不足五种、零消息和 Redis 故障不会放行未就绪窗口。
 - 事件提前登记全部 13 个五分钟任务，cron/手工/事件使用同一门控与账本；重复消息或进程重启不重放成功 SQL。
 - 等待消息跨过五分钟边界时，用单调时钟推进到达时间，避免把刚结束的窗口误判为未来并丢弃；极端未来时间不导致服务崩溃。
-- 双架构依赖目录选择、只读依赖重启、探针返回码、前台 PID，以及原框架字节码构建。只在临时副本执行会删除 `.py` 的原脚本，实际仓库源码保持完整。外部 BuildTool/function.sh 和平台初始化边界使用替身，没有执行公司宿主机初始化或完整镜像发布。
+- 双架构依赖目录选择、直接业务启动器的只读依赖复用、探针返回码、前台 PID，以及原框架字节码构建。只在临时副本执行会删除 `.py` 的原脚本，实际仓库源码保持完整。外部 BuildTool/function.sh 和平台初始化边界使用替身，没有执行公司宿主机初始化或完整镜像发布。
 - 两处 SQL 执行缺陷修复：固定日期改窗口参数，以及重复表达式导致的 INSERT/SELECT 列数不匹配。其余统计口径保留并列入已知问题。
 
 新增故障边界先用失败回归复现，再修实现并确认通过。代码复查覆盖入口/调度/状态及连接/解密两个方向，DWD 接入后再次复查。

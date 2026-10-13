@@ -41,7 +41,7 @@ deploy/deployment.patch.yaml
 
 ## 业务代码离线校验
 
-公司构建、依赖及测试配置保持上传版本，Python 版本按原平台配置使用。业务需要 PyYAML、APScheduler 3.11.x 和 redis-py 5/6（Sentinel 回环验证使用 5.0.8、6.4.0），公司认证使用已有 `dsf`、`psf` 和 `Crypto`。需确认已有公司镜像或依赖包提供这些模块及兼容版本；依赖清单、构建框架、打包和启动脚本保持不变，Redis 密码挂载在现有平台卷配置中声明。测试使用现有环境与命令行参数。
+公司构建、依赖及测试配置保持上传版本，Python 版本按原平台配置使用。业务需要 PyYAML、APScheduler 3.11.x 和 redis-py 5/6（Sentinel 回环验证使用 5.0.8、6.4.0），公司认证使用已有 `dsf`、`psf` 和 `Crypto`。需确认已有公司镜像或依赖包提供这些模块及兼容版本；依赖清单、构建框架和打包保持不变，启动入口恢复公司生命周期流程，Redis 密码挂载在现有平台卷配置中声明。测试使用现有环境与命令行参数。
 
 ```bash
 export PYTHONPATH="$PWD/Services/Service/data-converge/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -150,13 +150,17 @@ python3 -m data_converge.main --config /path/app_config.yaml \
 
 流水线需提供 `REPOSITORY_PATH`、`WORKSPACE` 及 `${WORKSPACE}/BuildTool/Services/build_framework/scripts/function.sh`。原脚本会删除构建副本中的源码，且目录变量未加引号，因此应在平台的一次性、无空格工作目录执行；本机测试也只在临时副本运行。构建与运行使用同一 Python 小版本，以保证 `.pyc` 兼容。外部 BuildTool 文件不在上传附件内，本仓库不替换它。
 
-启动脚本默认安装路径 `/opt/its/data-converge`，可用 `SERVICE_HOME`、`PYTHON_ENV_FILE`、`APP_CONF_FILE` 覆盖。当存在多个 GDE Python 版本时，必须明确 `PYTHON_ENV_FILE`。依赖可预安装，或由平台提供 `bin/py/python_pkg.tar.gz`（根目录 `site-packages`）以及 `scripts/dependency_x86.tar.gz` / `dependency_arm.tar.gz`（同名根目录）。不从公网下载公司 SDK。
+正式容器入口 `start.sh` 保留公司 `main → start_service` 流程：启动标题、bin/lib/脚本权限、`pre_check_service`、`init_python`、Python 依赖权限、`service_status_summary "start"`，最后交给业务启动器。前置检查或 Python 初始化失败时不启动业务。权限沿用公司原值：bin/lib 及 bin/*.sh 为 500，bin/py 下目录为 700、文件为 500，pem/crt/key 文件为 400。
+
+公共 `function.sh` 与 `service.conf` 保持公司原版。正式入口的 `init_python` 按原配置加载 `/opt/gde/python/python-3.*/python.env`，并要求保留 `bin/py/python_pkg.tar.gz`（根目录 `site-packages`）；当前平台应只有一个匹配的 GDE Python 目录，不能用业务启动器的覆盖参数绕过这一步。架构 SDK 继续来自 `scripts/dependency_x86.tar.gz` / `dependency_arm.tar.gz`（同名根目录）或已展开目录。不从公网下载公司 SDK。
+
+业务启动器 `start_data_converge.sh` 和探针共用解释器/PYTHONPATH 准备逻辑，默认安装路径 `/opt/its/data-converge`，支持 `SERVICE_HOME`、`PYTHON_ENV_FILE`、`APP_CONF_FILE`。直接使用该启动器时，已展开依赖可以复用；探针只加载环境，不解压。它们不替代正式 `start.sh` 的平台检查、权限和启动状态记录。
 
 部署与探针最终都使用同一解释器和 PYTHONPATH。应用搜索路径仍为 `lib/data-converge/src`，`python3 -m data_converge.main` 可直接加载原构建生成的 `main.pyc`，XMS helper 也从 `.pyc` 启动。`start.sh` 前台 exec 主程序；`liveness_check.sh` 和 `readiness_check.sh` 读取进程心跳，缺失、过期或进程退出均失败。25642是原平台端口声明，本服务没有在该端口实现 HTTP API。
 
 ## 部署边界
 
-[Deployment patch 示例](deploy/deployment.patch.yaml) 是此前直连 Redis 的部署建议，**不会自动应用**。其中 `DWD_REDIS_HOST/PORT/PASSWORD` 的占位引用只用于直连模式；本次 Sentinel 配置从已有挂载读取，不能整份照用旧补丁。公司原 Deployment、模板与构建文件均未修改；原有 ClickHouse/XMS 环境变量、Secret、UID 19101 和 run-data 挂载保留。运行互斥与状态目录仍须按以下要求核验。
+[Deployment patch 示例](deploy/deployment.patch.yaml) 是此前直连 Redis 的部署建议，**不会自动应用**。其中 `DWD_REDIS_HOST/PORT/PASSWORD` 的占位引用只用于直连模式；本次 Sentinel 配置从密码文件读取，不能整份照用旧补丁。平台卷配置已新增 Redis 密码声明，公司集群 Deployment 尚未由本地开发更新；原有 ClickHouse/XMS 环境变量、Secret、UID 19101 和 run-data 挂载保留。运行互斥与状态目录仍须按以下要求核验。
 
 - 一套目标表只运行一个调度实例。使用 Recreate，并确保旧实例停止、不会因节点失联仍在运行；本机锁不是分布式选主。
 - 沿用 hostPath 时固定状态节点；迁移节点需在停机后迁移整个状态目录并核对结果。不要在新节点自动初始化空账本。
