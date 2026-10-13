@@ -56,11 +56,42 @@ function configure_data_converge_runtime() {
 
 function start_data_converge() {
     configure_data_converge_runtime true
-    # Replacing the shell gives the application PID 1 and direct SIGTERM delivery.
-    exec python3 -m data_converge.main --config "${APP_CONF_FILE}" "$@"
+    DATA_CONVERGE_PID=
+    DATA_CONVERGE_WAIT_INTERRUPTED=false
+    # Bash background commands inherit ignored SIGINT. Both signals request
+    # the application's graceful shutdown through SIGTERM instead.
+    trap 'stop_data_converge' TERM INT
+    python3 -m data_converge.main --config "${APP_CONF_FILE}" "$@" &
+    DATA_CONVERGE_PID=$!
+    # A signal may arrive between installing the trap and recording the PID.
+    if [[ "${DATA_CONVERGE_WAIT_INTERRUPTED}" == true ]]; then
+        stop_data_converge
+    fi
+}
+
+function stop_data_converge() {
+    DATA_CONVERGE_WAIT_INTERRUPTED=true
+    if [[ -n "${DATA_CONVERGE_PID:-}" ]]; then
+        kill -TERM "${DATA_CONVERGE_PID}" 2>/dev/null || :
+    fi
+}
+
+function wait_data_converge() {
+    local exit_code
+    while true; do
+        DATA_CONVERGE_WAIT_INTERRUPTED=false
+        exit_code=0
+        wait "${DATA_CONVERGE_PID}" || exit_code=$?
+        # A trapped signal interrupts wait before Python finishes cleanup.
+        [[ "${DATA_CONVERGE_WAIT_INTERRUPTED}" == false ]] && break
+    done
+    trap - TERM INT
+    unset DATA_CONVERGE_PID DATA_CONVERGE_WAIT_INTERRUPTED
+    return "${exit_code}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     set -e
     start_data_converge "$@"
+    wait_data_converge
 fi

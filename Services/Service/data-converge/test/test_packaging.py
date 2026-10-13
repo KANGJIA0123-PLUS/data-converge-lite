@@ -131,12 +131,12 @@ def dependency_archive(path, package, marker):
         archive.addfile(member, io.BytesIO(payload))
 
 
-def test_start_forwards_config_and_arguments_and_replaces_shell(runtime):
+def test_start_forwards_config_and_arguments_and_waits_for_child(runtime):
     home, _, _, env = runtime
     process, data, _, stderr = run_script(runtime, "start.sh", "--once", "--label", "two words")
     assert process.returncode == 0, stderr
     assert data["argv"] == ["--config", env["APP_CONF_FILE"], "--once", "--label", "two words"]
-    assert data["pid"] == process.pid
+    assert data["pid"] != process.pid
     assert data["env_loaded"] == "yes"
     assert data["pythonpath"].split(os.pathsep)[:2] == [
         str(home / "lib/data-converge/src"), str(home / "bin/py/site-packages")

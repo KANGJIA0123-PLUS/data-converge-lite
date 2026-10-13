@@ -56,21 +56,19 @@ function start_service() {
     config_python
     service_status_summary "start"
     check_result $?
-    start_data_converge
+    start_data_converge "$@"
 
     log "info" "Start service success, for more information please check ${LOG_PATH}"
-    while true; do
-        sleep 60
-    done
+    wait_data_converge
 }
 
 function main() {
     show_title "start@${SERVICE_NAME}"
     config_permission
-    start_service
+    start_service "$@"
 }
 
 #代码入口
-main
+main "$@"
 
 exit 0
