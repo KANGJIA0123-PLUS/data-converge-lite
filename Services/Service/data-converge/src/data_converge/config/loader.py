@@ -130,40 +130,7 @@ class ConfigLoader:
                 errors.append(f"{rule_path}: duplicate taskname '{taskname}'")
             tasknames.add(taskname)
 
-            # source_tables必填（列表，非空）
-            source_tables = rule.get("source_tables")
-            if not source_tables:
-                errors.append(f"Task '{taskname}': missing required field 'source_tables'")
-            elif not isinstance(source_tables, list):
-                errors.append(f"Task '{taskname}': 'source_tables' must be a list")
-            elif len(source_tables) == 0:
-                errors.append(f"Task '{taskname}': 'source_tables' cannot be empty")
-
-            # target_table必填
-            if not rule.get("target_table"):
-                errors.append(f"Task '{taskname}': missing required field 'target_table'")
-
-            # aggregation_interval必填
-            if not rule.get("aggregation_interval"):
-                errors.append(f"Task '{taskname}': missing required field 'aggregation_interval'")
-
-            # cron必填
-            cron = rule.get("cron")
-            if not cron:
-                errors.append(f"Task '{taskname}': missing required field 'cron'")
-            else:
-                is_valid, err = CronValidator.validate(cron)
-                if not is_valid:
-                    errors.append(f"Task '{taskname}': invalid cron '{cron}': {err}")
-
-            # sql_id必填
-            if not rule.get("sql_id"):
-                errors.append(f"Task '{taskname}': missing required field 'sql_id'")
-            else:
-                sql_id = rule.get("sql_id")
-                sql_file = self.sql_dir / f"{sql_id}.sql"
-                if not sql_file.exists():
-                    errors.append(f"Task '{taskname}': sql_id '{sql_id}' file not found: {sql_file}")
+            self._validate_rule_fields(rule, taskname, errors)
 
             # depends_on可选，但引用的taskname必须存在（遍历时检查）
             depends_on = rule.get("depends_on", [])
@@ -179,6 +146,43 @@ class ConfigLoader:
                     errors.append(f"Task '{taskname}': depends_on references unknown taskname '{dep}'")
 
         return errors
+
+    def _validate_rule_fields(self, rule: Dict[str, Any], taskname: str, errors: List[str]) -> None:
+        """按字段顺序收集单条规则的诊断，不提前终止校验。"""
+        # source_tables必填（列表，非空）
+        source_tables = rule.get("source_tables")
+        if not source_tables:
+            errors.append(f"Task '{taskname}': missing required field 'source_tables'")
+        elif not isinstance(source_tables, list):
+            errors.append(f"Task '{taskname}': 'source_tables' must be a list")
+        elif len(source_tables) == 0:
+            errors.append(f"Task '{taskname}': 'source_tables' cannot be empty")
+
+        # target_table必填
+        if not rule.get("target_table"):
+            errors.append(f"Task '{taskname}': missing required field 'target_table'")
+
+        # aggregation_interval必填
+        if not rule.get("aggregation_interval"):
+            errors.append(f"Task '{taskname}': missing required field 'aggregation_interval'")
+
+        # cron必填
+        cron = rule.get("cron")
+        if not cron:
+            errors.append(f"Task '{taskname}': missing required field 'cron'")
+        else:
+            is_valid, err = CronValidator.validate(cron)
+            if not is_valid:
+                errors.append(f"Task '{taskname}': invalid cron '{cron}': {err}")
+
+        # sql_id必填
+        if not rule.get("sql_id"):
+            errors.append(f"Task '{taskname}': missing required field 'sql_id'")
+        else:
+            sql_id = rule.get("sql_id")
+            sql_file = self.sql_dir / f"{sql_id}.sql"
+            if not sql_file.exists():
+                errors.append(f"Task '{taskname}': sql_id '{sql_id}' file not found: {sql_file}")
 
     def get_rule_by_taskname(self, taskname: str) -> Optional[Dict[str, Any]]:
         """根据任务名获取汇聚规则"""

@@ -53,20 +53,7 @@ def _slot(key):
     return binascii.crc_hqx(_tag(key).encode("utf-8"), 0) % 16384
 
 
-def load_ready_config(raw: dict, config_directory: Path) -> dict:
-    """Read the complete app config, without resolving the password environment."""
-    if not isinstance(raw, dict):
-        _invalid()
-    section = raw.get("dwd_ready", {})
-    allowed = {"enabled", "redis", "queue_key", "block_seconds", "batch_size", "wait_warning_seconds"}
-    if not isinstance(section, dict) or set(section) - allowed:
-        _invalid()
-    enabled = section.get("enabled", False)
-    if type(enabled) is not bool:
-        _invalid()
-    queue = section.get("queue_key", "modelverse:dwd:ready")
-    if not _text(queue) or len(queue) > 1024:
-        _invalid()
+def _processing_key(queue):
     tag = _tag(queue)
     processing = "{" + tag + "}:data-converge:processing"
     try:
@@ -78,16 +65,48 @@ def load_ready_config(raw: dict, config_directory: Path) -> dict:
             _invalid("DWD_READY_QUEUE_SLOT_INVALID")
     except UnicodeError:
         _invalid()
-    block = _number(section.get("block_seconds", 1), 2)
-    batch = section.get("batch_size", 100)
-    if type(batch) is not int or not 1 <= batch <= 1000:
+    return processing
+
+
+def _sentinel_config(connection, username, config_directory):
+    service = connection.get("service_name")
+    paas_name = connection.get("paas_name")
+    if not _text(service) or not _text(username) or (paas_name is not None and not _text(paas_name)):
         _invalid()
-    warning = _number(section.get("wait_warning_seconds", 60))
-    config = dict(enabled=enabled, redis={}, queue_key=queue, processing_key=processing,
-                  block_seconds=block, batch_size=batch, wait_warning_seconds=warning)
-    if not enabled:
-        return config
-    connection = section.get("redis")
+    result = dict(service_name=service, paas_name=paas_name,
+                  kms_timeout_seconds=_number(connection.get("kms_timeout_seconds", 30), 300))
+    for key in ("password_file", "root_key_file", "work_key_file"):
+        value = _expand(connection.get(key))
+        if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 for c in value):
+            _invalid()
+        path = Path(value)
+        result[key] = str(path if path.is_absolute() else (config_directory / path).resolve())
+    return result
+
+
+def _direct_config(connection):
+    host = _expand(connection.get("host"))
+    if not _text(host):
+        _invalid()
+    if ":" in host:
+        try:
+            host = str(ipaddress.IPv6Address(host.strip("[]")))
+        except ValueError:
+            _invalid()
+    elif not re.fullmatch(r"[A-Za-z0-9_.-]+", host):
+        _invalid()
+    port = _expand(connection.get("port"))
+    if isinstance(port, str) and re.fullmatch(r"[0-9]+", port):
+        port = int(port)
+    if type(port) is not int or not 1 <= port <= 65535:
+        _invalid()
+    password_env = connection.get("password_env")
+    if not isinstance(password_env, str) or not re.fullmatch(_ENV_NAME, password_env):
+        _invalid()
+    return dict(host=host, port=port, password_env=password_env)
+
+
+def _redis_config(connection, block, config_directory):
     common = {"mode", "db", "username", "ssl", "ssl_verify", "socket_timeout", "socket_connect_timeout"}
     sentinel_fields = {"service_name", "password_file", "paas_name", "root_key_file", "work_key_file",
                        "kms_timeout_seconds"}
@@ -115,37 +134,34 @@ def load_ready_config(raw: dict, config_directory: Path) -> dict:
     result = dict(mode=mode, db=db, username=username, ssl=secure, ssl_verify=verify,
                   socket_timeout=socket_timeout, socket_connect_timeout=connect_timeout)
     if mode == "sentinel":
-        service = connection.get("service_name")
-        paas_name = connection.get("paas_name")
-        if not _text(service) or not _text(username) or (paas_name is not None and not _text(paas_name)):
-            _invalid()
-        result.update(service_name=service, paas_name=paas_name,
-                      kms_timeout_seconds=_number(connection.get("kms_timeout_seconds", 30), 300))
-        for key in ("password_file", "root_key_file", "work_key_file"):
-            value = _expand(connection.get(key))
-            if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 for c in value):
-                _invalid()
-            path = Path(value)
-            result[key] = str(path if path.is_absolute() else (config_directory / path).resolve())
+        result.update(_sentinel_config(connection, username, config_directory))
     else:
-        host = _expand(connection.get("host"))
-        if not _text(host):
-            _invalid()
-        if ":" in host:
-            try:
-                host = str(ipaddress.IPv6Address(host.strip("[]")))
-            except ValueError:
-                _invalid()
-        elif not re.fullmatch(r"[A-Za-z0-9_.-]+", host):
-            _invalid()
-        port = _expand(connection.get("port"))
-        if isinstance(port, str) and re.fullmatch(r"[0-9]+", port):
-            port = int(port)
-        if type(port) is not int or not 1 <= port <= 65535:
-            _invalid()
-        password_env = connection.get("password_env")
-        if not isinstance(password_env, str) or not re.fullmatch(_ENV_NAME, password_env):
-            _invalid()
-        result.update(host=host, port=port, password_env=password_env)
-    config["redis"] = result
+        result.update(_direct_config(connection))
+    return result
+
+
+def load_ready_config(raw: dict, config_directory: Path) -> dict:
+    """Read the complete app config, without resolving the password environment."""
+    if not isinstance(raw, dict):
+        _invalid()
+    section = raw.get("dwd_ready", {})
+    allowed = {"enabled", "redis", "queue_key", "block_seconds", "batch_size", "wait_warning_seconds"}
+    if not isinstance(section, dict) or set(section) - allowed:
+        _invalid()
+    enabled = section.get("enabled", False)
+    if type(enabled) is not bool:
+        _invalid()
+    queue = section.get("queue_key", "modelverse:dwd:ready")
+    if not _text(queue) or len(queue) > 1024:
+        _invalid()
+    processing = _processing_key(queue)
+    block = _number(section.get("block_seconds", 1), 2)
+    batch = section.get("batch_size", 100)
+    if type(batch) is not int or not 1 <= batch <= 1000:
+        _invalid()
+    warning = _number(section.get("wait_warning_seconds", 60))
+    config = dict(enabled=enabled, redis={}, queue_key=queue, processing_key=processing,
+                  block_seconds=block, batch_size=batch, wait_warning_seconds=warning)
+    if enabled:
+        config["redis"] = _redis_config(section.get("redis"), block, config_directory)
     return config

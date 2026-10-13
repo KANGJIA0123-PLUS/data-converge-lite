@@ -73,11 +73,8 @@ def prepare_sql_files(tmp_path):
     return sql_directory
 
 
-def test_dag_executor_runs_sql_tasks_in_dependency_order(
-    tmp_path,
-    monkeypatch,
-):
-    """SQL 成功时，上下游任务应按照依赖顺序执行成功。"""
+def prepare_sql_executor(tmp_path, monkeypatch, execute_sql):
+    """创建真实 DAG 与 SQL runner，仅替换外部 ClickHouse 调用。"""
     builder = DAGBuilder(FakeConfigLoader(make_rules()))
     dag = builder.build()
 
@@ -87,22 +84,16 @@ def test_dag_executor_runs_sql_tasks_in_dependency_order(
     )
 
     sql_directory = prepare_sql_files(tmp_path)
-    executed_sql = []
-
     monkeypatch.setattr(
         runner_module,
         "load_config",
         lambda config_path: {"clickhouse": {}},
     )
 
-    def fake_execute_sql(**kwargs):
-        executed_sql.append(kwargs["sql"])
-        return []
-
     monkeypatch.setattr(
         runner_module,
         "execute_sql",
-        fake_execute_sql,
+        execute_sql,
     )
 
     sql_runner = runner_module.SQLTaskRunner(
@@ -114,7 +105,21 @@ def test_dag_executor_runs_sql_tasks_in_dependency_order(
         dag=dag,
         runner=sql_runner,
     )
+    return executor, instances
 
+
+def test_dag_executor_runs_sql_tasks_in_dependency_order(
+    tmp_path,
+    monkeypatch,
+):
+    """SQL 成功时，上下游任务应按照依赖顺序执行成功。"""
+    executed_sql = []
+
+    def fake_execute_sql(**kwargs):
+        executed_sql.append(kwargs["sql"])
+        return []
+
+    executor, instances = prepare_sql_executor(tmp_path, monkeypatch, fake_execute_sql)
     report = executor.execute(instances)
 
     assert len(report.succeeded) == 2
@@ -134,22 +139,7 @@ def test_unknown_sql_outcome_blocks_downstream_task(
     monkeypatch,
 ):
     """上游异常没有确定未写入证据时，应UNKNOWN并阻塞下游。"""
-    builder = DAGBuilder(FakeConfigLoader(make_rules()))
-    dag = builder.build()
-
-    instances = builder.create_batch_instances(
-        dag=dag,
-        data_end=datetime(2026, 9, 9, 2, 0, 0),
-    )
-
-    sql_directory = prepare_sql_files(tmp_path)
     execution_count = 0
-
-    monkeypatch.setattr(
-        runner_module,
-        "load_config",
-        lambda config_path: {"clickhouse": {}},
-    )
 
     def fake_execute_sql(**kwargs):
         nonlocal execution_count
@@ -160,22 +150,7 @@ def test_unknown_sql_outcome_blocks_downstream_task(
 
         return []
 
-    monkeypatch.setattr(
-        runner_module,
-        "execute_sql",
-        fake_execute_sql,
-    )
-
-    sql_runner = runner_module.SQLTaskRunner(
-        config_path=tmp_path / "app_config.yaml",
-        sql_directory=sql_directory,
-    )
-
-    executor = DAGExecutor(
-        dag=dag,
-        runner=sql_runner,
-    )
-
+    executor, instances = prepare_sql_executor(tmp_path, monkeypatch, fake_execute_sql)
     report = executor.execute(instances)
 
     assert len(report.succeeded) == 0
@@ -193,9 +168,9 @@ def test_unknown_sql_outcome_blocks_downstream_task(
     assert execution_count == 1
 
 
-def test_independent_tasks_run_concurrently_before_downstream():
-    """两个独立上游应并发执行，下游应等待二者成功。"""
-    rules = [
+def make_concurrent_rules():
+    """两个独立上游与共同下游的五分钟聚合配置。"""
+    return [
         {
             "taskname": "task_parent_a",
             "description": "上游A",
@@ -231,14 +206,9 @@ def test_independent_tasks_run_concurrently_before_downstream():
         },
     ]
 
-    builder = DAGBuilder(FakeConfigLoader(rules))
-    dag = builder.build()
 
-    instances = builder.create_batch_instances(
-        dag=dag,
-        data_end=datetime(2026, 9, 9, 10, 0, 0),
-    )
-
+def make_concurrent_runner():
+    """记录执行顺序，并在下游运行时核对两条上游都已完成。"""
     # 如果两个上游不是并发运行，Barrier 会超时。
     parent_barrier = threading.Barrier(2)
     completed_parents = set()
@@ -268,6 +238,20 @@ def test_independent_tasks_run_concurrently_before_downstream():
         with lock:
             execution_order.append(instance.taskname)
 
+    return runner, execution_order
+
+
+def test_independent_tasks_run_concurrently_before_downstream():
+    """两个独立上游应并发执行，下游应等待二者成功。"""
+    builder = DAGBuilder(FakeConfigLoader(make_concurrent_rules()))
+    dag = builder.build()
+
+    instances = builder.create_batch_instances(
+        dag=dag,
+        data_end=datetime(2026, 9, 9, 10, 0, 0),
+    )
+
+    runner, execution_order = make_concurrent_runner()
     executor = DAGExecutor(
         dag=dag,
         runner=runner,

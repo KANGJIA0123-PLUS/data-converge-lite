@@ -61,33 +61,7 @@ class StateStore:
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.execute("PRAGMA synchronous=FULL")
             if self._create:
-                self._conn.executescript("""
-                    CREATE TABLE IF NOT EXISTS metadata (
-                        key TEXT PRIMARY KEY, value TEXT NOT NULL
-                    );
-                    CREATE TABLE IF NOT EXISTS schedule_cursors (
-                        taskname TEXT PRIMARY KEY, next_fire_time TEXT NOT NULL
-                    );
-                    CREATE TABLE IF NOT EXISTS task_instances (
-                        instance_id TEXT PRIMARY KEY,
-                        taskname TEXT NOT NULL,
-                        scheduled_time TEXT NOT NULL,
-                        data_start TEXT NOT NULL,
-                        data_end TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        attempts INTEGER NOT NULL DEFAULT 0,
-                        retryable INTEGER NOT NULL DEFAULT 0,
-                        next_retry_at TEXT,
-                        started_at TEXT,
-                        finished_at TEXT,
-                        error TEXT,
-                        query_id TEXT,
-                        resolution_note TEXT,
-                        resolved_at TEXT
-                    );
-                    CREATE INDEX IF NOT EXISTS task_instances_status
-                        ON task_instances(status, data_end);
-                """)
+                self._create_ledger_schema()
             # An empty or unrelated database must not silently become a new ledger.
             self._conn.execute("SELECT key, value FROM metadata LIMIT 1").fetchall()
             self._conn.execute("SELECT instance_id FROM task_instances LIMIT 1").fetchall()
@@ -103,6 +77,36 @@ class StateStore:
         except BaseException:
             self.close()
             raise
+
+    def _create_ledger_schema(self) -> None:
+        """Create the base ledger only during explicit state initialization."""
+        self._conn.executescript("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY, value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS schedule_cursors (
+                taskname TEXT PRIMARY KEY, next_fire_time TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS task_instances (
+                instance_id TEXT PRIMARY KEY,
+                taskname TEXT NOT NULL,
+                scheduled_time TEXT NOT NULL,
+                data_start TEXT NOT NULL,
+                data_end TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                retryable INTEGER NOT NULL DEFAULT 0,
+                next_retry_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                error TEXT,
+                query_id TEXT,
+                resolution_note TEXT,
+                resolved_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS task_instances_status
+                ON task_instances(status, data_end);
+        """)
 
     def _connection(self, *, write: bool = False) -> sqlite3.Connection:
         if write and self._lock_file is None:

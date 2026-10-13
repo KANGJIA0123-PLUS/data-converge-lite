@@ -21,11 +21,7 @@ BIN = ROOT / "Services/Package/images/bin"
 BUILD = ROOT / "Services/build_framework/scripts/build.sh"
 
 
-@pytest.fixture
-def runtime(tmp_path):
-    home = tmp_path / "service home"
-    bin_dir = home / "bin"
-    shutil.copytree(BIN, bin_dir)
+def write_platform_boundary(bin_dir):
     # The company init_env loads /etc/profile and writes to a platform log path.
     # Keep the launcher real and replace only that external platform boundary.
     (bin_dir / "function.sh").write_text(
@@ -40,7 +36,9 @@ def runtime(tmp_path):
         'service_status_summary() { printf "status:%s\\n" "$1" >> "$PLATFORM_INIT_RECORD"; }\n'
         'check_result() { return "$1"; }\n'
     )
-    (bin_dir / "py").mkdir()
+
+
+def write_capture_application(home):
     src = home / "lib/data-converge/src/data_converge"
     src.mkdir(parents=True)
     (src / "__init__.py").write_text("")
@@ -57,6 +55,16 @@ def runtime(tmp_path):
         "Path(os.environ['CAPTURE_FILE']).write_text(json.dumps(data))\n"
         "sys.exit(int(os.environ.get('APP_EXIT_CODE', '0')))\n"
     )
+
+
+@pytest.fixture
+def runtime(tmp_path):
+    home = tmp_path / "service home"
+    bin_dir = home / "bin"
+    shutil.copytree(BIN, bin_dir)
+    write_platform_boundary(bin_dir)
+    (bin_dir / "py").mkdir()
+    write_capture_application(home)
     config = home / "lib/data-converge/resources/config/app config.yaml"
     config.parent.mkdir(parents=True)
     config.write_text("runtime: {}\n")

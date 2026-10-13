@@ -78,6 +78,111 @@ def _validate_key_file(path):
     _load_key_bytes({}, raw)
 
 
+def _parse_cipher(raw, cipher_structure, vector_size):
+    if len(raw) < cipher_structure.CIPHER_HEADER_LEN + GCM_TAG_BYTES:
+        raise ValueError("REDIS_PSM_CIPHER_INVALID") from None
+    value = cipher_structure(raw)
+    if (value.version != cipher_structure.VERSION
+            or len(value.i_vector) != vector_size
+            or len(value.cipher_text) < GCM_TAG_BYTES):
+        raise ValueError("REDIS_PSM_CIPHER_INVALID") from None
+    return value
+
+
+def _make_decryptor_type(aes, psm_decryptor, psm_encryptor, cipher_structure):
+    class RedisKeyDecryptor(psm_decryptor):
+        load_key_bytes = staticmethod(_load_key_bytes)
+
+        def get_raw_shared_key(self, key_id):
+            shared_key = self.get_shared_key(key_id)
+            if not shared_key.is_encrypt:
+                return shared_key.get_material_bytes()
+            value = _parse_cipher(shared_key.get_material_bytes(), cipher_structure, psm_encryptor.I_VECTOR_SIZE)
+            root_key = self.get_root_key(value.key_id)
+            root_material = self.get_xor_hex_string(root_key.get_material_bytes(), root_key.material_len)
+            return self.pbkdf2_and_decrypt(
+                root_material, root_key.key_len, bytes(value.cipher_text),
+                value.i_vector, root_key, root_key.get_algo_type())
+
+        @staticmethod
+        def decrypt_cipher(key, i_vector, data, algo_type):
+            if (algo_type.value["id"] != 4 or len(i_vector) != psm_encryptor.I_VECTOR_SIZE
+                    or len(data) < GCM_TAG_BYTES):
+                raise ValueError("REDIS_PSM_CIPHER_INVALID") from None
+            cipher = aes.new(key, aes.MODE_GCM, nonce=bytes(i_vector))
+            return cipher.decrypt_and_verify(bytes(data[:-GCM_TAG_BYTES]), bytes(data[-GCM_TAG_BYTES:]))
+
+        def decrypt(self, cipher_text):
+            if not self.is_init:
+                raise ValueError("REDIS_PSM_NOT_INITIALIZED") from None
+            value = _parse_cipher(self.parse_hex_string(cipher_text), cipher_structure, psm_encryptor.I_VECTOR_SIZE)
+            shared_key = self.get_shared_key(value.key_id)
+            material = self.get_hex_string(self.get_raw_shared_key(value.key_id))
+            plaintext = self.pbkdf2_and_decrypt(
+                material, shared_key.key_len, bytes(value.cipher_text),
+                value.i_vector, shared_key, shared_key.get_algo_type())
+            # The Redis peer pads its plaintext with zero bytes to 16 bytes.
+            # Work-key material above remains binary and must not be stripped.
+            return bytes(plaintext).rstrip(b"\0").decode("utf-8")
+
+    return RedisKeyDecryptor
+
+
+def _make_encryptor_type(aes, psm_decryptor, psm_encryptor, cipher_structure, random_bytes, redis_decryptor):
+    class RedisKeyEncryptor(psm_encryptor):
+        def __init__(self):
+            super().__init__()
+            self.decryptor = redis_decryptor()
+
+        def encrypt(self, plaintext):
+            key_id = self.decryptor.get_first_shared_key_id()
+            shared_key = self.decryptor.get_shared_key(key_id)
+            material = self.decryptor.get_hex_string(self.decryptor.get_raw_shared_key(key_id))
+            nonce = random_bytes(self.I_VECTOR_SIZE)
+            if len(nonce) != self.I_VECTOR_SIZE or shared_key.get_algo_type().value["id"] != 4:
+                raise ValueError("REDIS_PSM_CIPHER_INVALID") from None
+            key = self.decryptor.generate_pbkdf2_hashed_bytes(
+                material, shared_key.get_salt(), shared_key.key_len,
+                shared_key.iteration, shared_key.kdf_type)
+            cipher = aes.new(key, aes.MODE_GCM, nonce=bytes(nonce))
+            ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
+            value = (cipher_structure.Builder().update_key_id(key_id)
+                     .update_i_vector(nonce).update_cipher_text(ciphertext + tag))
+            return psm_decryptor.get_hex_string(cipher_structure.marshal(value)).upper()
+
+    return RedisKeyEncryptor
+
+
+class _Codec:
+    def __init__(self, encryptor, cipher_structure):
+        self._encryptor = encryptor
+        self._cipher_structure = cipher_structure
+
+    def encrypt(self, plaintext):
+        try:
+            if (not isinstance(plaintext, str) or "\0" in plaintext
+                    or not 0 < len(plaintext.encode("utf-8")) <= MAX_TEXT_BYTES):
+                raise ValueError("invalid plaintext")
+            return self._encryptor.encrypt(plaintext)
+        except Exception:
+            raise ValueError("REDIS_PSM_ENCRYPT_FAILED") from None
+
+    def decrypt(self, ciphertext):
+        try:
+            limit = 2 * (MAX_TEXT_BYTES + self._cipher_structure.CIPHER_HEADER_LEN + GCM_TAG_BYTES + 15)
+            if not isinstance(ciphertext, str) or not 0 < len(ciphertext) <= limit:
+                raise ValueError("invalid ciphertext")
+            ciphertext = ciphertext.strip()
+            if len(ciphertext) % 2 or re.fullmatch(r"[0-9a-fA-F]+", ciphertext) is None:
+                raise ValueError("invalid ciphertext")
+            plaintext = self._encryptor.decryptor.decrypt(ciphertext)
+            if not plaintext or "\0" in plaintext or len(plaintext.encode("utf-8")) > MAX_TEXT_BYTES:
+                raise ValueError("invalid plaintext")
+            return plaintext
+        except Exception:
+            raise ValueError("REDIS_PSM_DECRYPT_FAILED") from None
+
+
 def create_psm_codec(root_key_file: str, work_key_file: str):
     """Initialize once and return encrypt(str)->hex / decrypt(hex)->str methods.
 
@@ -94,100 +199,11 @@ def create_psm_codec(root_key_file: str, work_key_file: str):
         from psf.crypto.psm.structure.cipher_structure_v1 import CipherStructureV1
         from psf.security_api.random_security import gen_random_bytes
 
-        def parse_cipher(raw):
-            if len(raw) < CipherStructureV1.CIPHER_HEADER_LEN + GCM_TAG_BYTES:
-                raise ValueError("REDIS_PSM_CIPHER_INVALID") from None
-            value = CipherStructureV1(raw)
-            if (value.version != CipherStructureV1.VERSION
-                    or len(value.i_vector) != PsmKeyEncryptor.I_VECTOR_SIZE
-                    or len(value.cipher_text) < GCM_TAG_BYTES):
-                raise ValueError("REDIS_PSM_CIPHER_INVALID") from None
-            return value
-
-        class RedisKeyDecryptor(PsmKeyDecryptor):
-            load_key_bytes = staticmethod(_load_key_bytes)
-
-            def get_raw_shared_key(self, key_id):
-                shared_key = self.get_shared_key(key_id)
-                if not shared_key.is_encrypt:
-                    return shared_key.get_material_bytes()
-                value = parse_cipher(shared_key.get_material_bytes())
-                root_key = self.get_root_key(value.key_id)
-                root_material = self.get_xor_hex_string(root_key.get_material_bytes(), root_key.material_len)
-                return self.pbkdf2_and_decrypt(
-                    root_material, root_key.key_len, bytes(value.cipher_text),
-                    value.i_vector, root_key, root_key.get_algo_type())
-
-            @staticmethod
-            def decrypt_cipher(key, i_vector, data, algo_type):
-                if (algo_type.value["id"] != 4 or len(i_vector) != PsmKeyEncryptor.I_VECTOR_SIZE
-                        or len(data) < GCM_TAG_BYTES):
-                    raise ValueError("REDIS_PSM_CIPHER_INVALID") from None
-                cipher = AES.new(key, AES.MODE_GCM, nonce=bytes(i_vector))
-                return cipher.decrypt_and_verify(bytes(data[:-GCM_TAG_BYTES]), bytes(data[-GCM_TAG_BYTES:]))
-
-            def decrypt(self, cipher_text):
-                if not self.is_init:
-                    raise ValueError("REDIS_PSM_NOT_INITIALIZED") from None
-                value = parse_cipher(self.parse_hex_string(cipher_text))
-                shared_key = self.get_shared_key(value.key_id)
-                material = self.get_hex_string(self.get_raw_shared_key(value.key_id))
-                plaintext = self.pbkdf2_and_decrypt(
-                    material, shared_key.key_len, bytes(value.cipher_text),
-                    value.i_vector, shared_key, shared_key.get_algo_type())
-                # The Redis peer pads its plaintext with zero bytes to 16 bytes.
-                # Work-key material above remains binary and must not be stripped.
-                return bytes(plaintext).rstrip(b"\0").decode("utf-8")
-
-        class RedisKeyEncryptor(PsmKeyEncryptor):
-            def __init__(self):
-                super().__init__()
-                self.decryptor = RedisKeyDecryptor()
-
-            def encrypt(self, plaintext):
-                key_id = self.decryptor.get_first_shared_key_id()
-                shared_key = self.decryptor.get_shared_key(key_id)
-                material = self.decryptor.get_hex_string(self.decryptor.get_raw_shared_key(key_id))
-                nonce = gen_random_bytes(self.I_VECTOR_SIZE)
-                if len(nonce) != self.I_VECTOR_SIZE or shared_key.get_algo_type().value["id"] != 4:
-                    raise ValueError("REDIS_PSM_CIPHER_INVALID") from None
-                key = self.decryptor.generate_pbkdf2_hashed_bytes(
-                    material, shared_key.get_salt(), shared_key.key_len,
-                    shared_key.iteration, shared_key.kdf_type)
-                cipher = AES.new(key, AES.MODE_GCM, nonce=bytes(nonce))
-                ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
-                value = (CipherStructureV1.Builder().update_key_id(key_id)
-                         .update_i_vector(nonce).update_cipher_text(ciphertext + tag))
-                return PsmKeyDecryptor.get_hex_string(CipherStructureV1.marshal(value)).upper()
-
-        encryptor = RedisKeyEncryptor()
+        decryptor_type = _make_decryptor_type(AES, PsmKeyDecryptor, PsmKeyEncryptor, CipherStructureV1)
+        encryptor_type = _make_encryptor_type(
+            AES, PsmKeyDecryptor, PsmKeyEncryptor, CipherStructureV1, gen_random_bytes, decryptor_type)
+        encryptor = encryptor_type()
         encryptor.init_encryptor(root_key_file, work_key_file)
-
-        class Codec:
-            def encrypt(self, plaintext):
-                try:
-                    if (not isinstance(plaintext, str) or "\0" in plaintext
-                            or not 0 < len(plaintext.encode("utf-8")) <= MAX_TEXT_BYTES):
-                        raise ValueError("invalid plaintext")
-                    return encryptor.encrypt(plaintext)
-                except Exception:
-                    raise ValueError("REDIS_PSM_ENCRYPT_FAILED") from None
-
-            def decrypt(self, ciphertext):
-                try:
-                    limit = 2 * (MAX_TEXT_BYTES + CipherStructureV1.CIPHER_HEADER_LEN + GCM_TAG_BYTES + 15)
-                    if not isinstance(ciphertext, str) or not 0 < len(ciphertext) <= limit:
-                        raise ValueError("invalid ciphertext")
-                    ciphertext = ciphertext.strip()
-                    if len(ciphertext) % 2 or re.fullmatch(r"[0-9a-fA-F]+", ciphertext) is None:
-                        raise ValueError("invalid ciphertext")
-                    plaintext = encryptor.decryptor.decrypt(ciphertext)
-                    if not plaintext or "\0" in plaintext or len(plaintext.encode("utf-8")) > MAX_TEXT_BYTES:
-                        raise ValueError("invalid plaintext")
-                    return plaintext
-                except Exception:
-                    raise ValueError("REDIS_PSM_DECRYPT_FAILED") from None
-
-        return Codec()
+        return _Codec(encryptor, CipherStructureV1)
     except Exception:
         raise ValueError("REDIS_PSM_INIT_FAILED") from None

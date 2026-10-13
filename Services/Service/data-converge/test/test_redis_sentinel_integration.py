@@ -156,14 +156,7 @@ class RespPeer:
             return self.condition.wait_for(lambda: not self.clients, timeout=2)
 
 
-@pytest.mark.parametrize("failure", ["readonly", "disconnect"])
-@pytest.mark.parametrize("account_config,selected_user", [
-    ({}, "admin"), ({"username": "admin"}, "admin"), ({"username": "ossdbuser"}, "ossdbuser"),
-])
-def test_real_sentinel_recovers_processing_after_master_failover(
-        tmp_path, monkeypatch, failure, account_config, selected_user):
-    from data_converge.dwd_ready.config import load_ready_config
-    from data_converge.dwd_ready import redis_credentials as credentials_module
+def patch_private_sdks(monkeypatch):
     from data_converge.dwd_ready import redis_source as source_module
 
     # Replace only private SDK boundaries; config, PMS selection and redis-py remain real.
@@ -177,13 +170,19 @@ def test_real_sentinel_recovers_processing_after_master_failover(
     nonce_module.gen_random_hex_string = nonce
     monkeypatch.setitem(sys.modules, "psf.security_api.random_security", nonce_module)
     monkeypatch.setattr(source_module, "create_psm_codec", lambda root, work: SyntheticCodec())
+    return nonce_calls
 
-    lists = {QUEUE: [MESSAGE], PROCESSING: []}
-    state = {"old_master_demoted": False, "master": None, "discoveries": 0}
 
-    def data_command(command, *, old_master):
+class FailoverScenario:
+    def __init__(self, failure):
+        self.failure = failure
+        self.lists = {QUEUE: [MESSAGE], PROCESSING: []}
+        self.state = {"old_master_demoted": False, "master": None, "discoveries": 0}
+
+    def data_command(self, command, *, old_master):
+        lists, state = self.lists, self.state
         if command[0] == b"LREM" and old_master and state["old_master_demoted"]:
-            return b"-READONLY previous master demoted\r\n" if failure == "readonly" else DROP_CONNECTION
+            return b"-READONLY previous master demoted\r\n" if self.failure == "readonly" else DROP_CONNECTION
         if command[0] == b"LINDEX":
             assert command == [b"LINDEX", PROCESSING, b"-1"]
             return resp(lists[PROCESSING][-1] if lists[PROCESSING] else None)
@@ -201,54 +200,80 @@ def test_real_sentinel_recovers_processing_after_master_failover(
             return resp(int(found))
         raise AssertionError("Unexpected data command")
 
-    def sentinel_command(command):
+    def sentinel_command(self, command):
         assert command == [b"SENTINEL", b"MASTERS"]
-        state["discoveries"] += 1
-        host, port = state["master"]
+        self.state["discoveries"] += 1
+        host, port = self.state["master"]
         return resp([[b"name", b"redis-cluster", b"ip", host.encode(), b"port", str(port).encode(),
                       b"flags", b"master", b"num-other-sentinels", b"0"]])
 
-    with ExitStack() as stack:
-        old_master = stack.enter_context(RespPeer("data", lambda cmd: data_command(cmd, old_master=True)))
-        new_master = stack.enter_context(RespPeer("data", lambda cmd: data_command(cmd, old_master=False)))
-        sentinel = stack.enter_context(RespPeer("sentinel", sentinel_command))
-        state["master"] = old_master.address
-        host, port = sentinel.address
-        document = base64.b64encode(json.dumps({"paasconfig": [{
-            "name": "synthetic-redis", "IPS": f"{host}:{port}", "info": [
-                {"user": name, "password": PASSWORD if name == selected_user else "wrong-account-password"}
-                for name in ("ossdbuser", "admin")
-            ],
-        }]}).encode()).decode()
-        (tmp_path / "synthetic-pwd").write_bytes(b"synthetic-ciphertext")
-        monkeypatch.setattr(credentials_module, "run_decryptor", lambda *_: document)
-        raw = {"enabled": True, "queue_key": QUEUE.decode(),
-            "block_seconds": 1, "redis": {"mode": "sentinel", "db": 5, "service_name": "redis-cluster",
-                **account_config, "password_file": "synthetic-pwd", "paas_name": None,
-                "root_key_file": "root.key", "work_key_file": "shared.key", "ssl": False,
-                "ssl_verify": True, "socket_timeout": 2, "socket_connect_timeout": 2, "kms_timeout_seconds": 30}}
-        config = load_ready_config({"dwd_ready": raw}, tmp_path)
-        source = source_module.create_source(config)
-        try:
-            assert source.receive(block=True) == MESSAGE
-            assert lists == {QUEUE: [], PROCESSING: [MESSAGE]}
-            assert state["discoveries"] == 1
-            assert [cmd[0] for cmd in old_master.commands[:2]] == [b"AUTH", b"AUTH"]
-            assert old_master.commands[2] == [b"SELECT", b"5"]
-            assert not any(cmd[0] == b"SELECT" for cmd in sentinel.commands)
 
-            state.update(old_master_demoted=True, master=new_master.address)
-            with pytest.raises(source_module.RedisSignalError, match="DWD_READY_REDIS_ACK_FAILED"):
-                source.ack(MESSAGE)
-            # The failing write has no automatic retry; the durable entry stays.
-            assert len([cmd for cmd in old_master.commands if cmd[0] == b"LREM"]) == 1
-            assert new_master.commands == [] and lists[PROCESSING] == [MESSAGE]
-            assert source.receive(block=False) == MESSAGE
-            assert state["discoveries"] == 2
-            assert new_master.commands[2:4] == [[b"SELECT", b"5"], [b"LINDEX", PROCESSING, b"-1"]]
-            assert source.ack(MESSAGE) == 1
-            assert source.receive(block=False) is None
-            assert lists == {QUEUE: [], PROCESSING: []}
+def create_sentinel_source(tmp_path, monkeypatch, address, account_config, selected_user):
+    from data_converge.dwd_ready.config import load_ready_config
+    from data_converge.dwd_ready import redis_credentials as credentials_module
+    from data_converge.dwd_ready import redis_source as source_module
+
+    host, port = address
+    document = base64.b64encode(json.dumps({"paasconfig": [{
+        "name": "synthetic-redis", "IPS": f"{host}:{port}", "info": [
+            {"user": name, "password": PASSWORD if name == selected_user else "wrong-account-password"}
+            for name in ("ossdbuser", "admin")
+        ],
+    }]}).encode()).decode()
+    (tmp_path / "synthetic-pwd").write_bytes(b"synthetic-ciphertext")
+    monkeypatch.setattr(credentials_module, "run_decryptor", lambda *_: document)
+    raw = {"enabled": True, "queue_key": QUEUE.decode(),
+        "block_seconds": 1, "redis": {"mode": "sentinel", "db": 5, "service_name": "redis-cluster",
+            **account_config, "password_file": "synthetic-pwd", "paas_name": None,
+            "root_key_file": "root.key", "work_key_file": "shared.key", "ssl": False,
+            "ssl_verify": True, "socket_timeout": 2, "socket_connect_timeout": 2, "kms_timeout_seconds": 30}}
+    config = load_ready_config({"dwd_ready": raw}, tmp_path)
+    return source_module.create_source(config)
+
+
+def assert_initial_delivery(source, old_master, sentinel, scenario):
+    assert source.receive(block=True) == MESSAGE
+    assert scenario.lists == {QUEUE: [], PROCESSING: [MESSAGE]}
+    assert scenario.state["discoveries"] == 1
+    assert [cmd[0] for cmd in old_master.commands[:2]] == [b"AUTH", b"AUTH"]
+    assert old_master.commands[2] == [b"SELECT", b"5"]
+    assert not any(cmd[0] == b"SELECT" for cmd in sentinel.commands)
+
+
+def assert_failover_recovery(source, old_master, new_master, scenario):
+    from data_converge.dwd_ready import redis_source as source_module
+
+    scenario.state.update(old_master_demoted=True, master=new_master.address)
+    with pytest.raises(source_module.RedisSignalError, match="DWD_READY_REDIS_ACK_FAILED"):
+        source.ack(MESSAGE)
+    # The failing write has no automatic retry; the durable entry stays.
+    assert len([cmd for cmd in old_master.commands if cmd[0] == b"LREM"]) == 1
+    assert new_master.commands == [] and scenario.lists[PROCESSING] == [MESSAGE]
+    assert source.receive(block=False) == MESSAGE
+    assert scenario.state["discoveries"] == 2
+    assert new_master.commands[2:4] == [[b"SELECT", b"5"], [b"LINDEX", PROCESSING, b"-1"]]
+    assert source.ack(MESSAGE) == 1
+    assert source.receive(block=False) is None
+    assert scenario.lists == {QUEUE: [], PROCESSING: []}
+
+
+@pytest.mark.parametrize("failure", ["readonly", "disconnect"])
+@pytest.mark.parametrize("account_config,selected_user", [
+    ({}, "admin"), ({"username": "admin"}, "admin"), ({"username": "ossdbuser"}, "ossdbuser"),
+])
+def test_real_sentinel_recovers_processing_after_master_failover(
+        tmp_path, monkeypatch, failure, account_config, selected_user):
+    nonce_calls = patch_private_sdks(monkeypatch)
+    scenario = FailoverScenario(failure)
+    with ExitStack() as stack:
+        old_master = stack.enter_context(RespPeer("data", lambda cmd: scenario.data_command(cmd, old_master=True)))
+        new_master = stack.enter_context(RespPeer("data", lambda cmd: scenario.data_command(cmd, old_master=False)))
+        sentinel = stack.enter_context(RespPeer("sentinel", scenario.sentinel_command))
+        scenario.state["master"] = old_master.address
+        source = create_sentinel_source(tmp_path, monkeypatch, sentinel.address, account_config, selected_user)
+        try:
+            assert_initial_delivery(source, old_master, sentinel, scenario)
+            assert_failover_recovery(source, old_master, new_master, scenario)
             all_nonces = sentinel.nonces + old_master.nonces + new_master.nonces
             assert len(all_nonces) == len(set(all_nonces)) == 3
             assert nonce_calls == [32, 32, 32]

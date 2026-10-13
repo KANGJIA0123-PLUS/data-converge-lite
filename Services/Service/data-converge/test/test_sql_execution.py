@@ -6,6 +6,7 @@ import http.client
 import io
 import json
 import socket
+import socketserver
 import ssl
 import urllib.error
 import urllib.parse
@@ -323,24 +324,8 @@ def test_connection_error_after_response_headers_is_never_retried(monkeypatch):
     assert caught.value.outcome_unknown and not caught.value.retryable
 
 
-@pytest.mark.parametrize("phase", ["headers", "chunk_size", "body"])
-@pytest.mark.parametrize("secure", [False, True])
-def test_absolute_deadline_interrupts_continuous_slow_http_bytes(phase, secure, request, monkeypatch):
-    """Every byte arrives before the idle timeout, but total time must stay bounded."""
-    import socketserver
-    import threading
-    import time
-
-    stopped = threading.Event()
-    timers, real_timer = [], threading.Timer
-
-    def make_timer(*args, **kwargs):
-        timer = real_timer(*args, **kwargs)
-        timers.append(timer)
-        return timer
-
-    monkeypatch.setattr(threading, "Timer", make_timer)
-
+def make_slow_response_handler(phase, stopped):
+    """Drip bytes during one HTTP phase until the test requests cleanup."""
     class SlowResponse(socketserver.StreamRequestHandler):
         def handle(self):
             while self.rfile.readline().strip():
@@ -361,7 +346,27 @@ def test_absolute_deadline_interrupts_continuous_slow_http_bytes(phase, secure, 
             except OSError:
                 pass
 
-    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), SlowResponse) as server:
+    return SlowResponse
+
+
+@pytest.mark.parametrize("phase", ["headers", "chunk_size", "body"])
+@pytest.mark.parametrize("secure", [False, True])
+def test_absolute_deadline_interrupts_continuous_slow_http_bytes(phase, secure, request, monkeypatch):
+    """Every byte arrives before the idle timeout, but total time must stay bounded."""
+    import threading
+    import time
+
+    stopped = threading.Event()
+    timers, real_timer = [], threading.Timer
+
+    def make_timer(*args, **kwargs):
+        timer = real_timer(*args, **kwargs)
+        timers.append(timer)
+        return timer
+
+    monkeypatch.setattr(threading, "Timer", make_timer)
+    handler = make_slow_response_handler(phase, stopped)
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler) as server:
         if secure:
             context = request.getfixturevalue("tls_server_context")
             server.socket = context.wrap_socket(server.socket, server_side=True)

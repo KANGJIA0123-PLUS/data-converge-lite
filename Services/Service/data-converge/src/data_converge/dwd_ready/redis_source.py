@@ -82,6 +82,36 @@ def bind_sentinel_identity(store, identity):
         store.set_meta('dwd_redis_sentinel_binding', identity)
 
 
+def _connection_options(connection, major):
+    from redis.backoff import NoBackoff
+    from redis.retry import Retry
+
+    options = {name: connection[name] for name in ("ssl", "socket_timeout", "socket_connect_timeout")}
+    options.update(retry=Retry(NoBackoff(), 0),
+                   retry_on_error=[], decode_responses=False, health_check_interval=0,
+                   max_connections=1)
+    if major == 5:
+        options["retry_on_timeout"] = False
+    if connection["ssl"]:
+        options.update(ssl_cert_reqs="required" if connection["ssl_verify"] else "none",
+                       ssl_check_hostname=connection["ssl_verify"])
+    return options
+
+
+def _add_direct_credentials(connection, options):
+    password = os.environ.get(connection["password_env"])
+    if not isinstance(password, str) or not password or '\0' in password:
+        raise ValueError
+    options.update(password=password, **{name: connection[name] for name in ("host", "port", "username")})
+
+
+def _close_startup_clients(client, sentinel_clients):
+    if client is not None:
+        _close_client(client)
+    for sentinel_client in sentinel_clients:
+        _close_client(sentinel_client)
+
+
 def create_source(ready_config: dict) -> RedisSignalSource:
     """Read credentials only here; disable implicit command retry in redis-py 5/6."""
     client = None
@@ -91,22 +121,12 @@ def create_source(ready_config: dict) -> RedisSignalSource:
         if ready_config.get("enabled") is not True:
             raise ValueError
         import redis
-        from redis.backoff import NoBackoff
-        from redis.retry import Retry
 
         major = int(redis.__version__.split(".", 1)[0])
         if major not in (5, 6):
             raise ValueError
         connection = ready_config["redis"]
-        options = {name: connection[name] for name in ("ssl", "socket_timeout", "socket_connect_timeout")}
-        options.update(retry=Retry(NoBackoff(), 0),
-                       retry_on_error=[], decode_responses=False, health_check_interval=0,
-                       max_connections=1)
-        if major == 5:
-            options["retry_on_timeout"] = False
-        if connection["ssl"]:
-            options.update(ssl_cert_reqs="required" if connection["ssl_verify"] else "none",
-                           ssl_check_hostname=connection["ssl_verify"])
+        options = _connection_options(connection, major)
         if connection["mode"] == "sentinel":
             from redis.sentinel import Sentinel
 
@@ -123,10 +143,7 @@ def create_source(ready_config: dict) -> RedisSignalSource:
             client = manager.master_for(connection['service_name'], db=connection['db'])
             return RedisSignalSource(client, ready_config, sentinel_clients=sentinel_clients,
                                      identity=sentinel_identity(connection, credentials))
-        password = os.environ.get(connection["password_env"])
-        if not isinstance(password, str) or not password or '\0' in password:
-            raise ValueError
-        options.update(password=password, **{name: connection[name] for name in ("host", "port", "username")})
+        _add_direct_credentials(connection, options)
         if connection["mode"] == "cluster":
             from redis.cluster import REDIS_ALLOWED_KEYS
             if connection["ssl"] and connection["ssl_verify"] and "ssl_check_hostname" not in REDIS_ALLOWED_KEYS:
@@ -143,8 +160,5 @@ def create_source(ready_config: dict) -> RedisSignalSource:
             client = redis.Redis(db=connection["db"], **options)
         return RedisSignalSource(client, ready_config)
     except Exception:
-        if client is not None:
-            _close_client(client)
-        for sentinel_client in sentinel_clients:
-            _close_client(sentinel_client)
+        _close_startup_clients(client, sentinel_clients)
         raise RedisSignalError(failure_code) from None

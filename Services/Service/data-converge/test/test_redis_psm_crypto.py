@@ -27,93 +27,97 @@ def key_block(identity=202, material=b"synthetic work material", key_len=128, en
     return bytes(block)
 
 
+class Algorithm(Enum):
+    AES_GCM_LONG = {"id": 4}
+
+
+class Cipher:
+    VERSION = 1
+    CIPHER_HEADER_LEN = 21
+
+    def __init__(self, raw):
+        self.version = raw[0]
+        self.key_id = int.from_bytes(raw[1:5], "big")
+        self.i_vector = bytes(raw[5:21])
+        self.cipher_text = bytearray(raw[21:])
+
+    class Builder:
+        def update_key_id(self, value):
+            self.key_id = value
+            return self
+
+        def update_i_vector(self, value):
+            self.i_vector = value
+            return self
+
+        def update_cipher_text(self, value):
+            self.cipher_text = value
+            return self
+
+    @staticmethod
+    def marshal(builder):
+        return b"\x01" + builder.key_id.to_bytes(4, "big") + builder.i_vector + builder.cipher_text
+
+
+class Decryptor:
+    def __init__(self):
+        self.is_init = False
+        self.root_key_dict = {}
+        self.shared_key_dict = {}
+
+    def init_decryptor(self, root_path, work_path):
+        for path, target in ((root_path, self.root_key_dict), (work_path, self.shared_key_dict)):
+            with open(path, "rb") as stream:
+                self.load_key_bytes(target, stream.read())
+        self.is_init = True
+
+    def get_shared_key(self, identity):
+        return self.shared_key_dict[identity]
+
+    def get_root_key(self, identity):
+        return self.root_key_dict[identity]
+
+    def get_first_shared_key_id(self):
+        return next(iter(self.shared_key_dict))
+
+    @staticmethod
+    def get_hex_string(value):
+        return bytes(value).hex()
+
+    @staticmethod
+    def parse_hex_string(value):
+        return bytearray.fromhex(value)
+
+    @staticmethod
+    def copy_of_range(value, start, end):
+        return bytearray(value[start:end])
+
+    @staticmethod
+    def get_xor_hex_string(value, length):
+        return bytes(byte ^ 0xA5 for byte in value[:length]).hex()
+
+    @staticmethod
+    def generate_pbkdf2_hashed_bytes(material, salt, key_len, iteration, kdf_type):
+        if kdf_type != 1:
+            raise ValueError("synthetic private SDK exception")
+        return hashlib.pbkdf2_hmac("sha256", material.encode(), salt, iteration, key_len // 8)
+
+    def pbkdf2_and_decrypt(self, material, key_len, data, nonce, structure, algorithm):
+        key = self.generate_pbkdf2_hashed_bytes(material, structure.get_salt(), key_len,
+                                              structure.iteration, structure.kdf_type)
+        return self.decrypt_cipher(key, nonce, data, algorithm)
+
+
+class Encryptor:
+    I_VECTOR_SIZE = 16
+
+    def init_encryptor(self, root_path, work_path):
+        self.decryptor.init_decryptor(root_path, work_path)
+
+
 @pytest.fixture
 def sdk(monkeypatch):
     AES = pytest.importorskip("Crypto.Cipher.AES")
-
-    class Algorithm(Enum):
-        AES_GCM_LONG = {"id": 4}
-
-    class Cipher:
-        VERSION = 1
-        CIPHER_HEADER_LEN = 21
-
-        def __init__(self, raw):
-            self.version = raw[0]
-            self.key_id = int.from_bytes(raw[1:5], "big")
-            self.i_vector = bytes(raw[5:21])
-            self.cipher_text = bytearray(raw[21:])
-
-        class Builder:
-            def update_key_id(self, value):
-                self.key_id = value
-                return self
-
-            def update_i_vector(self, value):
-                self.i_vector = value
-                return self
-
-            def update_cipher_text(self, value):
-                self.cipher_text = value
-                return self
-
-        @staticmethod
-        def marshal(builder):
-            return b"\x01" + builder.key_id.to_bytes(4, "big") + builder.i_vector + builder.cipher_text
-
-    class Decryptor:
-        def __init__(self):
-            self.is_init = False
-            self.root_key_dict = {}
-            self.shared_key_dict = {}
-
-        def init_decryptor(self, root_path, work_path):
-            for path, target in ((root_path, self.root_key_dict), (work_path, self.shared_key_dict)):
-                with open(path, "rb") as stream:
-                    self.load_key_bytes(target, stream.read())
-            self.is_init = True
-
-        def get_shared_key(self, identity):
-            return self.shared_key_dict[identity]
-
-        def get_root_key(self, identity):
-            return self.root_key_dict[identity]
-
-        def get_first_shared_key_id(self):
-            return next(iter(self.shared_key_dict))
-
-        @staticmethod
-        def get_hex_string(value):
-            return bytes(value).hex()
-
-        @staticmethod
-        def parse_hex_string(value):
-            return bytearray.fromhex(value)
-
-        @staticmethod
-        def copy_of_range(value, start, end):
-            return bytearray(value[start:end])
-
-        @staticmethod
-        def get_xor_hex_string(value, length):
-            return bytes(byte ^ 0xA5 for byte in value[:length]).hex()
-
-        @staticmethod
-        def generate_pbkdf2_hashed_bytes(material, salt, key_len, iteration, kdf_type):
-            if kdf_type != 1:
-                raise ValueError("synthetic private SDK exception")
-            return hashlib.pbkdf2_hmac("sha256", material.encode(), salt, iteration, key_len // 8)
-
-        def pbkdf2_and_decrypt(self, material, key_len, data, nonce, structure, algorithm):
-            key = self.generate_pbkdf2_hashed_bytes(material, structure.get_salt(), key_len,
-                                                  structure.iteration, structure.kdf_type)
-            return self.decrypt_cipher(key, nonce, data, algorithm)
-
-    class Encryptor:
-        I_VECTOR_SIZE = 16
-
-        def init_encryptor(self, root_path, work_path):
-            self.decryptor.init_decryptor(root_path, work_path)
 
     exports = {
         "psf.crypto.psm.psm_key_decryptor": {"PsmKeyDecryptor": Decryptor},

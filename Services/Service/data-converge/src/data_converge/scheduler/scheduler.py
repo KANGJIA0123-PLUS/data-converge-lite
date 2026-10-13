@@ -127,11 +127,14 @@ class TaskScheduler:
 
         report = self.dag_executor.execute(instances, now=actual_now,
                                            should_stop=lambda: self._stop_requested)
+        self._log_group_result(normalized_time, report)
+        return report
 
+    def _log_group_result(self, scheduled_time: datetime, report: ExecutionReport) -> None:
         logger.info(
             "Cron任务组执行结束：scheduled_time=%s, "
             "success=%s, failed=%s, blocked=%s, unknown=%s",
-            normalized_time,
+            scheduled_time,
             [i.taskname for i in report.succeeded],
             [i.taskname for i in report.failed],
             [i.taskname for i in report.blocked],
@@ -146,8 +149,6 @@ class TaskScheduler:
                 instance.instance_id,
                 instance.error,
             )
-
-        return report
 
     def run_task(
         self,

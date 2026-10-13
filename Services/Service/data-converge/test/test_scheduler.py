@@ -101,8 +101,7 @@ def test_register_jobs_is_idempotent_and_returns_a_snapshot():
         scheduler.get_jobs()[0].kwargs["tasknames"] = ("different_task",)
 
 
-def test_same_cron_tasks_execute_as_one_dependency_group():
-    """相同 Cron 的上下游应进入同一批次按依赖执行。"""
+def build_same_cron_scheduler(execution_order):
     rules = make_rules()
 
     # 让小时任务和5分钟任务使用相同Cron、相同窗口类型，
@@ -112,8 +111,6 @@ def test_same_cron_tasks_execute_as_one_dependency_group():
 
     builder = DAGBuilder(FakeConfigLoader(rules))
     dag = builder.build()
-
-    execution_order = []
 
     def runner(instance):
         execution_order.append(instance.taskname)
@@ -130,6 +127,13 @@ def test_same_cron_tasks_execute_as_one_dependency_group():
         dag_executor=executor,
         timezone="Asia/Shanghai",
     )
+    return scheduler
+
+
+def test_same_cron_tasks_execute_as_one_dependency_group():
+    """相同 Cron 的上下游应进入同一批次按依赖执行。"""
+    execution_order = []
+    scheduler = build_same_cron_scheduler(execution_order)
 
     scheduler.register_jobs()
 

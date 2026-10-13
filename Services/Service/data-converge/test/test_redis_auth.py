@@ -244,6 +244,32 @@ def read_command(stream):
     return command
 
 
+def serve_reauthenticated_connections(listener, nonces, prefix, select_db, observed, failures):
+    try:
+        for expected_nonce in nonces:
+            peer, _ = listener.accept()
+            with peer, peer.makefile("rb") as stream:
+                peer.settimeout(3)
+                first = read_command(stream)
+                assert first == [b"AUTH", ("<" + expected_nonce).encode()]
+                observed.put(first)
+                token = (SERVER_NONCE + "@" + expected_nonce).encode().hex().encode()
+                peer.sendall(prefix + token + b"\r\n")
+                second = read_command(stream)
+                assert len(second) == 2 and second[0] == b"AUTH" and second[1].startswith(b">")
+                assert PASSWORD.encode() not in second[1]
+                assert bytes.fromhex(second[1][1:].decode()).decode() == expected_nonce + "@" + SERVER_NONCE + "@" + PASSWORD
+                observed.put(second)
+                peer.sendall(b"+OK\r\n")
+                if select_db:
+                    assert read_command(stream) == [b"SELECT", b"5"]
+                    peer.sendall(b"+OK\r\n")
+                assert read_command(stream) == [b"PING"]
+                peer.sendall(b"+PONG\r\n")
+    except BaseException as error:
+        failures.put(error)
+
+
 @pytest.mark.parametrize("prefix", [b"-ERR >", b"->"])
 @pytest.mark.parametrize("select_db", [False, True])
 def test_real_resp_socket_reauthenticates_with_fresh_nonce_on_reconnect(nonce_sdk, prefix, select_db):
@@ -257,33 +283,11 @@ def test_real_resp_socket_reauthenticates_with_fresh_nonce_on_reconnect(nonce_sd
     listener.bind(("127.0.0.1", 0))
     listener.listen(2)
     listener.settimeout(3)
-
-    def serve():
-        try:
-            for expected_nonce in (CLIENT_NONCE, next_nonce):
-                peer, _ = listener.accept()
-                with peer, peer.makefile("rb") as stream:
-                    peer.settimeout(3)
-                    first = read_command(stream)
-                    assert first == [b"AUTH", ("<" + expected_nonce).encode()]
-                    observed.put(first)
-                    token = (SERVER_NONCE + "@" + expected_nonce).encode().hex().encode()
-                    peer.sendall(prefix + token + b"\r\n")
-                    second = read_command(stream)
-                    assert len(second) == 2 and second[0] == b"AUTH" and second[1].startswith(b">")
-                    assert PASSWORD.encode() not in second[1]
-                    assert bytes.fromhex(second[1][1:].decode()).decode() == expected_nonce + "@" + SERVER_NONCE + "@" + PASSWORD
-                    observed.put(second)
-                    peer.sendall(b"+OK\r\n")
-                    if select_db:
-                        assert read_command(stream) == [b"SELECT", b"5"]
-                        peer.sendall(b"+OK\r\n")
-                    assert read_command(stream) == [b"PING"]
-                    peer.sendall(b"+PONG\r\n")
-        except BaseException as error:
-            failures.put(error)
-
-    thread = threading.Thread(target=serve, daemon=True)
+    thread = threading.Thread(
+        target=serve_reauthenticated_connections,
+        args=(listener, (CLIENT_NONCE, next_nonce), prefix, select_db, observed, failures),
+        daemon=True,
+    )
     thread.start()
     connection = Connection(host="127.0.0.1", port=listener.getsockname()[1], password=PASSWORD,
         username="pms-user", db=5, socket_timeout=2, socket_connect_timeout=2,
