@@ -68,7 +68,7 @@ processing:  {modelverse:dwd:ready}:data-converge:processing
 
 公司 Python 参考使用 `Sentinel(...).master_for("redis-cluster", db=5)`，用户已在容器中验证这条连接路径。本实现继续使用原有 List 消费流程。`redis-cluster` 在这里是 Sentinel 主节点组名，不能据此改用 `RedisCluster`，也不固定某次发现的主节点 IP。
 
-业务配置如下；不修改公司构建、依赖、启动脚本或 Deployment：
+业务配置如下；沿用公司构建、依赖和启动脚本，密码挂载通过现有平台卷配置声明：
 
 ```yaml
 dwd_ready:
@@ -103,12 +103,20 @@ dwd_ready:
 | `redis_shared.key` | Secret `redis-cipher-secret` 的同名键；挂载 `/opt/its/secret/its-common-secret/redis_shared.key` |
 | 服务 Secret 目录 | `gde-adapter-certfiles` 整体挂载 `/opt/its/data-converge/secret`，现场列出的键均为证书及其配套材料，不含 Redis 密码 |
 | Redis 密文来源 | `kube-system/its-redis-pwd-secret` 的 `password` 键，已通过 XMS 解密并完成连接验证 |
-| Redis 密文文件 | 业务配置约定 `/opt/its/data-converge/secret/redis/password`；原 Deployment 尚未挂载，需发布时补齐，或将 `password_file` 改为实际挂载文件 |
+| Redis 密文文件 | 平台卷配置已声明 `/opt/its/data-converge/secret/redis/password`；上传的旧 Deployment 尚未挂载，需随新版本发布生效 |
 | XMS | 沿用原 Deployment 的 `XMS_SERVICE_URL`、SDK 配置及密钥挂载 |
 
 `CIPHER_ROOT=/opt/its/data-converge/secret/redis-cipher-secret` 只是已有环境值；实际单独挂载的根/工作密钥在公共 Secret 目录，所以本实现使用已确认的实际文件路径。没有照搬参考服务的 `/app/cert/...`。
 
-密码文件内容是 Secret `password` 键投影出的原始密文，不是诊断用的 Secret JSON，也不是明文密码。若挂载到另一目录，只调整 `password_file`。此次只修改业务代码与配置，未代改 Deployment；诊断临时文件不作为正式密码来源。`--validate-only`、`--init-state` 不读取秘密文件，因此离线 VALID 不证明挂载、SDK 或连接已就绪。
+密码文件内容是 Secret `password` 键投影出的原始密文，不是诊断用的 Secret JSON，也不是明文密码。若挂载到另一目录，只调整 `password_file`。诊断临时文件不作为正式密码来源。`--validate-only`、`--init-state` 不读取秘密文件，因此离线 VALID 不证明挂载、SDK 或连接已就绪。
+
+[volume_setting_data_converge.conf](../Services/Package/charts/templates/volume_setting_data_converge.conf) 已在原 ClickHouse 挂载之后增加：
+
+```text
+{{.Chart.Name}}-redis-password;/opt/its/@SERVICE_NAME@/secret/redis/;true;secret;its-redis-pwd-secret;password
+```
+
+这六列分别为卷名、目录、只读属性、卷类型、Secret 名和所选键。沿用原公司 BuildTool 生成部署配置，不新增构建流程或改写已有密钥挂载。外部生成器未包含在仓库中，本地未验证最终渲染结果；发布时需核对主容器的只读挂载目录为 `/opt/its/data-converge/secret/redis/`，对应 Secret 为 `its-redis-pwd-secret`，`password` 键落为同名文件，并保留 Pod 的 `fsGroup: 19101`。建议最终 Secret 卷为必需项（`optional: false`），采用目录挂载；六列配置本身不表达 `optional` 和 `defaultMode`，以生成的 Deployment 为准。当前未修改公司集群中的 Deployment。
 
 ### 凭据与认证流程
 

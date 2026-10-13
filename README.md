@@ -41,7 +41,7 @@ deploy/deployment.patch.yaml
 
 ## 业务代码离线校验
 
-公司构建、依赖及测试配置保持上传版本，Python 版本按原平台配置使用。业务需要 PyYAML、APScheduler 3.11.x 和 redis-py 5/6（Sentinel 回环验证使用 5.0.8、6.4.0），公司认证使用已有 `dsf`、`psf` 和 `Crypto`。需确认已有公司镜像或依赖包提供这些模块及兼容版本；本次不修改任何依赖清单、构建框架、打包、启动脚本或 Deployment。测试使用现有环境与命令行参数。
+公司构建、依赖及测试配置保持上传版本，Python 版本按原平台配置使用。业务需要 PyYAML、APScheduler 3.11.x 和 redis-py 5/6（Sentinel 回环验证使用 5.0.8、6.4.0），公司认证使用已有 `dsf`、`psf` 和 `Crypto`。需确认已有公司镜像或依赖包提供这些模块及兼容版本；依赖清单、构建框架、打包和启动脚本保持不变，Redis 密码挂载在现有平台卷配置中声明。测试使用现有环境与命令行参数。
 
 ```bash
 export PYTHONPATH="$PWD/Services/Service/data-converge/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -75,7 +75,7 @@ SDK 由公司提供，匹配 CPU 架构及 GDE Python 版本。已有 `XMS_SERVI
 
 `dwd_ready.redis.username` 可配置，Sentinel 模式省略时默认 `admin`，也可显式填写 `ossdbuser` 等 PMS 中存在的账号。选定账号不存在或匹配不唯一时失败，不自动换用其他账号。它只用于选择凭据，不作为自定义 AUTH 的用户名参数。现场使用 `admin` 凭据认证成功后，`ACL WHOAMI` 返回 `default`；这不需要把配置改成 `default`，也不能据此认定具有全部管理员权限。直连模式的可选 ACL 用户名保持原语义。
 
-上传 Deployment 已确认根/工作密钥路径为 `/opt/its/secret/its-common-secret/redis_root.key` 和 `redis_shared.key`。现场确认 Redis 密文来自 **`kube-system/its-redis-pwd-secret` 的 `password` 键**；`gde-adapter-certfiles` 只有证书相关内容，不含 Redis 密码。业务配置约定 `password_file: /opt/its/data-converge/secret/redis/password`，但原 Deployment 尚无这一挂载，发布时需将该键挂到此文件，或调整配置指向实际挂载文件。文件应是 Secret 键对应的密文内容，不是 `kubectl get secret -o json` 的 JSON 文档。
+上传 Deployment 已确认根/工作密钥路径为 `/opt/its/secret/its-common-secret/redis_root.key` 和 `redis_shared.key`。现场确认 Redis 密文来自 **`kube-system/its-redis-pwd-secret` 的 `password` 键**；`gde-adapter-certfiles` 只有证书相关内容，不含 Redis 密码。[平台卷配置](Services/Package/charts/templates/volume_setting_data_converge.conf) 已声明将该键只读挂到 `/opt/its/data-converge/secret/redis/password`，与业务 `password_file` 一致。上传的旧 Deployment 尚无这一挂载，需通过公司原发布流程生成并部署后生效。文件应是 Secret 键对应的密文内容，不是 `kubectl get secret -o json` 的 JSON 文档。
 
 当前容器的 Python 3.12.10、redis-py 5.2.1、`dsf`、`psf`、`Crypto` 和密钥已完成连接验证。正式运行仍需部署新版业务包、持久挂载密码，并保证镜像重建后依赖仍在；用户目录临时安装的 redis 不代表已固化到镜像。业务主流程还需 PyYAML、APScheduler 和 SQLite，容器核验命令及详细边界见 [DWD 就绪消费](docs/dwd-ready.md#容器运行条件)。本地示例默认关闭该功能；已有账本不能通过改开关绕过门控。
 
