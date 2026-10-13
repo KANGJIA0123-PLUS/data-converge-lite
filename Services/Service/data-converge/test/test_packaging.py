@@ -1,4 +1,4 @@
-"""Exercise the unchanged company build and shell launchers in temporary copies."""
+"""Exercise the company bytecode build and shell launchers in temporary copies."""
 
 from __future__ import annotations
 
@@ -229,13 +229,27 @@ def test_probe_does_not_install_dependencies(runtime):
     process, _, _, stderr = run_script(runtime, "liveness_check.sh", exit_code="17")
     assert process.returncode == 17, stderr
     assert not (home / "bin/py/site-packages").exists()
+
+
+def prepare_test_exclusion_fixture(repo, application):
+    service = repo / application
+    # Old image output must be cleaned even when it is absent from the source.
+    image = repo / "Services/Package/images/lib/data-converge"
+    for directory in ("test", "tests", "src/data_converge/__pycache__", ".pytest_cache"):
+        stale = image / directory / "stale.pyc"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_bytes(b"old build")
+    return {path: path.read_bytes() for path in (service / "test").rglob("*.py")}
+
+
 @pytest.fixture(scope="module")
 def compiled_application(tmp_path_factory):
     temp = tmp_path_factory.mktemp("company_build")
-    repo = temp / "repo"
+    repo = temp / "test" / "repo"
     application = Path("Services/Service/data-converge")
     shutil.copytree(ROOT / application, repo / application,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info", ".pytest_cache"))
+    test_sources = prepare_test_exclusion_fixture(repo, application)
     script = repo / "Services/build_framework/scripts/build.sh"
     script.parent.mkdir(parents=True)
     shutil.copyfile(BUILD, script)
@@ -255,6 +269,8 @@ def compiled_application(tmp_path_factory):
            "PATH": f"{runtime_bin}:{os.environ['PATH']}", "PYTHONDONTWRITEBYTECODE": "1"}
     built = subprocess.run(["bash", str(script)], cwd=temp, env=env, capture_output=True, text=True)
     assert built.returncode == 0, built.stderr
+    assert test_sources and all(path.read_bytes() == data for path, data in test_sources.items())
+    assert not list((repo / application / "test").rglob("*.pyc"))
     assert hashlib.sha256(source.read_bytes()).hexdigest() == before
     home = repo / "Services/Package/images"
     deployed = home / "lib/data-converge"
@@ -286,7 +302,8 @@ def assert_compiled_artifacts(deployed):
 
 def test_original_framework_excludes_tests_from_image(compiled_application):
     _, home, _, _ = compiled_application
-    assert not [path for path in home.rglob('*') if path.is_dir() and path.name in ('test', 'tests')]
+    excluded = {'test', 'tests', '__pycache__', '.pytest_cache'}
+    assert not [path for path in home.rglob('*') if path.is_dir() and path.name in excluded]
     assert not list(home.rglob('test_*.pyc'))
 
 

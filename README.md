@@ -26,7 +26,7 @@ Services/Service/data-converge/
       handlers.py           # 文件写入、进程锁与归档
       logging.py            # 日志路径和 LoggingSession 生命周期
   resources/                # 业务配置与 SQL，位置不变
-tests/                      # 仓库测试，不进入镜像
+  test/                     # 保留原测试位置，由构建脚本排除出镜像
 ```
 
 `Application` 作为用例门面；运行时工厂负责装配，`ExitStack` 管理资源释放；SQL/Redis 适配器连接外部系统；`StateStore` 管理持久化；日志策略与文件操作分别维护。旧的 `logging_config`、`scheduler.scheduler` 和 ClickHouse `client` 配置函数保留兼容导出。
@@ -54,12 +54,12 @@ logging:
 
 ## 构建与验证
 
-公司 `Services/build_framework/scripts/build.sh` 保持原样：编译服务目录为 `.pyc`，再复制到 `Services/Package/images/lib/data-converge/`。`src/`、`resources/`、`python3 -m data_converge.main` 和 XMS 解密子进程入口不变。测试移出服务目录，从源头排除在镜像复制范围之外，无需为核心代码制作 wheel，也没有新增第三方依赖。
+公司 `Services/build_framework/scripts/build.sh` 保留编译业务代码为 `.pyc`、删除业务 `.py`、复制到 `Services/Package/images/lib/data-converge/` 的流程。测试保留在服务的 `test/` 目录，跳过编译和源码删除；复制后清理镜像中的 `test/`、`tests/`、`__pycache__/` 和 `.pytest_cache/`，包括此前构建的残留。`src/`、`resources/`、`python3 -m data_converge.main` 和 XMS 解密子进程入口不变，无需为核心代码制作 wheel，也没有新增第三方依赖。
 
 在已装好项目依赖的 Python 3.12 环境中，从仓库根执行：
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/Services/Service/data-converge/src" python3 -m pytest -c /dev/null -p no:cacheprovider tests -q
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/Services/Service/data-converge/src" python3 -m pytest -c /dev/null -p no:cacheprovider Services/Service/data-converge/test -q
 ```
 
-打包测试会在临时副本运行原自定义构建脚本，检查字节码入口、全部 SQL、资源内容和测试排除，并在仓库外运行校验与解密子进程。完整镜像组装仍需要公司的外部 BuildTool 和基础镜像。
+打包测试会在临时副本运行自定义构建脚本，检查字节码入口、全部 SQL、资源内容、测试源码保留和镜像测试排除，并在仓库外运行校验与解密子进程。完整镜像组装仍需要公司的外部 BuildTool 和基础镜像。

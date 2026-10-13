@@ -2,12 +2,12 @@
 
 import ast
 
-from .paths import REPOSITORY_ROOT, SOURCE_ROOT
+from .paths import REPOSITORY_ROOT, SOURCE_ROOT, TEST_ROOT
 
 
 def test_python_functions_do_not_exceed_50_lines():
     violations = []
-    for directory in (SOURCE_ROOT, REPOSITORY_ROOT / 'tests'):
+    for directory in (SOURCE_ROOT, TEST_ROOT):
         for path in sorted(directory.rglob('*.py')):
             tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
             for node in ast.walk(tree):
