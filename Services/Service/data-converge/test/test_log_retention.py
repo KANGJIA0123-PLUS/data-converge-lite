@@ -52,6 +52,22 @@ def test_bootstrap_appends_without_rotation_or_retention(tmp_path):
     assert list(tmp_path.glob('*.archive')) == [old]
 
 
+def test_rotation_without_policy_preserves_the_open_log(tmp_path):
+    path = tmp_path / 'service.log'
+    handler = RetentionFileHandler(path, None)
+    try:
+        emit(handler, 'before')
+        stream = handler.stream
+        with pytest.raises(RuntimeError, match='^LOGGING_POLICY_REQUIRED$'):
+            handler._rotate(time.time())
+        assert handler.stream is stream and not stream.closed
+        emit(handler, 'after')
+    finally:
+        handler.close()
+    assert path.read_text() == 'before\nafter\n'
+    assert not list(tmp_path.glob('*.archive'))
+
+
 def test_size_rotation_counts_utf8_bytes_and_keeps_oversized_record(tmp_path):
     path = tmp_path / 'service.log'
     handler = RetentionFileHandler(path, LoggingSettings(max_bytes=8))

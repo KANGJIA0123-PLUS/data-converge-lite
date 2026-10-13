@@ -90,7 +90,8 @@ class RetentionFileHandler(WatchedFileHandler):
         )
 
     def _rotate(self, now: float):
-        assert self.policy is not None
+        if self.policy is None:
+            raise RuntimeError('LOGGING_POLICY_REQUIRED')
         self.stream.close()
         self.stream = None
         try:
