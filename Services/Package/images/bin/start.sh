@@ -29,14 +29,16 @@ function config_python(){
     CURRENT_PATH=/opt/its/${SERVICE_NAME}/bin
     # 处理 wheel 包
     unzip -o ${CURRENT_PATH}/pip-*.whl -d /tmp/pip_extracted
+    SITE_PACKAGES=/opt/its/${SERVICE_NAME}/bin/py/site-packages
+    mkdir -p ${SITE_PACKAGES}
 
-    cp -r /tmp/pip_extracted/pip* ${DEPEN_PKG}/
+    cp -r /tmp/pip_extracted/pip* ${SITE_PACKAGES}/
     [ -d /tmp/pip_extracted ] && rm -rf /tmp/pip_extracted
     cd - || exit_error
 
     log "info" "Decompress python_pkg.tar.gz done"
     log "info" "Load decompressed site-packages env"
-    export PYTHONPATH=${DEPEN_PKG}:${PYTHONPATH}
+    export PYTHONPATH=${SITE_PACKAGES}:${DEPEN_PKG}:${PYTHONPATH}
     pip3.12 --version
 
     cd ${DEPEN_PKG}
