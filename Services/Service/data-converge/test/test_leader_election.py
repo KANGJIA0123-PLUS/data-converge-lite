@@ -1,84 +1,74 @@
-"""选主模块测试"""
+"""Atomic ownership operations and ledger identity checks at the Redis boundary."""
+
+from unittest.mock import Mock, patch
 
 import pytest
-from unittest.mock import Mock, patch
+
 from data_converge.leader_election import LeaderElector
 
 
-class TestLeaderElector:
-    """选主模块测试类"""
+def test_acquire_uses_one_conditional_write_without_preflight_read():
+    client = Mock()
+    client.set.return_value = True
+    with patch('redis.Redis', return_value=client):
+        elector = LeaderElector('test_cluster')
+    assert elector.elect_as_leader('session-token', ttl=30)
+    client.get.assert_not_called()
+    assert client.set.call_args.kwargs == {'nx': True, 'px': 30000}
 
-    def test_elect_as_leader_when_no_leader_exists(self):
-        """当无主节点时，应该成功选举为主"""
-        with patch("redis.Redis") as mock_redis:
-            mock_redis_instance = Mock()
-            mock_redis.return_value = mock_redis_instance
-            mock_redis_instance.get.return_value = None
-            mock_redis_instance.set.return_value = True
 
-            elector = LeaderElector("test_cluster")
-            is_leader = elector.elect_as_leader("node1", ttl=30)
+@pytest.mark.parametrize('operation,result,expected', [
+    ('renew_leadership', 1, True), ('renew_leadership', 0, False),
+    ('release_leadership', 1, True), ('release_leadership', 0, False),
+])
+def test_old_owner_cannot_mutate_new_owner(operation, result, expected):
+    client = Mock()
+    client.eval.return_value = result
+    elector = LeaderElector('test_cluster', client=client)
+    assert getattr(elector, operation)('old-token') is expected
+    assert client.eval.call_args.args[1:4] == (1, elector.leader_key, 'old-token')
+    client.get.assert_not_called()
+    client.expire.assert_not_called()
+    client.delete.assert_not_called()
 
-            assert is_leader is True
 
-    def test_fail_to_elect_when_leader_exists(self):
-        """当主节点已存在时，应该选举失败"""
-        with patch("redis.Redis") as mock_redis:
-            mock_redis_instance = Mock()
-            mock_redis.return_value = mock_redis_instance
-            mock_redis_instance.get.return_value = "node2"
+@pytest.mark.parametrize('result,code', [
+    (0, None), (1, None), (-1, 'LEADERSHIP_LEDGER_MISMATCH'),
+    (-2, 'LEADERSHIP_REGISTRY_MISSING'),
+])
+def test_binding_checks_ownership_and_existing_ledger(result, code):
+    from data_converge.leader_election import LeadershipError
+    client = Mock()
+    client.eval.return_value = result
+    elector = LeaderElector('deployment', client=client)
+    if code:
+        with pytest.raises(LeadershipError, match=code):
+            elector.bind_ledger('token', 'ledger-uuid', require_existing=True)
+    else:
+        assert elector.bind_ledger('token', 'ledger-uuid', require_existing=True) is bool(result)
+    assert client.eval.call_args.args[1:] == (
+        2, 'data_converge:leader:{deployment}',
+        'data_converge:leader:{deployment}:ledger', 'token', 'ledger-uuid', '1')
 
-            elector = LeaderElector("test_cluster")
-            is_leader = elector.elect_as_leader("node1", ttl=30)
 
-            assert is_leader is False
+def test_redis_error_is_fixed_and_does_not_expose_remote_details():
+    from data_converge.leader_election import LeadershipError
+    client = Mock()
+    client.set.side_effect = RuntimeError('private Redis credentials')
+    elector = LeaderElector('deployment', client=client)
+    with pytest.raises(LeadershipError) as caught:
+        elector.elect_as_leader('token')
+    assert str(caught.value) == 'LEADERSHIP_REDIS_FAILED'
 
-    def test_release_leadership(self):
-        """释放主节点资格"""
-        with patch("redis.Redis") as mock_redis:
-            mock_redis_instance = Mock()
-            mock_redis.return_value = mock_redis_instance
-            mock_redis_instance.get.return_value = "node1"
-            mock_redis_instance.delete.return_value = 1
 
-            elector = LeaderElector("test_cluster")
-            elector.release_leadership("node1")
+@pytest.mark.parametrize('cluster', ['', '{nested}', 'bad}name'])
+def test_cluster_name_cannot_break_ledger_key_slot(cluster):
+    with pytest.raises(ValueError):
+        LeaderElector(cluster, client=Mock())
 
-            mock_redis_instance.delete.assert_called_once()
 
-    def test_is_leader(self):
-        """检查当前节点是否为主"""
-        with patch("redis.Redis") as mock_redis:
-            mock_redis_instance = Mock()
-            mock_redis.return_value = mock_redis_instance
-            mock_redis_instance.get.return_value = "node1"
-
-            elector = LeaderElector("test_cluster")
-            result = elector.is_leader("node1")
-
-            assert result is True
-
-    def test_is_not_leader_when_different_node_leads(self):
-        """当其他节点为主时，当前节点不是主"""
-        with patch("redis.Redis") as mock_redis:
-            mock_redis_instance = Mock()
-            mock_redis.return_value = mock_redis_instance
-            mock_redis_instance.get.return_value = "node2"
-
-            elector = LeaderElector("test_cluster")
-            result = elector.is_leader("node1")
-
-            assert result is False
-
-    def test_renew_leadership_success(self):
-        """续约主节点成功"""
-        with patch("redis.Redis") as mock_redis:
-            mock_redis_instance = Mock()
-            mock_redis.return_value = mock_redis_instance
-            mock_redis_instance.get.return_value = "node1"
-            mock_redis_instance.expire.return_value = True
-
-            elector = LeaderElector("test_cluster")
-            result = elector.renew_leadership("node1", ttl=30)
-
-            assert result is True
+def test_injected_byte_client_can_inspect_leadership():
+    client = Mock()
+    client.get.return_value = b'token'
+    elector = LeaderElector('deployment', client=client)
+    assert elector.is_leader('token')

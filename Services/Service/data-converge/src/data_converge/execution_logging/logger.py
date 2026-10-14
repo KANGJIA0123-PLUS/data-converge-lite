@@ -1,4 +1,7 @@
-"""日志模块 - 执行状态记录和日志老化"""
+"""Legacy in-memory compatibility helper; production history lives in StateStore.
+
+The service does not instantiate this class. Do not use it as a durable ledger.
+"""
 
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional

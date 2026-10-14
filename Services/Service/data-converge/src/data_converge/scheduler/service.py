@@ -70,6 +70,7 @@ class TaskScheduler:
         self.catchup_limit = catchup_limit
         self.ready_poller = ready_poller
         self._stop_requested = False
+        self.stop_check: Callable[[], bool] | None = None
         self._triggers: dict[str, CronTrigger] = {}
         self._jobs: tuple[CronGroup, ...] = ()
         self._registered = False
@@ -126,7 +127,7 @@ class TaskScheduler:
         )
 
         report = self.dag_executor.execute(instances, now=actual_now,
-                                           should_stop=lambda: self._stop_requested)
+                                           should_stop=lambda: self.stop_requested)
         self._log_group_result(normalized_time, report)
         return report
 
@@ -194,10 +195,10 @@ class TaskScheduler:
             len(self._jobs),
         )
 
-        while not self._stop_requested:
+        while not self.stop_requested:
             self.tick()
             deadline = time.monotonic() + self.poll_interval_seconds
-            while not self._stop_requested:
+            while not self.stop_requested:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -243,7 +244,7 @@ class TaskScheduler:
         return SchedulePlan(tuple(instances), next_cursors)
 
     def _poll_ready(self, now: datetime) -> datetime:
-        if self.ready_poller is not None and not self._stop_requested:
+        if self.ready_poller is not None and not self.stop_requested:
             started = time.monotonic()
             windows = list(self.ready_poller(now))
             # Blocking Redis reads may cross a window boundary. Advance the
@@ -290,7 +291,7 @@ class TaskScheduler:
         # Read all pending rows, but bound actual submissions. Old BLOCKED rows
         # cannot monopolize a LIMIT query and starve unrelated ready windows.
         report = self.dag_executor.execute(instances, now=now, max_executions=self.catchup_limit,
-                                           should_stop=lambda: self._stop_requested)
+                                           should_stop=lambda: self.stop_requested)
         self._log_execution_errors(report)
         return report
 
@@ -303,7 +304,7 @@ class TaskScheduler:
     @property
     def stop_requested(self) -> bool:
         """Expose shutdown state without sharing the scheduler's internal storage."""
-        return self._stop_requested
+        return self._stop_requested or (self.stop_check is not None and self.stop_check())
 
     def shutdown(self, wait: bool = True) -> None:
         """Signal-safe request: no locks, logging or I/O in this call."""

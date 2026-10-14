@@ -78,6 +78,23 @@ def task_check(counts):
                  f'{LAUNCHER} --failures' if failed or blocked else '')
 
 
+def leadership_check(store, definition):
+    policy = definition.leadership
+    previous = store.get_meta('leadership_cluster')
+    evidence = dict(enabled=policy.enabled, cluster_name=policy.cluster_name,
+                    ledger_bound=previous is not None, ttl_seconds=policy.ttl_seconds,
+                    renew_interval_seconds=policy.renew_interval_seconds)
+    if previous is not None and (not policy.enabled or previous != policy.cluster_name):
+        return check('leadership', 'FAIL', '选主配置与已绑定账本不一致', evidence,
+                     '恢复原选主开关与 cluster_name；不要清空账本来绕过校验。')
+    if not policy.enabled:
+        return check('leadership', 'WARN', '未启用 Redis 选主，仅有本地文件锁', evidence,
+                     '只运行一个写实例；多副本必须配置选主并使用同一持久账本。')
+    return check('leadership', 'PASS' if previous is not None else 'WARN',
+                 '选主配置与本地账本绑定', evidence,
+                 '通过 --diagnose --online 查看 Redis 租约；首次主实例启动后完成账本绑定。')
+
+
 def heartbeat_check(directory):
     path = directory / 'heartbeat.json'
     try:

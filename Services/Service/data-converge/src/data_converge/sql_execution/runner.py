@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from data_converge.dag import TaskInstance
+from data_converge.errors import TaskExecutionError, safe_error_details
 
 from .client import execute_sql, load_sql
 from .config import load_config, resolve_credentials
@@ -34,7 +35,15 @@ class SQLTaskRunner:
     def __call__(self, instance: TaskInstance) -> None:
         sql_id = instance.task.sql_id
         sql_file = self.sql_directory / f"{sql_id}.sql"
-        sql = load_sql(sql_file)
+        try:
+            sql = load_sql(sql_file)
+        except (OSError, ValueError) as error:
+            # File loading completes before any SQL can reach ClickHouse.
+            raise TaskExecutionError(
+                "SQL_PREFLIGHT_FAILED", retryable=False, outcome_unknown=False,
+                query_id=getattr(instance, "query_id", None),
+                diagnostic=safe_error_details(error),
+            ) from None
 
         execute_sql(
             config=self.config,

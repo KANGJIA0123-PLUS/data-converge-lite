@@ -1,99 +1,110 @@
-"""选主模块 - Redis实现主备选举"""
+"""Atomic Redis ownership operations; these do not fence ClickHouse writes."""
 
-import redis
-from typing import Optional
+from __future__ import annotations
+
+import math
+
+
+RENEW_SCRIPT = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+"""
+RELEASE_SCRIPT = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+return redis.call('DEL', KEYS[1])
+"""
+BIND_SCRIPT = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+local previous = redis.call('GET', KEYS[2])
+if previous then
+    if previous ~= ARGV[2] then return -1 end
+elseif ARGV[3] == '1' then
+    return -2
+else
+    redis.call('SET', KEYS[2], ARGV[2], 'NX')
+end
+return 1
+"""
+
+
+class LeadershipError(RuntimeError):
+    """A fixed diagnostic code without Redis exceptions or connection details."""
+
+
+def ttl_milliseconds(ttl: float) -> int:
+    if type(ttl) not in (int, float) or not math.isfinite(ttl) or ttl <= 0:
+        raise ValueError('LEADERSHIP_SETTINGS_INVALID')
+    return math.ceil(ttl * 1000)
 
 
 class LeaderElector:
-    """Redis主备选举器"""
+    """Use a dedicated, bounded-timeout client owned and closed by the caller."""
 
-    LEADER_KEY_PREFIX = "data_converge:leader:"
+    LEADER_KEY_PREFIX = 'data_converge:leader:'
 
-    def __init__(self, cluster_name: str, redis_host: str = "localhost", redis_port: int = 6379):
-        """初始化选举器
-
-        Args:
-            cluster_name: 集群名称
-            redis_host: Redis主机地址
-            redis_port: Redis端口
-        """
+    def __init__(self, cluster_name: str, redis_host: str = 'localhost',
+                 redis_port: int = 6379, *, client=None):
+        if (not isinstance(cluster_name, str) or not cluster_name.strip()
+                or any(character in cluster_name for character in '{}')):
+            raise ValueError('LEADERSHIP_SETTINGS_INVALID')
         self.cluster_name = cluster_name
-        self.leader_key = f"{self.LEADER_KEY_PREFIX}{cluster_name}"
-        self.redis_client = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+        self.leader_key = f'{self.LEADER_KEY_PREFIX}{{{cluster_name}}}'
+        self.ledger_key = self.leader_key + ':ledger'
+        self.redis_client = client if client is not None else self._create_client(redis_host, redis_port)
 
-    def elect_as_leader(self, node_id: str, ttl: int = 30) -> bool:
-        """尝试选举为主节点
+    @staticmethod
+    def _create_client(redis_host, redis_port):
+        import redis
+        from redis.backoff import NoBackoff
+        from redis.retry import Retry
 
-        Args:
-            node_id: 节点ID
-            ttl: 主节点有效期（秒）
+        return redis.Redis(
+            host=redis_host, port=redis_port, decode_responses=True,
+            socket_timeout=3, socket_connect_timeout=2,
+            retry=Retry(NoBackoff(), 0), retry_on_error=[])
 
-        Returns:
-            True表示选举成功，False表示已有主节点
-        """
-        current_leader = self.redis_client.get(self.leader_key)
-        if current_leader is not None:
-            return False
+    def _command(self, operation, *args, **kwargs):
+        try:
+            return operation(*args, **kwargs)
+        except Exception:
+            raise LeadershipError('LEADERSHIP_REDIS_FAILED') from None
 
-        success = self.redis_client.set(self.leader_key, node_id, ex=ttl, nx=True)
-        return success is not None
+    def elect_as_leader(self, node_id: str, ttl: float = 30) -> bool:
+        """The caller supplies a fresh token for every acquisition attempt."""
+        return self._command(self.redis_client.set, self.leader_key, node_id,
+                             nx=True, px=ttl_milliseconds(ttl)) is True
 
-    def is_leader(self, node_id: str) -> bool:
-        """检查当前节点是否为主节点
-
-        Args:
-            node_id: 节点ID
-
-        Returns:
-            True表示是主节点
-        """
-        current_leader = self.redis_client.get(self.leader_key)
-        return current_leader == node_id
+    def renew_leadership(self, node_id: str, ttl: float = 30) -> bool:
+        return self._command(self.redis_client.eval, RENEW_SCRIPT, 1,
+                             self.leader_key, node_id, ttl_milliseconds(ttl)) == 1
 
     def release_leadership(self, node_id: str) -> bool:
-        """释放主节点资格
+        return self._command(self.redis_client.eval, RELEASE_SCRIPT, 1,
+                             self.leader_key, node_id) == 1
 
-        Args:
-            node_id: 节点ID
+    def bind_ledger(self, node_id: str, ledger_id: str, *, require_existing: bool = False) -> bool:
+        """Keep the permanent ledger identity separate from the expiring owner."""
+        if not isinstance(ledger_id, str) or not ledger_id or type(require_existing) is not bool:
+            raise ValueError('LEADERSHIP_LEDGER_INVALID')
+        result = self._command(self.redis_client.eval, BIND_SCRIPT, 2,
+                               self.leader_key, self.ledger_key, node_id,
+                               ledger_id, '1' if require_existing else '0')
+        if result == -1:
+            raise LeadershipError('LEADERSHIP_LEDGER_MISMATCH')
+        if result == -2:
+            raise LeadershipError('LEADERSHIP_REGISTRY_MISSING')
+        return result == 1
 
-        Returns:
-            True表示释放成功
-        """
-        current_leader = self.redis_client.get(self.leader_key)
-        if current_leader != node_id:
-            return False
+    def get_current_leader(self) -> str | None:
+        value = self._command(self.redis_client.get, self.leader_key)
+        return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else value
 
-        self.redis_client.delete(self.leader_key)
-        return True
-
-    def renew_leadership(self, node_id: str, ttl: int = 30) -> bool:
-        """续约主节点
-
-        Args:
-            node_id: 节点ID
-            ttl: 新的有效期（秒）
-
-        Returns:
-            True表示续约成功
-        """
-        current_leader = self.redis_client.get(self.leader_key)
-        if current_leader != node_id:
-            return False
-
-        return self.redis_client.expire(self.leader_key, ttl)
-
-    def get_current_leader(self) -> Optional[str]:
-        """获取当前主节点ID
-
-        Returns:
-            主节点ID，不存在返回None
-        """
-        return self.redis_client.get(self.leader_key)
+    def is_leader(self, node_id: str) -> bool:
+        """Inspection only; callers must not use this read as a write guard."""
+        return self.get_current_leader() == node_id
 
     def get_leader_ttl(self) -> int:
-        """获取主节点剩余TTL
+        return self._command(self.redis_client.ttl, self.leader_key)
 
-        Returns:
-            剩余秒数，-1表示无TTL，-2表示键不存在
-        """
-        return self.redis_client.ttl(self.leader_key)
+    def ledger_registered(self) -> bool:
+        return self._command(self.redis_client.exists, self.ledger_key) == 1

@@ -45,6 +45,13 @@ bash /opt/its/data-converge/bin/start_data_converge.sh --failures --limit 20 --o
 bash /opt/its/data-converge/bin/start_data_converge.sh --inspect-instance 'task_resource_5min_ads@2026-10-14T16:30:00+08:00'
 ```
 
+查看逐次执行历史。重试成功后，之前的失败证据仍可查询；无需在日志文件中搜索：
+
+```bash
+bash /opt/its/data-converge/bin/start_data_converge.sh --history --limit 20
+bash /opt/its/data-converge/bin/start_data_converge.sh --history --task task_resource_5min_ads --limit 20 --offset 20
+```
+
 查看最近完整窗口的信号，或精确定位 16:15–16:20 窗口：
 
 ```bash
@@ -58,16 +65,17 @@ bash /opt/its/data-converge/bin/start_data_converge.sh --dwd-status --window '20
 bash /opt/its/data-converge/bin/start_data_converge.sh --diagnose --online --format json
 ```
 
-`--limit` 范围为 1–100，默认 20；`--offset` 从 0 开始，仅供 `--failures` 使用。`--window` 必须为带时区、对齐五分钟的窗口**开始时间**，也接受 UTC 输入，展示时转换为北京时间。`--online` 仅用于 `--diagnose`；错误组合及空实例 ID 会拒绝执行，不会启动服务。
+`--limit` 范围为 1–100，默认 20；`--offset` 从 0 开始，供 `--failures`、`--history` 及 `--inspect-instance` 的历史分页使用。`--window` 必须为带时区、对齐五分钟的窗口**开始时间**，也接受 UTC 输入，展示时转换为北京时间。`--online` 仅用于 `--diagnose`；错误组合及空实例 ID 会拒绝执行，不会启动服务。
 
 ## 每个入口能回答什么
 
 | 入口 | 证据和范围 |
 |---|---|
-| `--diagnose` | 配置可读性、DAG/SQL文件与调度规则、Python解释器与SDK可发现性、凭据/CA文件权限、日志老化配置及日志路径、心跳、状态库绑定、历史异常计数、最近20个完整DWD窗口 |
-| `--diagnose --online` | 追加ClickHouse凭据解析与固定`SELECT 1`；Redis凭据/PSM客户端创建与`PING`、源队列和处理中队列的`TYPE`/`LLEN` |
+| `--diagnose` | 配置可读性、DAG/SQL文件与调度规则、Python解释器与SDK可发现性、凭据/CA文件权限、日志老化配置及日志路径、本实例心跳、状态库及选主绑定、历史异常计数、最近20个完整DWD窗口 |
+| `--diagnose --online` | 追加ClickHouse凭据解析与固定`SELECT 1`；Redis凭据/PSM客户端创建与`PING`、两个队列的`TYPE`/`LLEN`；启用选主时只读观察租约和永久账本注册项 |
 | `--failures` | 全历史异常总数、分页结果、任务/窗口、尝试次数、query_id、固定错误码及处理建议 |
-| `--inspect-instance` | 单个实例、当前尝试的安全错误证据、SQL文件路径、当前未成功依赖、对应五分钟DWD状态；依赖最多显示100条并标明截断 |
+| `--history` | 按 query_id 保存的历次执行、真实结果、安全错误证据及人工处置；可筛选任务和分页 |
+| `--inspect-instance` | 单个实例、当前及历次尝试的安全错误证据、SQL文件路径、当前未成功依赖、对应五分钟DWD状态；依赖最多显示100条并标明截断 |
 | `--dwd-status` | 每个窗口的已收到/缺失类型、等待时长、最后接收时间、收齐延迟；包括一条信号也没收到的完整窗口 |
 
 `--inspect-instance` 比较当前配置与状态库绑定，再按已记录的调度时间重建依赖。配置不一致时不猜测历史依赖；配置、依赖或附加错误证据损坏，也保留能够读取的实例基本信息。
@@ -93,7 +101,7 @@ DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号�
 
 在线检查复用原解密及认证实现，查询阶段沿用10秒ClickHouse超时和Redis配置的socket超时；解密使用原KMS超时。系统DNS阻塞仍受操作系统解析行为影响，不承诺整个命令固定10秒结束。Redis检查的 `credential_user` 表示选中的PMS账号，不等于服务端ACL用户名。
 
-错误证据仅保存固定错误码、异常类型、query_id、HTTP状态、数字ClickHouse异常码、TLS校验码、OS错误号，不打印密码、SDK异常正文、服务端SQL或Redis消息内容。升级后的失败会在原任务完成事务中写入独立 `execution_diagnostics` 表；诊断旧库不创建该表，历史错误显示“未记录”。证据与当前实例的query_id匹配，已解决/成功或新尝试不展示旧证据。这里保留当前失败尝试，不建立完整尝试历史。
+错误证据仅保存固定错误码、异常类型、query_id、HTTP状态、数字ClickHouse异常码、TLS校验码、OS错误号，不打印密码、SDK异常正文、服务端SQL或Redis消息内容。`execution_diagnostics` 保留与当前实例 query_id 匹配的当前失败证据；新 `execution_attempts` 在 claim、finish 和恢复事务中保存逐次尝试，重试不覆盖旧记录。人工处置单独入账，不改变原尝试的真实结果，输出不包含备注正文。旧账本中没有尝试行的人工处理在 `legacy_resolutions` 单独展示，各自使用同一组分页参数；无法补造旧执行过程。诊断只读不建表，无历史表时显示“旧版本未记录”。
 
 本地心跳通过只代表进程心跳与启动就绪，不能证明调度线程持续推进；诊断同时展示最近完成时间、最新窗口与最早活动窗口供判断。当前不新增调度线程探针、不改公司现有探针脚本。成功执行或`SELECT 1`通过不证明汇聚结果行数正确，也不验证所有现场表结构。原有资源汇聚SQL保持不变。
 

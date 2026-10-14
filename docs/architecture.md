@@ -1,6 +1,6 @@
 # 业务架构与扩展约定
 
-当前目标是让现有汇聚流程易于替换依赖、定位故障和验证行为。保持 48 个任务、现有 SQL、命令入口、状态身份和公司字节码构建方式。扩展接口不自动改变线上部署，也不新增消息系统或数据库。
+当前目标是让现有汇聚流程易于替换依赖、定位故障和验证行为。当前包含 52 个任务，沿用现有 SQL、命令入口、状态身份和公司字节码构建方式。扩展接口不自动改变线上部署，也不新增消息系统或数据库。
 
 ## 依赖方向
 
@@ -35,6 +35,7 @@ flowchart TD
 | Factory 与显式依赖注入 | 执行器、启动探测、消息源和心跳可在装配时提供，不依靠修改全局变量 | `runtime.py` 的 `RuntimeDependencies`、`ExecutionAdapter` |
 | Strategy，策略分离 | 就绪判断、重试资格与日志保留规则独立于调度和文件操作 | `dwd_ready/coordinator.py`、`dag/retry.py`、`observability/retention.py` |
 | Context Manager，资源生命周期 | 正常退出、部分启动失败和信号停止都按顺序释放资源 | `runtime.py`、`observability/logging.py` |
+| Decorator，提交资格保护 | 对任务提交与消息消费加入租约检查，业务适配器保持原职责 | `coordination.py` 的 `GuardedRunner`、`GuardedSignalSource` |
 
 `ExecutionAdapter` 同时提供任务执行器和启动探测函数，通用运行时无需读取某个具体执行器的连接配置。SQL 的默认装配绑定已解析的配置，继续执行原有 `SELECT 1` 探测。
 
@@ -73,10 +74,10 @@ flowchart TD
 
 ## 分布式高可用的边界
 
-当前服务仍按单写实例运行。本地 SQLite 和文件锁不提供分布式租约或 fencing；使用独立状态文件的多个副本不能互相防重。此前提供的 Deployment 使用单副本与 hostPath，不能据此保证跨节点获得相同账本。
+当前接入 Redis 租约协调，但仍要求同一份完整持久账本。SQLite 与 POSIX 文件锁保证同一账本单写，不能用于两个独立 hostPath 的自动接管。Redis 永久注册项校验账本身份，阻止新的独立账本冒充原部署恢复。
 
-`leader_election/` 保留的旧实现没有接入运行主流程。其检查后续租、检查后释放不是原子操作，也没有隔离旧主写入的 fencing 机制，不能直接接入作为主备切换保证。公司探针脚本目前提前 `exit 0`，Python 心跳检查尚未通过这些脚本生效。本轮保持部署与探针行为不变。
+`leader_election/` 通过随机会话 token、原子 Lua 续租/释放、保守截止时间与独立续租线程控制资格；失租后停止新派发，在途 SQL 收尾前持有账本锁。它不是 ClickHouse 端 fencing。心跳按实例隔离，Python 备机探针不读取主机心跳。公司探针脚本目前提前 `exit 0`，本轮保持部署与探针脚本不变。
 
 ClickHouse 写入与 SQLite 记账没有共同事务，因此不宣称 exactly-once；UNKNOWN 需要核对后显式处理。此前 Deployment 的终止宽限期为 30 秒，而默认 SQL 超时为 300 秒，强制终止可能留下 UNKNOWN。
 
-后续若进入主备或跨节点高可用建设，需要一起确定状态持久化与恢复位置、带 fencing 的唯一写入权、消息分配、真实探针和终止预算，再验证网络分区、主节点失联、强杀、依赖切换及恢复后的重复提交。接口重构为这项工作提供边界，不能代替故障演练。
+跨节点独立磁盘接管仍需要共享状态后端、存储隔离与下游 fencing，以及真实探针和终止预算。实现和运维边界详见 [可靠性说明](reliability.md)，不能用单机测试代替现场故障演练。

@@ -2,10 +2,23 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import socket
 import threading
 import time
 from pathlib import Path
+
+
+def heartbeat_directory(directory: Path, config: dict) -> Path:
+    """Standby probes must never read the active replica's heartbeat."""
+    settings = config.get('leadership', {})
+    if not isinstance(settings, dict) or settings.get('enabled') is not True:
+        return directory
+    identity = (os.getenv('DATA_CONVERGE_INSTANCE_ID') or os.getenv('POD_NAME')
+                or os.getenv('HOSTNAME') or socket.gethostname())
+    key = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]
+    return directory.parent / ('.' + directory.name + '.health') / key
 
 
 class Heartbeat:
@@ -13,6 +26,7 @@ class Heartbeat:
         self.path = Path(directory) / 'heartbeat.json'
         self.interval = interval
         self.ready = False
+        self.readiness_check = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread = None
@@ -20,7 +34,8 @@ class Heartbeat:
     def _write(self):
         with self._lock:
             temporary = self.path.with_suffix('.tmp')
-            temporary.write_text(json.dumps({'pid': os.getpid(), 'time': time.time(), 'ready': self.ready}))
+            ready = self.ready and (self.readiness_check is None or self.readiness_check())
+            temporary.write_text(json.dumps({'pid': os.getpid(), 'time': time.time(), 'ready': ready}))
             temporary.chmod(0o600)
             os.replace(temporary, self.path)
 

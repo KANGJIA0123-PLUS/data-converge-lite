@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import signal
-from contextlib import AbstractContextManager, ExitStack, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
@@ -16,11 +16,12 @@ from data_converge.dag.ports import TaskRunner
 from data_converge.dwd_ready.coordinator import ReadyCoordinator
 from data_converge.dwd_ready.ports import ReadySignalSource
 from data_converge.dwd_ready.redis_source import bind_sentinel_identity, create_source
-from data_converge.health import Heartbeat
+from data_converge.health import Heartbeat, heartbeat_directory
 from data_converge.scheduler import TaskScheduler
 from data_converge.sql_execution import SQLTaskRunner
 from data_converge.sql_execution.client import execute_sql
 from data_converge.state import StateStore
+from data_converge.coordination import create_leadership, GuardedRunner, GuardedSignalSource, WriterLease
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,18 @@ class RuntimeDependencies:
     execution_factory: Callable[[Path, ApplicationDefinition], ExecutionAdapter] = _create_sql_execution
     source_factory: Callable[[dict], ReadySignalSource] = _create_ready_source
     heartbeat_factory: Callable[[Path], AbstractContextManager[Heartbeat]] = _create_heartbeat
+    leadership_factory: Callable[[ApplicationDefinition], AbstractContextManager[WriterLease]] = create_leadership
+
+
+@contextmanager
+def service_heartbeat(definition, directory, dependencies):
+    if not definition.leadership.enabled:
+        yield None
+        return
+    directory = heartbeat_directory(directory, definition.config)
+    directory.mkdir(parents=True, exist_ok=True)
+    with dependencies.heartbeat_factory(directory) as heartbeat:
+        yield heartbeat
 
 
 @dataclass
@@ -70,6 +83,7 @@ class ServiceRuntime:
     runner: TaskRunner
     heartbeat: Heartbeat
     startup_probe: Callable[[], None] | None = field(default=None, repr=False)
+    lease: WriterLease | None = field(default=None, repr=False)
     _probe: Callable[[], None] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -77,16 +91,29 @@ class ServiceRuntime:
                        else partial(_legacy_sql_probe, self.runner))
 
     def run_task(self, taskname: str, scheduled_time: datetime) -> ExecutionReport:
-        return self.scheduler.run_task(taskname, scheduled_time)
+        self._assert_owned()
+        result = self.scheduler.run_task(taskname, scheduled_time)
+        self._assert_owned()
+        return result
 
     def run_once(self, now: datetime | None = None) -> ExecutionReport:
-        return self.scheduler.tick(now)
+        self._assert_owned()
+        result = self.scheduler.tick(now)
+        self._assert_owned()
+        return result
 
     def serve(self) -> None:
+        self._assert_owned()
         self._probe()
+        self._assert_owned()
         if not self.scheduler.stop_requested:
             self.heartbeat.set_ready(True)
             self.scheduler.start()
+        self._assert_owned()
+
+    def _assert_owned(self) -> None:
+        if self.lease is not None:
+            self.lease.assert_owned()
 
     def request_stop(self) -> None:
         self.scheduler.shutdown(wait=False)
@@ -110,13 +137,16 @@ def build_scheduler(definition: ApplicationDefinition, runner: TaskRunner,
 
 def attach_readiness(ready_config: dict, store: StateStore, coverage_start: datetime,
                      scheduler: TaskScheduler, executor: DAGExecutor, cleanup: ExitStack,
-                     source_factory: Callable[[dict], ReadySignalSource] = _create_ready_source) -> None:
+                     source_factory: Callable[[dict], ReadySignalSource] = _create_ready_source,
+                     lease=None) -> None:
     """Attach the readiness adapter; register cleanup before binding can fail."""
     if not ready_config['enabled']:
         return
     source = source_factory(ready_config)
     cleanup.callback(source.close)
     bind_sentinel_identity(store, getattr(source, 'identity', None))
+    if lease is not None:
+        source = GuardedSignalSource(source, lease)
     coordinator = ReadyCoordinator(
         store, source, coverage_start, batch_size=ready_config['batch_size'],
         wait_warning_seconds=ready_config['wait_warning_seconds'],
@@ -129,10 +159,14 @@ def attach_readiness(ready_config: dict, store: StateStore, coverage_start: date
 @contextmanager
 def open_runtime(config_path: Path, definition: ApplicationDefinition, store: StateStore,
                  directory: Path, coverage_start: datetime, *,
-                 dependencies: RuntimeDependencies | None = None):
+                 dependencies: RuntimeDependencies | None = None, lease=None, heartbeat=None):
     """Release resources and restore handlers after successful or partial startup."""
     dependencies = dependencies if dependencies is not None else RuntimeDependencies()
-    with dependencies.heartbeat_factory(directory) as heartbeat, ExitStack() as cleanup:
+    directory = heartbeat_directory(directory, definition.config)
+    if definition.leadership.enabled:
+        directory.mkdir(parents=True, exist_ok=True)
+    owned_heartbeat = nullcontext(heartbeat) if heartbeat is not None else dependencies.heartbeat_factory(directory)
+    with owned_heartbeat as heartbeat, ExitStack() as cleanup:
         runtime = None
 
         def stop(signum, _frame):
@@ -147,8 +181,12 @@ def open_runtime(config_path: Path, definition: ApplicationDefinition, store: St
             cleanup.callback(signal.signal, signum, previous)
 
         execution = dependencies.execution_factory(config_path, definition)
-        scheduler, executor = build_scheduler(definition, execution.runner, store, coverage_start)
+        runner = GuardedRunner(execution.runner, lease) if lease is not None else execution.runner
+        scheduler, executor = build_scheduler(definition, runner, store, coverage_start)
+        if lease is not None:
+            scheduler.stop_check = lambda: lease.lost
+            heartbeat.readiness_check = lambda: not lease.lost
         attach_readiness(definition.config['dwd_ready'], store, coverage_start,
-                         scheduler, executor, cleanup, dependencies.source_factory)
-        runtime = ServiceRuntime(scheduler, execution.runner, heartbeat, execution.probe)
+                         scheduler, executor, cleanup, dependencies.source_factory, lease)
+        runtime = ServiceRuntime(scheduler, runner, heartbeat, execution.probe, lease)
         yield runtime
