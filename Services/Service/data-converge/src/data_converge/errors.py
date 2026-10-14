@@ -2,6 +2,81 @@
 
 from __future__ import annotations
 
+import re
+import ssl
+import urllib.error
+
+
+_PUBLIC_CODES = frozenset("""
+    CONFIG_UNREADABLE CLICKHOUSE_CONFIG_MISSING CLICKHOUSE_CONNECTION_INVALID
+    CLICKHOUSE_ENV_MISSING CLICKHOUSE_ENV_INVALID CLICKHOUSE_IDENTITY_INVALID
+    CLICKHOUSE_PROVIDER_INVALID CLICKHOUSE_CREDENTIAL_MISSING CLICKHOUSE_CREDENTIAL_UNRESOLVED
+    CLICKHOUSE_TIMEOUT_INVALID CLICKHOUSE_QUERY_ID_INVALID CLICKHOUSE_DIAGNOSTIC_RESPONSE_INVALID
+    KMS_CONFIGURATION_INVALID KMS_PMS_INVALID KMS_DECRYPT_TIMEOUT KMS_OUTPUT_LIMIT
+    KMS_DECRYPT_FAILED KMS_SECRET_INVALID KMS_PLATFORM_UNSUPPORTED KMS_DECRYPT_START_FAILED
+    KMS_PROTOCOL_INVALID KMS_SECRET_UNREADABLE DWD_READY_CONFIG_INVALID DWD_READY_ENV_MISSING
+    DWD_READY_ENV_INVALID DWD_READY_QUEUE_SLOT_INVALID DWD_READY_CLUSTER_REQUIRES_DB_ZERO
+    DWD_READY_SOCKET_TIMEOUT_TOO_SHORT DWD_REDIS_PMS_INVALID DWD_REDIS_CREDENTIAL_FAILED
+    DWD_REDIS_BINDING_CHANGED DWD_READY_REDIS_CLOSED DWD_READY_REDIS_RECEIVE_FAILED
+    DWD_READY_REDIS_ACK_FAILED DWD_READY_REDIS_CREATE_FAILED DWD_READY_REDIS_CREDENTIAL_FAILED
+    DWD_READY_REDIS_PSM_FAILED DWD_READY_REDIS_TLS_CLIENT_UNSUPPORTED DWD_READY_REDIS_INSPECT_FAILED
+    DWD_READY_REDIS_AUTH_FAILED DWD_READY_REDIS_CONNECT_FAILED DWD_READY_REDIS_SESSION_FAILED
+    LOGGING_SETTING_INVALID TIME_REQUIRES_ISO8601_WITH_TIMEZONE STATE_DEPLOYMENT_BINDING_CHANGED
+    STATE_START_CANNOT_BE_CHANGED START_TIME_MUST_BE_A_FIVE_MINUTE_BOUNDARY
+    STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED WINDOW_PRECEDES_COVERAGE_START
+    TIMEZONE_MUST_BE_ASIA_SHANGHAI SCHEDULER_SETTING_INVALID SQL_TIMEOUT_MUST_NOT_EXCEED_300_SECONDS
+    CONFIG_PATH_INVALID CONFIG_PATH_ENV_MISSING NO_TASKS_CONFIGURED DWD_READY_REQUIRES_FIVE_MINUTE_ROOT_TASKS
+    STATE_DATABASE_INVALID STATE_DATABASE_MISSING STATE_DIRECTORY_NOT_EMPTY STATE_NOT_INITIALIZED
+""".split())
+_TEXT_FIELDS = {"error_code": r"[A-Z][A-Z0-9_]{0,127}",
+                "error_type": r"[A-Za-z_][A-Za-z0-9_]{0,63}",
+                "query_id": r"[A-Za-z0-9_.:-]{1,128}"}
+_NUMBER_FIELDS = {"http_status": (100, 599), "clickhouse_exception_code": (0, 2**31 - 1),
+                  "tls_verify_code": (0, 2**31 - 1), "os_errno": (-2**31, 2**31 - 1)}
+
+
+def safe_diagnostic_details(details: dict | None) -> dict:
+    """Copy only bounded identifiers and numeric evidence; discard all other data."""
+    if not isinstance(details, dict):
+        return {}
+    safe = {}
+    for name, pattern in _TEXT_FIELDS.items():
+        value = details.get(name)
+        if isinstance(value, str) and re.fullmatch(pattern, value):
+            safe[name] = value
+    for name, (minimum, maximum) in _NUMBER_FIELDS.items():
+        value = details.get(name)
+        if type(value) is int and minimum <= value <= maximum:
+            safe[name] = value
+    return safe
+
+
+def _http_error_details(error: urllib.error.HTTPError) -> dict:
+    details = {"http_status": error.code}
+    header = error.headers.get("X-ClickHouse-Exception-Code") if error.headers is not None else None
+    if isinstance(header, str) and re.fullmatch(r"[0-9]{1,10}", header):
+        details["clickhouse_exception_code"] = int(header)
+    return safe_diagnostic_details(details)
+
+
+def safe_error_details(exc: BaseException) -> dict:
+    """Describe failures without generic exception messages, SQL or credentials."""
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    reason = reason if isinstance(reason, BaseException) else exc
+    details = {"error_type": type(reason).__name__}
+    if isinstance(reason, urllib.error.HTTPError):
+        details.update(_http_error_details(reason))
+    if isinstance(reason, OSError):
+        details["os_errno"] = reason.errno
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        details["tls_verify_code"] = getattr(reason, "verify_code", None)
+    if isinstance(exc, TaskExecutionError):
+        details.update(safe_diagnostic_details(exc.diagnostic))
+        details.update(error_code=str(exc), query_id=exc.query_id)
+    elif len(exc.args) == 1 and isinstance(exc.args[0], str) and exc.args[0] in _PUBLIC_CODES:
+        details["error_code"] = exc.args[0]
+    return safe_diagnostic_details(details)
+
 
 class TaskExecutionError(RuntimeError):
     """Safe diagnostic and execution evidence, independent of a transport.
@@ -11,8 +86,10 @@ class TaskExecutionError(RuntimeError):
     """
 
     def __init__(self, message: str, *, retryable: bool = False,
-                 outcome_unknown: bool = False, query_id: str | None = None):
+                 outcome_unknown: bool = False, query_id: str | None = None,
+                 diagnostic: dict | None = None):
         super().__init__(message)
         self.retryable = retryable
         self.outcome_unknown = outcome_unknown
         self.query_id = query_id
+        self.diagnostic = safe_diagnostic_details(diagnostic)

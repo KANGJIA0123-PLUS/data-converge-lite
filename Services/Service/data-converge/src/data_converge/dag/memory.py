@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable, Mapping
 
+from data_converge.errors import safe_diagnostic_details
+
 from .models import TaskInstance, TaskStatus
 from .retry import can_start_attempt
 
@@ -21,6 +23,7 @@ class InMemoryExecutionRepository:
         self.records: dict[str, dict] = {}
         self._instances: dict[str, TaskInstance] = {}
         self._claims: dict[str, dict] = {}
+        self._diagnostics: dict[str, dict] = {}
 
     def enqueue_and_advance(self, instances: Iterable[TaskInstance],
                             next_cursors: Mapping[str, datetime]) -> None:
@@ -56,6 +59,7 @@ class InMemoryExecutionRepository:
             return False
         record = self.records.setdefault(instance_id, {"attempts": 0})
         record.update(status=TaskStatus.RUNNING, attempts=record["attempts"] + 1)
+        self._diagnostics.pop(instance_id, None)
         self._claims[instance_id] = dict(
             started_at=now, finished_at=getattr(instance, "finished_at", None),
             error=getattr(instance, "error", record.get("error")),
@@ -64,7 +68,7 @@ class InMemoryExecutionRepository:
 
     def finish(self, instance_id: str, status: TaskStatus, *, error: str | None = None,
                retryable: bool = False, next_retry_at: datetime | None = None,
-               now: datetime | None = None) -> None:
+               now: datetime | None = None, diagnostic: dict | None = None) -> None:
         if status not in (TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.UNKNOWN):
             raise ValueError("finish requires SUCCESS, FAILED or UNKNOWN")
         record = self.records.get(instance_id)
@@ -72,8 +76,17 @@ class InMemoryExecutionRepository:
             raise RuntimeError(f"Cannot finish an unclaimed instance: {instance_id}")
         record.update(status=status, error=error, retryable=retryable and status == TaskStatus.FAILED,
                       next_retry_at=next_retry_at)
+        if diagnostic and status != TaskStatus.SUCCESS:
+            details = dict(diagnostic, query_id=self._claims.get(instance_id, {}).get("query_id"))
+            self._diagnostics[instance_id] = safe_diagnostic_details(details)
         self.known_statuses[instance_id] = status
         self._claims.pop(instance_id, None)
+
+    def get_execution_diagnostic(self, instance_id: str) -> dict | None:
+        if self.get_status(instance_id) not in (TaskStatus.FAILED, TaskStatus.UNKNOWN):
+            return None
+        diagnostic = self._diagnostics.get(instance_id)
+        return diagnostic.copy() if diagnostic is not None else None
 
     def mark_blocked(self, instance_id: str, reason: str) -> None:
         self.known_statuses[instance_id] = TaskStatus.BLOCKED

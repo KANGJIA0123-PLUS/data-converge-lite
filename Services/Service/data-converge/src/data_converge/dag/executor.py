@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Dict, Iterable, List, Mapping, Optional
 
-from data_converge.errors import TaskExecutionError
+from data_converge.errors import TaskExecutionError, safe_error_details
 
 from .memory import InMemoryExecutionRepository
 from .models import DAG, TaskInstance, TaskStatus
@@ -142,10 +142,12 @@ class DAGExecutor:
             for future in as_completed(futures):
                 instance = futures[future]
                 retryable = False
+                diagnostic = None
                 try:
                     future.result()
                 except Exception as exc:
                     instance.status, retryable, instance.error = self._classify_error(exc)
+                    diagnostic = safe_error_details(exc)
                 else:
                     instance.status = TaskStatus.SUCCESS
                     instance.error = None
@@ -155,7 +157,7 @@ class DAGExecutor:
                 # Keep persistence outside the runner exception handler.
                 self.repository.finish(instance.instance_id, instance.status, error=instance.error,
                                        retryable=retryable, next_retry_at=next_retry_at,
-                                       now=instance.finished_at)
+                                       now=instance.finished_at, diagnostic=diagnostic)
 
     @staticmethod
     def _classify_error(exc: Exception) -> tuple[TaskStatus, bool, str]:

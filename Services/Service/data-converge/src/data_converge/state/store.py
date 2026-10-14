@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from typing import Iterable, Mapping
 
 from data_converge.dag.models import TaskInstance, TaskStatus
 from data_converge.dag.retry import can_start_attempt
+from data_converge.errors import safe_diagnostic_details
 
 from .bootstrap import StateBootstrap, StateBootstrapError
 
@@ -275,7 +277,7 @@ class StateStore:
 
     def finish(self, instance_id: str, status: TaskStatus, *, error: str | None = None,
                retryable: bool = False, next_retry_at: datetime | None = None,
-               now: datetime | None = None) -> None:
+               now: datetime | None = None, diagnostic: dict | None = None) -> None:
         if status not in (TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.UNKNOWN):
             raise ValueError("finish requires SUCCESS, FAILED or UNKNOWN")
         conn = self._connection(write=True)
@@ -287,6 +289,33 @@ class StateStore:
                  _stamp(now or datetime.now(timezone.utc)), instance_id))
             if result.rowcount != 1:
                 raise RuntimeError(f"Cannot finish an unclaimed instance: {instance_id}")
+            if diagnostic and status != TaskStatus.SUCCESS:
+                self._save_execution_diagnostic(conn, instance_id, diagnostic)
+
+    @staticmethod
+    def _save_execution_diagnostic(conn, instance_id: str, diagnostic: dict) -> None:
+        """Add evidence atomically with failure, without upgrading old ledgers on read."""
+        details = safe_diagnostic_details(diagnostic)
+        query_id = conn.execute("SELECT query_id FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()[0]
+        details["query_id"] = query_id
+        conn.execute("""CREATE TABLE IF NOT EXISTS execution_diagnostics (
+            instance_id TEXT PRIMARY KEY, query_id TEXT NOT NULL, details TEXT NOT NULL
+        )""")
+        conn.execute("""INSERT INTO execution_diagnostics (instance_id, query_id, details)
+            VALUES (?, ?, ?) ON CONFLICT(instance_id) DO UPDATE SET
+            query_id=excluded.query_id, details=excluded.details""",
+            (instance_id, query_id, json.dumps(details, sort_keys=True)))
+
+    def get_execution_diagnostic(self, instance_id: str) -> dict | None:
+        conn = self._connection()
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_diagnostics'").fetchone():
+            return None
+        row = conn.execute("""SELECT d.details FROM execution_diagnostics d
+            JOIN task_instances t ON t.instance_id=d.instance_id AND t.query_id=d.query_id
+            WHERE d.instance_id=? AND t.status IN ('FAILED', 'UNKNOWN')""", (instance_id,)).fetchone()
+        if row is None:
+            return None
+        return safe_diagnostic_details(json.loads(row[0]))
 
     def mark_blocked(self, instance_id: str, reason: str) -> None:
         conn = self._connection(write=True)

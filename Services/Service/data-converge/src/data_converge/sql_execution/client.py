@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from data_converge.errors import TaskExecutionError
+from data_converge.errors import TaskExecutionError, safe_error_details
 
 # Keep the established client configuration API for operational commands.
 from .config import (
@@ -99,18 +99,20 @@ def execute_sql(config: dict[str, Any], sql: str, timeout: int = 300,
                 remaining = getattr(response, "length", None)
     except urllib.error.HTTPError as error:
         code = error.code
+        diagnostic = safe_error_details(error)
         error.close()
         message = "CLICKHOUSE_OUTCOME_UNKNOWN" if deadline.expired else (
             "CLICKHOUSE_AUTH_FAILED" if code == 401 else "CLICKHOUSE_HTTP_FAILED")
         raise SQLExecutionError(message, outcome_unknown=deadline.expired or code != 401,
-                                query_id=query_id) from None
+                                query_id=query_id, diagnostic=diagnostic) from None
     except (OSError, http.client.HTTPException, ValueError) as error:
         reason = error.reason if isinstance(error, urllib.error.URLError) else error
         unsent = not deadline.expired and not response_started and (
             isinstance(reason, (ConnectionRefusedError, socket.gaierror)) or (
                 isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED))
         raise SQLExecutionError("CLICKHOUSE_CONNECT_FAILED" if unsent else "CLICKHOUSE_OUTCOME_UNKNOWN",
-                                retryable=unsent, outcome_unknown=not unsent, query_id=query_id) from None
+                                retryable=unsent, outcome_unknown=not unsent, query_id=query_id,
+                                diagnostic=safe_error_details(error)) from None
     if deadline.expired:
         raise SQLExecutionError("CLICKHOUSE_OUTCOME_UNKNOWN", outcome_unknown=True, query_id=query_id) from None
     return _decode_query_response(body, remaining, query_id)

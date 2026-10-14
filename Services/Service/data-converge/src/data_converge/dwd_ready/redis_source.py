@@ -27,6 +27,25 @@ class RedisSignalSource:
         self._sentinel_clients = tuple(sentinel_clients)
         self.identity = identity
 
+    def inspect(self) -> dict:
+        """Read connectivity and list metadata without fetching or moving messages."""
+        if self._closed:
+            raise RedisSignalError("DWD_READY_REDIS_CLOSED") from None
+        result = {'ping': self._client.ping() is True}
+        known_types = ('none', 'list', 'string', 'hash', 'set', 'zset', 'stream')
+        for name, key in (('queue', self.queue_key), ('processing', self.processing_key)):
+            kind = self._client.type(key)
+            if isinstance(kind, bytes):
+                kind = kind.decode('ascii', errors='replace')
+            kind = kind if kind in known_types else 'unknown'
+            length = 0 if kind == 'none' else None
+            if kind == 'list':
+                length = self._client.llen(key)
+                if type(length) is not int or length < 0:
+                    raise RedisSignalError("DWD_READY_REDIS_INSPECT_FAILED") from None
+            result[name] = {'key': key, 'type': kind, 'length': length}
+        return result
+
     def receive(self, block=True) -> str | bytes | None:
         if self._closed:
             raise RedisSignalError("DWD_READY_REDIS_CLOSED") from None

@@ -41,6 +41,10 @@ Services/Service/data-converge/
 
 标记与账本都在本地存储中。整个 hostPath 丢失、Pod 调度到另一个空节点目录，或旧版本在写入标记前已经丢失账本时，无法仅凭空目录区别首次部署与状态丢失。正式迁移需保证账本存储连续；自动初始化不提供跨节点状态恢复。
 
+## 快速定位
+
+新增 `--diagnose`、`--diagnose --online`、`--failures`、`--inspect-instance`、`--dwd-status`，默认中文文本，支持 `--format json`；原 `--status` 保持兼容。完整容器命令、错误证据及只读边界见 [运行定位指南](docs/diagnostics.md)。
+
 ## 日志
 
 业务日志优先写入 `${LOG_PATH}/${SERVICE_NAME}.log`，同时保留 stderr 输出。没有 `LOG_PATH` 时兼容部署注入的完整文件名 `SERVICE_LOG_PATH`，再按 `PRODUCT_NAME` 拼接平台路径。本地没有平台日志变量时只输出到 stderr。公司启动日志 `start.log` 继续由平台管理。

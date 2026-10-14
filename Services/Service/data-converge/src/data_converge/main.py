@@ -15,6 +15,8 @@ from data_converge.config.application import (
 from data_converge.observability.logging import LOG_FORMAT, LoggingSession
 from data_converge.observability.settings import LoggingSettings
 from data_converge.state.bootstrap import StateBootstrapError
+from data_converge.diagnostics import cli as diagnostics
+from data_converge.errors import safe_error_details
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,9 @@ def arguments(argv):
     parser.add_argument('--now', help='Explicit evaluation time; only with --run-once')
     parser.add_argument('--resolution', choices=['success', 'retry'])
     parser.add_argument('--note')
+    diagnostics.add_arguments(parser, modes)
     args = parser.parse_args(argv)
+    diagnostics.validate_arguments(parser, args)
     if args.start_time and not args.init_state:
         parser.error('--start-time requires --init-state')
     if args.now and not args.run_once:
@@ -74,11 +78,17 @@ def main(argv=None):
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     args = arguments(argv)
+    if diagnostics.is_diagnostic(args):
+        return diagnostics.run(args)
+    stage = 'LOGGING'
     with ExitStack() as cleanup:
         try:
             logs = cleanup.enter_context(LoggingSession())
+            stage = 'CONFIG'
             config = load_app_config(args.config)
+            stage = 'LOGGING'
             logs.configure(LoggingSettings.from_mapping(config.get('logging')))
+            stage = 'APPLICATION'
             result = run(args, raw_config=config)
             if result.payload is not None:
                 output(result.payload)
@@ -86,7 +96,8 @@ def main(argv=None):
         except (Exception, KeyboardInterrupt) as exc:
             # Log before cleanup; untrusted SDK/server/SQL bodies stay private.
             detail = str(exc) if isinstance(exc, (StartupError, StateBootstrapError)) else type(exc).__name__
-            logger.error('SERVICE_FAILED: %s', detail)
+            logger.error('SERVICE_FAILED: %s stage=%s diagnostic=%s', detail, stage,
+                         json.dumps(safe_error_details(exc), ensure_ascii=False))
             return 1
 
 

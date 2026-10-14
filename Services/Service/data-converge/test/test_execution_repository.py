@@ -54,6 +54,23 @@ def test_repository_status_reports_running_after_retry(repository):
     assert repository.get_status(instance.instance_id) == TaskStatus.RUNNING
 
 
+def test_repository_evidence_is_sanitized_and_cleared_for_next_attempt(repository):
+    builder, dag = graph()
+    instance = builder.create_instance(dag, "root", NOW)
+    instance.query_id = "caller-attempt"
+    repository.enqueue_and_advance([instance], {})
+    assert repository.claim(instance.instance_id, now=NOW)
+    query_id = repository.get_instance(instance.instance_id)["query_id"]
+    repository.finish(instance.instance_id, TaskStatus.FAILED, retryable=True,
+                      diagnostic={"http_status": 503, "sql": "private"}, now=NOW)
+    assert repository.get_execution_diagnostic(instance.instance_id) == {
+        "http_status": 503, "query_id": query_id}
+    assert repository.claim(instance.instance_id, now=NOW)
+    assert repository.get_execution_diagnostic(instance.instance_id) is None
+    repository.finish(instance.instance_id, TaskStatus.UNKNOWN, now=NOW)
+    assert repository.get_execution_diagnostic(instance.instance_id) is None
+
+
 def test_memory_active_claim_survives_registration_of_another_batch():
     builder, dag = graph()
     repository = InMemoryExecutionRepository()
