@@ -84,7 +84,7 @@ class LeaderElector:
 
     def bind_ledger(self, node_id: str, ledger_id: str, *, require_existing: bool = False) -> bool:
         """Keep the permanent ledger identity separate from the expiring owner."""
-        if not isinstance(ledger_id, str) or not ledger_id or type(require_existing) is not bool:
+        if not isinstance(ledger_id, str) or not ledger_id or not isinstance(require_existing, bool):
             raise ValueError('LEADERSHIP_LEDGER_INVALID')
         result = self._command(self.redis_client.eval, BIND_SCRIPT, 2,
                                self.leader_key, self.ledger_key, node_id,

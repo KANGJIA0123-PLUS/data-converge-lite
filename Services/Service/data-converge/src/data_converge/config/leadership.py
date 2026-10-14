@@ -22,7 +22,7 @@ class LeadershipSettings:
         return result
 
     def validate(self, ready):
-        if type(self.enabled) is not bool:
+        if not isinstance(self.enabled, bool):
             raise ValueError('LEADERSHIP_CONFIG_INVALID')
         if not isinstance(self.cluster_name, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', self.cluster_name):
             raise ValueError('LEADERSHIP_CONFIG_INVALID')
