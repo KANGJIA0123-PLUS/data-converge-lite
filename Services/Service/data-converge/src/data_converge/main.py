@@ -1,12 +1,10 @@
 """Command-line argument, output and process error boundary."""
 from __future__ import annotations
 
-import argparse
 from contextlib import ExitStack
 import json
 import logging
 import os
-from pathlib import Path
 
 from data_converge.application import Application, CommandResult
 from data_converge.config.application import (
@@ -17,27 +15,16 @@ from data_converge.observability.settings import LoggingSettings
 from data_converge.state.bootstrap import StateBootstrapError
 from data_converge.diagnostics import cli as diagnostics
 from data_converge.errors import safe_error_details
+from data_converge.cli_help import add_operation_arguments, create_parser
 
 logger = logging.getLogger(__name__)
 
 
 def arguments(argv):
-    parser = argparse.ArgumentParser(description='Data Converge Lite')
-    parser.add_argument('--config', type=Path, default=DEFAULT_APP_CONFIG_PATH)
+    parser = create_parser()
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument('--validate-only', action='store_true')
-    modes.add_argument('--init-state', action='store_true')
-    modes.add_argument('--status', action='store_true')
-    modes.add_argument('--healthcheck', choices=['liveness', 'readiness'])
-    modes.add_argument('--run-once', action='store_true')
-    modes.add_argument('--run-task')
-    modes.add_argument('--resolve-instance')
-    parser.add_argument('--start-time', help='First complete data window; only with --init-state')
-    parser.add_argument('--scheduled-time')
-    parser.add_argument('--now', help='Explicit evaluation time; only with --run-once')
-    parser.add_argument('--resolution', choices=['success', 'retry'])
-    parser.add_argument('--note')
     diagnostics.add_arguments(parser, modes)
+    add_operation_arguments(parser, modes)
     args = parser.parse_args(argv)
     diagnostics.validate_arguments(parser, args)
     if args.start_time and not args.init_state:

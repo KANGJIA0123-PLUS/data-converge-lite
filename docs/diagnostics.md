@@ -6,6 +6,14 @@
 
 ## 常用命令
 
+不熟悉参数时，直接查看内置中文帮助，包含按问题选择的入口、可复制的命令、时间格式和退出码说明：
+
+```bash
+bash /opt/its/data-converge/bin/start_data_converge.sh --help
+```
+
+`-h` 与 `--help` 等效。帮助在加载业务配置、日志和远端连接前退出；配置文件缺失时也能查看，但辅助脚本仍需可用的平台 Python 环境。
+
 先看哪里异常，本地检查不连接 Redis 或 ClickHouse：
 
 ```bash
