@@ -13,6 +13,7 @@ from data_converge.dag.retry import can_start_attempt
 from data_converge.errors import safe_diagnostic_details
 
 from .bootstrap import StateBootstrap, StateBootstrapError
+from . import history
 
 
 def _stamp(value: datetime) -> str:
@@ -227,6 +228,21 @@ class StateStore:
         rows = self._connection().execute("SELECT * FROM task_instances ORDER BY data_end DESC, taskname LIMIT ?", (limit,)).fetchall()
         return [dict(row) for row in rows]
 
+    def history_available(self) -> bool:
+        return history.available(self._connection())
+
+    def list_execution_attempts(self, instance_id: str | None = None, *,
+                                taskname: str | None = None, limit: int = 20,
+                                offset: int = 0) -> list[dict]:
+        return history.list_attempts(self._connection(), instance_id, taskname=taskname,
+                                     limit=limit, offset=offset)
+
+    def list_legacy_resolutions(self, instance_id: str | None = None, *,
+                                taskname: str | None = None, limit: int = 20,
+                                offset: int = 0) -> list[dict]:
+        return history.list_legacy_resolutions(self._connection(), instance_id, taskname=taskname,
+                                               limit=limit, offset=offset)
+
     def record_dwd_signal(self, window_start: datetime, dwd_type: str, received_at: datetime) -> None:
         if not isinstance(dwd_type, str) or not dwd_type.strip():
             raise ValueError("dwd_type must be non-empty")
@@ -273,6 +289,8 @@ class StateStore:
                 attempts=attempts+1, started_at=?, finished_at=NULL, error=NULL,
                 retryable=0, next_retry_at=NULL, query_id=? WHERE instance_id=? AND status=?""",
                 (_stamp(now), str(uuid.uuid4()), instance_id, status.value))
+            if updated.rowcount == 1:
+                history.record_claim(conn, instance_id)
             return updated.rowcount == 1
 
     def finish(self, instance_id: str, status: TaskStatus, *, error: str | None = None,
@@ -291,6 +309,7 @@ class StateStore:
                 raise RuntimeError(f"Cannot finish an unclaimed instance: {instance_id}")
             if diagnostic and status != TaskStatus.SUCCESS:
                 self._save_execution_diagnostic(conn, instance_id, diagnostic)
+            history.record_finish(conn, instance_id, diagnostic)
 
     @staticmethod
     def _save_execution_diagnostic(conn, instance_id: str, diagnostic: dict) -> None:
@@ -327,6 +346,7 @@ class StateStore:
     def recover_running(self) -> int:
         conn = self._connection(write=True)
         with conn:
+            history.record_recovery(conn, _stamp(datetime.now(timezone.utc)))
             result = conn.execute("""UPDATE task_instances SET status='UNKNOWN', retryable=0,
                 next_retry_at=NULL, error='Process stopped before execution outcome was durably recorded'
                 WHERE status='RUNNING'""")
@@ -347,3 +367,4 @@ class StateStore:
                 (resolution, note.strip(), _stamp(datetime.now(timezone.utc)), resolution, instance_id, resolution))
             if result.rowcount != 1:
                 raise ValueError(f"Only UNKNOWN can become SUCCESS; only UNKNOWN/FAILED can retry: {instance_id}")
+            history.record_resolution(conn, instance_id)

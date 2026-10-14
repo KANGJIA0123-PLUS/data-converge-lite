@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from data_converge.dwd_ready.redis_source import RedisSignalError, RedisSignalSource
+from data_converge.config.leadership import LeadershipSettings
 
 
 class ReadOnlyRedis:
@@ -42,7 +43,7 @@ def ready_config(enabled=True):
 
 
 def definition(enabled=True):
-    return SimpleNamespace(config={
+    return SimpleNamespace(leadership=LeadershipSettings(), config={
         'clickhouse': {'host': 'localhost', 'port': 8123, 'database': 'metrics',
                        'username': 'reader', 'password': 'private password',
                        'secure': False, 'verify': True},
@@ -193,3 +194,30 @@ def test_unexpected_component_failure_still_checks_the_other_component(monkeypat
     assert results[0]['status'] == 'FAIL'
     assert [item['status'] for item in results[-2:]] == ['PASS', 'PASS']
     assert client.closed and 'private' not in json.dumps(results)
+
+
+class ReadOnlyLeaderRedis(ReadOnlyRedis):
+    def get(self, key):
+        self.commands.append(('GET', key))
+        return b'private lease token'
+
+    def ttl(self, key):
+        self.commands.append(('TTL', key))
+        return 20
+
+    def exists(self, key):
+        self.commands.append(('EXISTS', key))
+        return 1
+
+
+def test_online_leadership_diagnostic_reads_without_claim_or_renew(monkeypatch):
+    from data_converge.diagnostics import connections
+    client = ReadOnlyLeaderRedis()
+    monkeypatch.setattr(connections.redis_source, 'create_source',
+                        lambda _: RedisSignalSource(client, ready_config()))
+    value = definition()
+    value.leadership = LeadershipSettings(enabled=True)
+    result = connections._leadership_check(value)
+    assert result['status'] == 'PASS'
+    assert [command[0] for command in client.commands] == ['GET', 'TTL', 'EXISTS']
+    assert client.closed and 'private' not in json.dumps(result)

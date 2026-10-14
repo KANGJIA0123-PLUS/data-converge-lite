@@ -4,11 +4,12 @@ from datetime import datetime
 
 from data_converge.config.application import binding, load_app_config, state_directory
 from data_converge.dwd_ready.config import load_ready_config
+from data_converge.health import heartbeat_directory
 from .checks import (credential_files, definition_check, failure, heartbeat_check,
                      log_check, logging_settings_check, module_check, protected_check,
-                     state_check, task_check)
+                     state_check, task_check, leadership_check)
 from .ledger import DiagnosticLedger
-from .report import check, evidence_action, report, task_record
+from .report import attempt_record, check, evidence_action, legacy_resolution_record, report, task_record
 from .windows import list_windows, parse_window
 
 
@@ -32,7 +33,8 @@ def diagnose(path, *, online=False):
         checks.append(protected_check('runtime.modules', module_check, definition))
         checks.extend(credential_files(definition))
     checks.extend([protected_check('logging.settings', logging_settings_check, raw),
-                   protected_check('logs', log_check), heartbeat_check(directory)])
+                   protected_check('logs', log_check),
+                   protected_check('heartbeat', heartbeat_check, heartbeat_directory(directory, raw))])
     checks.extend(_ledger_checks(directory, definition))
     if online and definition is not None:
         from .connections import check_connections
@@ -49,6 +51,8 @@ def _ledger_checks(directory, definition):
         with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
             results.append(state_check(store, definition))
             results.append(task_check(store.status_counts()))
+            if definition is not None:
+                results.append(protected_check('leadership', leadership_check, store, definition))
             if definition is not None and definition.config['dwd_ready']['enabled']:
                 windows = list_windows(store, definition.config['dwd_ready'])
                 late = [row for row in windows if row['warning_due']]
@@ -94,7 +98,7 @@ def dwd_status(path, *, limit=20, window=None):
         return report('dwd-status', [failure('dwd', error, '就绪状态查询失败', '先运行 --diagnose。')])
 
 
-def inspect_instance(path, instance_id):
+def inspect_instance(path, instance_id, *, limit=20, offset=0):
     try:
         raw, directory = _read_context(path)
         with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
@@ -104,6 +108,7 @@ def inspect_instance(path, instance_id):
                               {'instance_id': instance_id}, '从 --failures 或 --status 复制完整 instance_id。')])
             data = dict(instance=task_record(row), diagnostic=None)
             checks = [task_check({row['status']: 1})]
+            _inspect_history(store, instance_id, data, checks, limit=limit, offset=offset)
             try:
                 data['diagnostic'] = store.get_execution_diagnostic(instance_id)
             except Exception as error:
@@ -123,6 +128,48 @@ def inspect_instance(path, instance_id):
         return report('inspect-instance', checks, data)
     except Exception as error:
         return report('inspect-instance', [failure('instance', error, '实例查询失败', '先运行 --diagnose。')])
+
+
+def _history_page(store, *, instance_id=None, task=None, limit=20, offset=0):
+    data = dict(available=store.history_available(), task=task, instance_id=instance_id,
+                limit=limit, offset=offset, has_more=False, attempts=[],
+                legacy_resolutions=[], legacy_resolutions_has_more=False)
+    if not data['available']:
+        return data, check('execution-history', 'SKIP', '旧版未记录执行历史；本命令不会生成或追补历史')
+    rows = store.list_execution_attempts(instance_id, taskname=task, limit=limit, offset=offset)
+    data['attempts'] = [attempt_record(row) for row in rows]
+    if len(rows) == limit:
+        data['has_more'] = bool(store.list_execution_attempts(
+            instance_id, taskname=task, limit=1, offset=offset + limit))
+    resolutions = store.list_legacy_resolutions(instance_id, taskname=task, limit=limit, offset=offset)
+    data['legacy_resolutions'] = [legacy_resolution_record(row) for row in resolutions]
+    if len(resolutions) == limit:
+        data['legacy_resolutions_has_more'] = bool(store.list_legacy_resolutions(
+            instance_id, taskname=task, limit=1, offset=offset + limit))
+    result = check('execution-history', 'PASS', '执行历史查询完成；历史结果不代表当前未处理告警',
+                   dict(shown=len(rows), limit=limit, offset=offset, has_more=data['has_more'],
+                        legacy_resolutions_shown=len(resolutions),
+                        legacy_resolutions_has_more=data['legacy_resolutions_has_more']))
+    return data, result
+
+
+def history(path, *, task=None, limit=20, offset=0):
+    try:
+        _, directory = _read_context(path)
+        with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
+            data, result = _history_page(store, task=task, limit=limit, offset=offset)
+        return report('history', [result], data)
+    except Exception as error:
+        return report('history', [failure('execution-history', error, '执行历史查询失败', '先运行 --diagnose。')])
+
+
+def _inspect_history(store, instance_id, data, checks, *, limit, offset):
+    try:
+        data['history'], result = _history_page(store, instance_id=instance_id, limit=limit, offset=offset)
+        checks.append(result)
+    except Exception as error:
+        checks.append(failure('execution-history', error, '附加执行历史不可读，主账本仍可查看',
+                              '核对历史表完整性；本命令不会修复或追补历史。'))
 
 
 def _inspect_dependencies(store, definition, row, data):

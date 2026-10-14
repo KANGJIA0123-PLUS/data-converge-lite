@@ -19,6 +19,7 @@ from data_converge.sql_execution.config import connection_origin, validate_confi
 
 from .loader import ConfigLoader
 from .cron import compile_cron_groups
+from .leadership import LeadershipSettings
 
 RESOURCES = Path(__file__).resolve().parents[3] / 'resources'
 DEFAULT_APP_CONFIG_PATH = RESOURCES / 'config/app_config.yaml'
@@ -62,6 +63,7 @@ class ApplicationDefinition:
     builder: DAGBuilder
     dag: DAG
     sql_dir: Path
+    leadership: LeadershipSettings = field(default_factory=LeadershipSettings)
 
 
 def load_app_config(path: Path) -> dict[str, Any]:
@@ -127,7 +129,8 @@ def load_definition(config_path: Path, *, raw_config: dict[str, Any] | None = No
     for taskname in dag.topological_order:
         builder.create_instance(dag, taskname, anchor)
     compile_cron_groups(dag, options.timezone)
-    return ApplicationDefinition(config, options, builder, dag, sql_dir)
+    return ApplicationDefinition(config, options, builder, dag, sql_dir,
+                                 LeadershipSettings.from_config(config))
 
 
 def binding(config: dict[str, Any], dag: DAG) -> str:

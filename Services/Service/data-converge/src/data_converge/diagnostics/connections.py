@@ -89,4 +89,22 @@ def check_connections(definition) -> list[dict]:
         except Exception as error:
             results.append(_failed(name + '.connection', '连接诊断未完成', error, {},
                                    '根据安全错误类型检查该组件配置和诊断环境。'))
+    if definition.leadership.enabled:
+        results.append(_leadership_check(definition))
     return results
+
+
+def _leadership_check(definition):
+    try:
+        with closing(redis_source.create_source(definition.config['dwd_ready'])) as source:
+            elector = source.create_leader_elector(definition.leadership.cluster_name)
+            present = elector.get_current_leader() is not None
+            ttl = elector.get_leader_ttl()
+            registered = elector.ledger_registered()
+        status = 'PASS' if present and ttl > 0 and registered else 'WARN'
+        return _result('leadership.redis', status, 'Redis 租约与账本注册信息（只读瞬时观察）',
+                       dict(leader_present=present, ttl_seconds=ttl, ledger_registered=registered),
+                       '主备须使用同一持久账本。此检查不抢租、不续租，也不验证 EVAL 写权限。')
+    except Exception as error:
+        return _failed('leadership.redis', 'Redis 租约信息不可读取', error, {},
+                       '核对 Redis 连接和 GET/TTL/EXISTS 权限；不要删除租约或账本注册键。')

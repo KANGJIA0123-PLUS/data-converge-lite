@@ -1,6 +1,6 @@
 # Data Converge Lite
 
-基于 ClickHouse 的汇聚服务：接收 DWD 就绪信号，按任务依赖执行现有 48 个汇聚任务，并在本地账本记录执行结果。业务流程、命令入口和公司字节码构建方式保持兼容。
+基于 ClickHouse 的汇聚服务：接收 DWD 就绪信号，按任务依赖执行现有 52 个汇聚任务，并在本地账本记录执行结果。业务流程、命令入口和公司字节码构建方式保持兼容。
 
 ## 目录与职责
 
@@ -31,7 +31,7 @@ Services/Service/data-converge/
 
 `Application` 作为用例门面；运行时工厂负责装配，`ExitStack` 管理资源释放；SQL/Redis 适配器连接外部系统；`StateStore` 管理持久化；日志策略与文件操作分别维护。旧的 `logging_config`、`scheduler.scheduler` 和 ClickHouse `client` 配置函数保留兼容导出。
 
-任务执行、执行状态和就绪消息源通过 `Protocol` 定义契约；运行依赖可通过 `RuntimeDependencies` 显式注入。扩展方式、故障保证与高可用边界见 [业务架构与扩展约定](docs/architecture.md)。当前仍为单写实例运行模型。
+任务执行、执行状态和就绪消息源通过 `Protocol` 定义契约；运行依赖可通过 `RuntimeDependencies` 显式注入。Redis 租约协调主备，本地文件锁和同一持久账本保证单写与状态连续。选主配置、逐次执行历史及能力边界见 [六项可靠性问题核对](docs/reliability.md)；扩展约定见 [业务架构](docs/architecture.md)。
 
 ## 启动与状态
 
@@ -43,7 +43,7 @@ Services/Service/data-converge/
 
 ## 快速定位
 
-新增 `--diagnose`、`--diagnose --online`、`--failures`、`--inspect-instance`、`--dwd-status`，默认中文文本，支持 `--format json`；原 `--status` 保持兼容。完整容器命令、错误证据及只读边界见 [运行定位指南](docs/diagnostics.md)。
+提供 `--diagnose`、`--diagnose --online`、`--failures`、`--history`、`--inspect-instance`、`--dwd-status`，默认中文文本，支持 `--format json`；原 `--status` 保持兼容。完整容器命令、错误证据及只读边界见 [运行定位指南](docs/diagnostics.md)。
 
 ## 日志
 
