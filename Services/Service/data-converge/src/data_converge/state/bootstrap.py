@@ -49,13 +49,19 @@ class StateBootstrap:
     def mark_ready(self) -> None:
         _sync_directory(self.directory)
         descriptor, name = tempfile.mkstemp(prefix=self.marker.name + ".", dir=self.marker.parent)
-        temporary = Path(name)
         try:
-            with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-                stream.write("ready\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.marker)
+            try:
+                # Retain ownership even when constructing the stream fails.
+                with os.fdopen(descriptor, "w", encoding="ascii", closefd=False) as stream:
+                    stream.write("ready\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            finally:
+                os.close(descriptor)
+            os.replace(name, self.marker)
             _sync_directory(self.marker.parent)
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                os.unlink(name)
+            except FileNotFoundError:
+                pass  # Successful replacement has already moved this path.

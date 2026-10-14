@@ -1,13 +1,17 @@
 """First-start admission preserves an existing or interrupted local ledger."""
 
+import errno
+import os
 import shutil
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
 from data_converge.state import StateStore
-from data_converge.state.bootstrap import StateBootstrapError
+from data_converge.state import bootstrap
+from data_converge.state.bootstrap import StateBootstrap, StateBootstrapError
 
 
 def mark_ready(store):
@@ -132,3 +136,52 @@ def test_unfinished_metadata_cannot_be_marked_initialized(tmp_path):
         assert store.get_meta("binding") is None
         with pytest.raises(StateBootstrapError, match="STATE_NOT_INITIALIZED"):
             store.mark_initialized()
+
+
+def test_marker_stream_open_failure_closes_descriptor_and_removes_file(tmp_path, monkeypatch):
+    state = StateBootstrap(tmp_path / "ledger" / "state.sqlite3")
+    state.directory.mkdir()
+    state.marker.write_text("pending\n")
+    created = []
+    create_temporary = bootstrap.tempfile.mkstemp
+
+    def capture_temporary(*args, **kwargs):
+        result = create_temporary(*args, **kwargs)
+        created.append(result)
+        return result
+
+    def fail_open(*args, **kwargs):
+        raise OSError("injected stream open failure")
+
+    monkeypatch.setattr(bootstrap.tempfile, "mkstemp", capture_temporary)
+    monkeypatch.setattr(bootstrap.os, "fdopen", fail_open)
+    try:
+        with pytest.raises(OSError, match="injected stream open failure"):
+            state.mark_ready()
+        descriptor, name = created[0]
+        assert not Path(name).exists()
+        assert state.marker.read_text() == "pending\n"
+        with pytest.raises(OSError) as error:
+            os.fstat(descriptor)
+        assert error.value.errno == errno.EBADF
+    finally:
+        for descriptor, _ in created:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def test_marker_replace_failure_keeps_marker_and_removes_temporary_file(tmp_path, monkeypatch):
+    state = StateBootstrap(tmp_path / "ledger" / "state.sqlite3")
+    state.directory.mkdir()
+    state.marker.write_text("pending\n")
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(bootstrap.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected replace failure"):
+        state.mark_ready()
+    assert state.marker.read_text() == "pending\n"
+    assert sorted(tmp_path.iterdir()) == sorted([state.directory, state.marker])
