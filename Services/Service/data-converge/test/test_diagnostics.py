@@ -27,6 +27,59 @@ def test_diagnose_missing_config_reports_without_creating_logs(tmp_path, monkeyp
     assert not (tmp_path / 'logs').exists()
 
 
+@pytest.mark.parametrize('field, other', [
+    ('convergence_rules_path', 'sql_directory'), ('sql_directory', 'convergence_rules_path'),
+])
+@pytest.mark.parametrize('invalid, error_code', [
+    ('', 'CONFIG_PATH_INVALID'),
+    ({'password': 'path-secret'}, 'CONFIG_PATH_INVALID'),
+    ('$CODECHECK_MISSING_ASSET_PATH', 'CONFIG_PATH_ENV_MISSING'),
+])
+def test_diagnose_reports_path_errors_without_hiding_primary_error(
+        app, capsys, monkeypatch, field, other, invalid, error_code):
+    monkeypatch.delenv('CODECHECK_MISSING_ASSET_PATH', raising=False)
+    raw = yaml.safe_load(app.read_text())
+    raw['clickhouse']['port'] = 0
+    raw['config'][field] = invalid
+    app.write_text(yaml.safe_dump(raw))
+    code, result = run_json(app, capsys, '--diagnose')
+    checks = {item['id']: item for item in result['checks']}
+    evidence = checks['definition']['evidence']
+    assert code == 1 and checks['definition']['status'] == 'FAIL'
+    assert evidence['error_code'] == 'CLICKHOUSE_CONNECTION_INVALID'
+    assert evidence['path_errors'] == {field: {'error_type': 'StartupError', 'error_code': error_code}}
+    assert evidence[other] == raw['config'][other] and evidence['config'] == str(app)
+    assert {'logging.settings', 'heartbeat', 'state', 'connections'} <= checks.keys()
+    assert 'path-secret' not in json.dumps(result)
+    assert not (app.parent / 'state').exists()
+
+
+def test_diagnose_redacts_multiple_path_exceptions_in_json_and_text(app, capsys, monkeypatch):
+    from data_converge.diagnostics import checks
+    from data_converge.diagnostics.report import render_text
+
+    def fail_path(value, default, path):
+        if default == 'sql':
+            raise PermissionError(13, 'password=path-secret')
+        raise RuntimeError('password=path-secret')
+
+    raw = yaml.safe_load(app.read_text())
+    raw['clickhouse']['port'] = 0
+    app.write_text(yaml.safe_dump(raw))
+    monkeypatch.setattr(checks, 'asset_path', fail_path)
+    code, result = run_json(app, capsys, '--diagnose')
+    item = next(item for item in result['checks'] if item['id'] == 'definition')
+    assert code == 1 and item['status'] == 'FAIL'
+    assert item['evidence']['error_code'] == 'CLICKHOUSE_CONNECTION_INVALID'
+    assert item['evidence']['path_errors'] == {
+        'convergence_rules_path': {'error_type': 'RuntimeError'},
+        'sql_directory': {'error_type': 'PermissionError', 'os_errno': 13},
+    }
+    for output in (json.dumps(result), render_text(result)):
+        assert 'path-secret' not in output
+        assert 'RuntimeError' in output and 'PermissionError' in output
+
+
 def test_diagnose_corrupt_ledger_continues_and_does_not_repair(app, capsys):
     directory = app.parent / 'state'
     directory.mkdir()

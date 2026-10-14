@@ -46,8 +46,8 @@ def definition_check(path, raw):
                                    ('sql_directory', 'sql')):
                 try:
                     paths[field] = str(asset_path(section.get(field), default, path))
-                except Exception:
-                    pass
+                except Exception as path_error:
+                    paths.setdefault('path_errors', {})[field] = safe_error_details(path_error)
         return None, failure('definition', error, '业务配置或 SQL 文件检查失败',
                              '核对证据中的文件路径、挂载和权限，再运行 --validate-only。', **paths)
 
