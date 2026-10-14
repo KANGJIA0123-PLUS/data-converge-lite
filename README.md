@@ -33,6 +33,14 @@ Services/Service/data-converge/
 
 任务执行、执行状态和就绪消息源通过 `Protocol` 定义契约；运行依赖可通过 `RuntimeDependencies` 显式注入。扩展方式、故障保证与高可用边界见 [业务架构与扩展约定](docs/architecture.md)。当前仍为单写实例运行模型。
 
+## 启动与状态
+
+公司启动入口保持 `bash /opt/its/data-converge/bin/start.sh`。业务首次启动时，如果状态目录没有账本、初始化标记或其他残留，会自动初始化 SQLite，日志记录 `STATE_INITIALIZED: coverage_start=...`。覆盖起点为当前时间向上取整到五分钟边界；之前窗口不在新账本的处理范围。已有账本会校验并复用，保留覆盖起点和任务结果。
+
+初始化标记保存在状态目录的父目录，默认与 `lite-state/` 同级。删除账本或状态子目录但保留标记时，启动会报 `STATE_DATABASE_MISSING`；数据库损坏、不完整或部署绑定不匹配时也不会自动重建。不要通过删除标记绕过恢复检查。需要指定首次覆盖起点时，仍可在首次服务启动前使用 `--init-state --start-time`，它不能重置已有覆盖起点。
+
+标记与账本都在本地存储中。整个 hostPath 丢失、Pod 调度到另一个空节点目录，或旧版本在写入标记前已经丢失账本时，无法仅凭空目录区别首次部署与状态丢失。正式迁移需保证账本存储连续；自动初始化不提供跨节点状态恢复。
+
 ## 日志
 
 业务日志优先写入 `${LOG_PATH}/${SERVICE_NAME}.log`，同时保留 stderr 输出。没有 `LOG_PATH` 时兼容部署注入的完整文件名 `SERVICE_LOG_PATH`，再按 `PRODUCT_NAME` 拼接平台路径。本地没有平台日志变量时只输出到 stderr。公司启动日志 `start.log` 继续由平台管理。

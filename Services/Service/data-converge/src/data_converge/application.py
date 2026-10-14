@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -22,6 +23,8 @@ from data_converge.dag import ExecutionReport, TaskStatus
 from data_converge.health import healthcheck
 from data_converge.runtime import RuntimeDependencies, open_runtime
 from data_converge.state import StateStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -110,19 +113,28 @@ class Application:
         if start and next_boundary(start) != start:
             raise StartupError('START_TIME_MUST_BE_A_FIVE_MINUTE_BOUNDARY')
         with closing(StateStore(self.directory / 'state.sqlite3', create=True)) as store:
-            store.acquire_lock()
+            store.acquire_startup_lock()
             initialize_state(store, fingerprint, start)
+            store.mark_initialized()
             return CommandResult(payload={
                 'status': 'INITIALIZED', 'coverage_start': store.get_meta('coverage_start'),
             })
 
     @contextmanager
-    def _active_state(self):
+    def _active_state(self, *, bootstrap: bool = False):
         fingerprint = self.fingerprint
-        with closing(StateStore(self.directory / 'state.sqlite3')) as store:
-            store.acquire_lock()
+        with closing(StateStore(self.directory / 'state.sqlite3', create=bootstrap)) as store:
+            created = store.acquire_startup_lock() if bootstrap else False
+            if not bootstrap:
+                store.acquire_lock()
+            if created:
+                initialize_state(store, fingerprint, None)
             if store.get_meta('binding') != fingerprint or not store.get_meta('coverage_start'):
                 raise StartupError('STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED')
+            parse_time(store.get_meta('coverage_start'))
+            store.mark_initialized()
+            if created:
+                logger.info('STATE_INITIALIZED: coverage_start=%s', store.get_meta('coverage_start'))
             store.recover_running()
             yield store
 
@@ -150,6 +162,6 @@ class Application:
             return report_result(runtime.run_once(parse_time(now) if now else None))
 
     def serve(self) -> CommandResult:
-        with self._active_state() as store, self._runtime(store) as runtime:
+        with self._active_state(bootstrap=True) as store, self._runtime(store) as runtime:
             runtime.serve()
         return CommandResult()

@@ -10,6 +10,8 @@ from typing import Iterable, Mapping
 from data_converge.dag.models import TaskInstance, TaskStatus
 from data_converge.dag.retry import can_start_attempt
 
+from .bootstrap import StateBootstrap, StateBootstrapError
+
 
 def _stamp(value: datetime) -> str:
     if value.tzinfo is None or value.utcoffset() is None:
@@ -37,6 +39,7 @@ class StateStore:
         self._create = create
         self._lock_file = None
         self._conn: sqlite3.Connection | None = None
+        self._startup_created: bool | None = None
         if not create and not self.path.is_file():
             raise FileNotFoundError(f"State database missing: {self.path}; use --init-state explicitly")
 
@@ -45,28 +48,60 @@ class StateStore:
             return
         if self._create:
             self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._acquire_file_lock()
+        try:
+            self._open_database(create=self._create, upgrade=True)
+        except BaseException:
+            self.close()
+            raise
+
+    def _acquire_file_lock(self) -> None:
         lock_file = self.lock_path.open("a+")
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             lock_file.close()
             raise RuntimeError(f"Another local writer owns the state lock: {self.lock_path}") from exc
+        except BaseException:
+            lock_file.close()
+            raise
         self._lock_file = lock_file
+
+    def acquire_startup_lock(self) -> bool:
+        """Admit an unmarked, otherwise empty state directory; never repair a ledger."""
+        if self._lock_file is not None:
+            if self._startup_created is None:
+                raise RuntimeError("State startup requires its own lock acquisition")
+            return self._startup_created
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._acquire_file_lock()
         try:
-            if self._conn is not None:
-                self._conn.close()
-            mode = "rwc" if self._create else "rw"
-            self._conn = sqlite3.connect(self.path.as_uri() + f"?mode={mode}", uri=True)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.execute("PRAGMA synchronous=FULL")
-            if self._create:
-                self._create_ledger_schema()
-            # An empty or unrelated database must not silently become a new ledger.
-            self._conn.execute("SELECT key, value FROM metadata LIMIT 1").fetchall()
-            self._conn.execute("SELECT instance_id FROM task_instances LIMIT 1").fetchall()
-            self._conn.execute("SELECT next_fire_time FROM schedule_cursors LIMIT 1").fetchall()
-            # Add the ready facts only after validating the existing ledger.
+            created = StateBootstrap(self.path).prepare(self.lock_path)
+            self._open_database(create=created, upgrade=created)
+            self._validate_startup_schema()
+            self._startup_created = created
+            return created
+        except sqlite3.DatabaseError:
+            self.close()
+            raise StateBootstrapError("STATE_DATABASE_INVALID") from None
+        except BaseException:
+            self.close()
+            raise
+
+    def _open_database(self, *, create: bool, upgrade: bool) -> None:
+        if self._conn is not None:
+            self._conn.close()
+        mode = "rwc" if create else "rw"
+        self._conn = sqlite3.connect(self.path.as_uri() + f"?mode={mode}", uri=True)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA busy_timeout=5000")
+        self._conn.execute("PRAGMA synchronous=FULL")
+        if create:
+            self._create_ledger_schema()
+        self._conn.execute("SELECT key, value FROM metadata LIMIT 1").fetchall()
+        self._conn.execute("SELECT instance_id FROM task_instances LIMIT 1").fetchall()
+        self._conn.execute("SELECT next_fire_time FROM schedule_cursors LIMIT 1").fetchall()
+        if upgrade:
             with self._conn:
                 self._conn.execute("""CREATE TABLE IF NOT EXISTS dwd_ready_signals (
                     window_start TEXT NOT NULL,
@@ -74,12 +109,24 @@ class StateStore:
                     received_at TEXT NOT NULL,
                     PRIMARY KEY (window_start, dwd_type)
                 )""")
-        except BaseException:
-            self.close()
-            raise
+
+    def _validate_startup_schema(self) -> None:
+        self._conn.execute("""SELECT instance_id, taskname, scheduled_time,
+            data_start, data_end, status, attempts, retryable, next_retry_at,
+            started_at, finished_at, error, query_id, resolution_note, resolved_at
+            FROM task_instances LIMIT 1""").fetchall()
+        self._conn.execute("SELECT taskname, next_fire_time FROM schedule_cursors LIMIT 1").fetchall()
+        self._conn.execute("SELECT window_start, dwd_type, received_at FROM dwd_ready_signals LIMIT 1").fetchall()
+
+    def mark_initialized(self) -> None:
+        """Record successful application binding only while holding its lock."""
+        self._connection(write=True)
+        if not self.get_meta("binding") or not self.get_meta("coverage_start"):
+            raise StateBootstrapError("STATE_NOT_INITIALIZED")
+        StateBootstrap(self.path).mark_ready()
 
     def _create_ledger_schema(self) -> None:
-        """Create the base ledger only during explicit state initialization."""
+        """Create the base ledger after the caller admits state initialization."""
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY, value TEXT NOT NULL
@@ -125,6 +172,7 @@ class StateStore:
             fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
             self._lock_file.close()
             self._lock_file = None
+        self._startup_created = None
 
     def get_meta(self, key: str, default: str | None = None) -> str | None:
         row = self._connection().execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()

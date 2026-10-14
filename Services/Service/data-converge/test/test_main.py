@@ -62,6 +62,38 @@ def test_state_init_is_explicit_and_cannot_reset_coverage(app, capsys):
     assert entry.main(args) == 0
 
 
+def test_normal_start_reuses_coverage_and_completed_tasks(local_http_app, monkeypatch):
+    path, _ = local_http_app
+    application = operations.Application(path)
+    application.initialize('2026-10-12T10:00:00+08:00')
+    assert application.run_once('2026-10-12T10:06:00+08:00').exit_code == 0
+    before = application.status().payload
+    monkeypatch.setattr(runtime.TaskScheduler, 'start', lambda self: None)
+
+    assert operations.Application(path).serve().exit_code == 0
+    assert operations.Application(path).status().payload == before
+
+
+@pytest.mark.parametrize('content', [b'', b'not-a-sqlite-ledger'])
+def test_normal_start_does_not_rebuild_invalid_database(app, content):
+    directory = app.parent / 'state'
+    directory.mkdir()
+    database = directory / 'state.sqlite3'
+    database.write_bytes(content)
+    assert entry.main(['--config', str(app)]) == 1
+    assert database.read_bytes() == content
+
+
+def test_normal_start_reports_lost_initialized_state(app, caplog):
+    import shutil
+
+    assert entry.main(['--config', str(app), '--init-state']) == 0
+    shutil.rmtree(app.parent / 'state')
+    assert entry.main(['--config', str(app)]) == 1
+    assert 'STATE_DATABASE_MISSING' in caplog.text
+    assert not (app.parent / 'state' / 'state.sqlite3').exists()
+
+
 def test_init_rejects_naive_or_partial_window_start(app):
     for timestamp in ["2026-10-12T10:00:00", "2026-10-12T10:01:00+08:00"]:
         assert entry.main(["--config", str(app), "--init-state", "--start-time", timestamp]) == 1
@@ -264,7 +296,8 @@ def test_ready_mode_cannot_be_disabled_to_bypass_existing_state(app):
     assert entry.main(['--config', str(app), '--init-state']) == 1
 
 
-def test_real_foreground_service_becomes_ready_and_handles_sigterm(local_http_app):
+@pytest.mark.parametrize('preinitialize', [False, True])
+def test_real_foreground_service_becomes_ready_and_handles_sigterm(local_http_app, preinitialize):
     import signal
     import subprocess
     import sys
@@ -272,7 +305,8 @@ def test_real_foreground_service_becomes_ready_and_handles_sigterm(local_http_ap
     from pathlib import Path
     app, seen = local_http_app
     base = ['--config', str(app)]
-    assert entry.main(base + ['--init-state']) == 0
+    if preinitialize:
+        assert entry.main(base + ['--init-state']) == 0
     env = os.environ.copy()
     env['PYTHONPATH'] = str(Path(entry.__file__).parent.parent)
     with (app.parent / 'service.log').open('w+') as logs:

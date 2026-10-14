@@ -14,6 +14,7 @@ from data_converge.config.application import (
 )
 from data_converge.observability.logging import LOG_FORMAT, LoggingSession
 from data_converge.observability.settings import LoggingSettings
+from data_converge.state.bootstrap import StateBootstrapError
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ def main(argv=None):
             return result.exit_code
         except (Exception, KeyboardInterrupt) as exc:
             # Log before cleanup; untrusted SDK/server/SQL bodies stay private.
-            detail = str(exc) if isinstance(exc, StartupError) else type(exc).__name__
+            detail = str(exc) if isinstance(exc, (StartupError, StateBootstrapError)) else type(exc).__name__
             logger.error('SERVICE_FAILED: %s', detail)
             return 1
 
