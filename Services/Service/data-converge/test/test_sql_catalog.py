@@ -7,8 +7,8 @@ from .paths import RESOURCES_ROOT
 
 def test_all_company_sql_rules_have_matching_files_and_dynamic_windows():
     rules = yaml.safe_load((RESOURCES_ROOT / "config/convergence_rules.yaml").read_text())["convergence_rules"]
-    assert len(rules) == 48
-    assert len({rule["taskname"] for rule in rules}) == 48
+    assert len(rules) == 52
+    assert len({rule["taskname"] for rule in rules}) == 52
     assert {rule["sql_id"] for rule in rules} == {p.stem for p in (RESOURCES_ROOT / "sql").glob("*.sql")}
     for rule in rules:
         sql = (RESOURCES_ROOT / "sql" / (rule["sql_id"] + ".sql")).read_text()

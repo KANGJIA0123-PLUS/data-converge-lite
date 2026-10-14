@@ -566,6 +566,58 @@ convergence_rules:
     sql_id: task_request_month_dws
 
   # ============================================================================
+  # 6.5 模型指标节点ADS表
+  # ============================================================================
+
+  # 6.5.1 模型指标节点5分钟ADS
+  - taskname: task_model_metric_node_5min_ads
+    description: 模型指标节点5分钟ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__5min_dws
+    target_table: t_mops__modelmetric_node__5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_model_metric_instance_5min_dws
+    sql_id: task_model_metric_node_5min_ads
+
+  # 6.5.2 模型指标节点小时ADS
+  - taskname: task_model_metric_node_hour_ads
+    description: 模型指标节点小时ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__hour_dws
+    target_table: t_mops__modelmetric_node__hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_metric_instance_hour_dws
+    sql_id: task_model_metric_node_hour_ads
+
+  # 6.5.3 模型指标节点天ADS
+  - taskname: task_model_metric_node_day_ads
+    description: 模型指标节点天ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__day_dws
+    target_table: t_mops__modelmetric_node__day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_metric_instance_day_dws
+    sql_id: task_model_metric_node_day_ads
+
+  # 6.5.4 模型指标节点月ADS
+  - taskname: task_model_metric_node_month_ads
+    description: 模型指标节点月ADS表
+    source_tables:
+      - t_mops__modelmetric_instance__month_dws
+    target_table: t_mops__modelmetric_node__month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_metric_instance_month_dws
+    sql_id: task_model_metric_node_month_ads
+
+  # ============================================================================
   # 7.2.1 请求追踪Agent ADS表
   # ============================================================================
 

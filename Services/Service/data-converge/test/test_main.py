@@ -231,12 +231,12 @@ def test_ready_validation_and_init_are_offline(app, monkeypatch):
     assert entry.main(['--config', str(app), '--init-state']) == 0
 
 
-def test_shipped_platform_config_validates_all_48_tasks_with_ready_enabled(monkeypatch, capsys):
+def test_shipped_platform_config_validates_all_52_tasks_with_ready_enabled(monkeypatch, capsys):
     for name, value in {'CLICKHOUSE_URL': 'offline.invalid', 'CLICKHOUSE_PORT': '8443',
                         'DWD_REDIS_HOST': 'offline.invalid', 'DWD_REDIS_PORT': '6379'}.items():
         monkeypatch.setenv(name, value)
     assert entry.main(['--config', str(entry.DEFAULT_APP_CONFIG_PATH), '--validate-only']) == 0
-    assert json.loads(capsys.readouterr().out)['tasks'] == 48
+    assert json.loads(capsys.readouterr().out)['tasks'] == 52
 
 
 def test_ready_cli_event_cron_and_manual_share_gate_and_success_ledger(local_http_app, monkeypatch, capsys):
