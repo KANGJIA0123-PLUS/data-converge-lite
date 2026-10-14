@@ -3,10 +3,10 @@ INSERT INTO modelmate_metric.t_mops_resource_5min_ads
 (
     -- 1. 时间窗口与资源维度
     window_time,
-    resource_seqno_path,
-    resource_seqno,
+    org_id_path,
+    org_id,
     -- 2. 非维度汇聚信息
-    resource_name,
+    org_name,
     sync_flag,
 
     -- 3. 算力卡指标汇总
