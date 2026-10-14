@@ -19,7 +19,7 @@ def service(**updates):
 
 
 def test_selects_unique_redis_service_and_exact_account_without_first_item_assumption():
-    from data_converge.dwd_ready.redis_credentials import parse_sentinel_credentials
+    from data_converge.infrastructure.redis.credentials import parse_sentinel_credentials
     document = envelope([{'name': 'unrelated', 'info': []}, service()])
     result = parse_sentinel_credentials(document, 'ossdbuser')
     assert result.sentinels == (('sentinel-a', 26379), ('::1', 26380))
@@ -28,7 +28,7 @@ def test_selects_unique_redis_service_and_exact_account_without_first_item_assum
 
 
 def test_service_name_disambiguates_but_duplicate_names_or_accounts_do_not():
-    from data_converge.dwd_ready.redis_credentials import parse_sentinel_credentials
+    from data_converge.infrastructure.redis.credentials import parse_sentinel_credentials
     two = [service(name='redis-one'), service(name='redis-two', IPS='other:26379')]
     assert parse_sentinel_credentials(envelope(two), 'ossdbuser', 'redis-two').sentinels == (('other', 26379),)
     for items, name in [(two, None), ([service(), service()], 'redis-pms'),
@@ -42,7 +42,7 @@ def test_service_name_disambiguates_but_duplicate_names_or_accounts_do_not():
                                  '[not-ip]:26379', 'host:26379,host:26379',
                                  ','.join(f'host{i}:26379' for i in range(9))])
 def test_invalid_or_excessive_endpoints_fail_without_echoing_input(ips):
-    from data_converge.dwd_ready.redis_credentials import parse_sentinel_credentials
+    from data_converge.infrastructure.redis.credentials import parse_sentinel_credentials
     with pytest.raises(ValueError) as caught:
         parse_sentinel_credentials(envelope([service(IPS=ips)]), 'ossdbuser')
     assert str(caught.value) == 'DWD_REDIS_PMS_INVALID'
@@ -54,14 +54,14 @@ def test_invalid_or_excessive_endpoints_fail_without_echoing_input(ips):
                                  envelope([service(info=[{'user':'ossdbuser','password':''}])]),
                                  envelope([service(info=[{'user':'ossdbuser','password':'private\0'}])])])
 def test_invalid_pms_is_redacted(value):
-    from data_converge.dwd_ready.redis_credentials import parse_sentinel_credentials
+    from data_converge.infrastructure.redis.credentials import parse_sentinel_credentials
     with pytest.raises(ValueError) as caught:
         parse_sentinel_credentials(value, 'ossdbuser')
     assert str(caught.value) == 'DWD_REDIS_PMS_INVALID'
 
 
 def test_password_rotation_does_not_change_logical_queue_identity():
-    from data_converge.dwd_ready.redis_credentials import parse_sentinel_credentials, sentinel_identity
+    from data_converge.infrastructure.redis.credentials import parse_sentinel_credentials, sentinel_identity
     connection = {'service_name':'redis-cluster','db':5,'username':'ossdbuser'}
     first = parse_sentinel_credentials(envelope([service()]), 'ossdbuser')
     rotated = parse_sentinel_credentials(envelope([service(IPS='[::1]:26380,sentinel-a:26379',
@@ -72,7 +72,7 @@ def test_password_rotation_does_not_change_logical_queue_identity():
 
 
 def test_load_uses_bounded_existing_xms_helper_once_without_mutating_config(tmp_path, monkeypatch):
-    from data_converge.dwd_ready import redis_credentials as credentials
+    from data_converge.infrastructure.redis import credentials
     path = tmp_path / 'password'
     path.write_bytes(b'synthetic encrypted document\n')
     connection = {'password_file':str(path),'username':'ossdbuser','paas_name':None,'kms_timeout_seconds':4}
@@ -89,7 +89,7 @@ def test_load_uses_bounded_existing_xms_helper_once_without_mutating_config(tmp_
 
 
 def test_missing_secret_or_sdk_failure_is_redacted(tmp_path, monkeypatch):
-    from data_converge.dwd_ready import redis_credentials as credentials
+    from data_converge.infrastructure.redis import credentials
     config = {'password_file':str(tmp_path/'missing'), 'username':'ossdbuser','kms_timeout_seconds':1}
     with pytest.raises(ValueError, match='DWD_REDIS_CREDENTIAL_FAILED'):
         credentials.load_sentinel_credentials(config)

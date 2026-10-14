@@ -13,13 +13,19 @@ Services/Service/data-converge/
     config/                 # 配置校验、任务配置和 Cron 编译
     dag/                    # 任务模型、依赖图、执行和重试判断
     scheduler/service.py    # 时间窗口与调度
-    dwd_ready/              # 就绪门控、Redis 消费与平台认证适配
+    dwd_ready/              # 就绪门控与 Redis 队列消费
+    coordination/           # 写入准入、租约接口与执行守卫
+    leader_election/        # 原子选主与续租生命周期
+    infrastructure/redis/   # 独占连接池、平台认证、凭据与 PSM
     sql_execution/
       config.py             # ClickHouse 配置与凭据解析入口
       transport.py          # HTTP/TLS、连接与请求截止时间
       client.py             # SQL 请求与执行结果分类
       runner.py             # 将任务实例适配为 SQL 执行
-    state/                  # SQLite 执行账本
+    state/
+      store.py              # 业务状态转换与事务
+      database.py           # SQLite 连接、文件锁与首次启动
+      history.py            # 与业务事务一起提交的执行历史
     observability/
       settings.py           # 不可变日志配置
       retention.py          # 轮转与保留策略
@@ -29,7 +35,7 @@ Services/Service/data-converge/
   test/                     # 保留原测试位置，由构建脚本排除出镜像
 ```
 
-`Application` 作为用例门面；运行时工厂负责装配，`ExitStack` 管理资源释放；SQL/Redis 适配器连接外部系统；`StateStore` 管理持久化；日志策略与文件操作分别维护。旧的 `logging_config`、`scheduler.scheduler` 和 ClickHouse `client` 配置函数保留兼容导出。
+`Application` 作为用例门面；运行时工厂负责装配，`ExitStack` 管理资源释放；SQL/Redis 适配器连接外部系统；`StateStore` 管理业务事务，组合 `LedgerDatabase` 管理连接与文件锁；日志策略与文件操作分别维护。旧的 `logging_config`、`scheduler.scheduler`、DWD 认证模块和 ClickHouse `client` 配置函数保留兼容导出。
 
 任务执行、执行状态和就绪消息源通过 `Protocol` 定义契约；运行依赖可通过 `RuntimeDependencies` 显式注入。Redis 租约协调主备，本地文件锁和同一持久账本保证单写与状态连续。选主配置、逐次执行历史及能力边界见 [六项可靠性问题核对](docs/reliability.md)；扩展约定见 [业务架构](docs/architecture.md)。
 

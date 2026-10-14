@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import json
 import sqlite3
 import uuid
@@ -12,7 +11,8 @@ from data_converge.dag.models import TaskInstance, TaskStatus
 from data_converge.dag.retry import can_start_attempt
 from data_converge.errors import safe_diagnostic_details
 
-from .bootstrap import StateBootstrap, StateBootstrapError
+from .bootstrap import StateBootstrapError
+from .database import LedgerDatabase
 from . import history
 
 
@@ -37,145 +37,34 @@ class StateStore:
     """
 
     def __init__(self, path: str | Path, create: bool = False):
-        self.path = Path(path).resolve()
-        self.lock_path = Path(str(self.path) + ".lock")
-        self._create = create
-        self._lock_file = None
-        self._conn: sqlite3.Connection | None = None
-        self._startup_created: bool | None = None
-        if not create and not self.path.is_file():
-            raise FileNotFoundError(f"State database missing: {self.path}; use --init-state explicitly")
+        self._database = LedgerDatabase(path, create=create)
+
+    @property
+    def path(self) -> Path:
+        return self._database.path
+
+    @property
+    def lock_path(self) -> Path:
+        return self._database.lock_path
 
     def acquire_lock(self) -> None:
-        if self._lock_file is not None:
-            return
-        if self._create:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._acquire_file_lock()
-        try:
-            self._open_database(create=self._create, upgrade=True)
-        except BaseException:
-            self.close()
-            raise
-
-    def _acquire_file_lock(self) -> None:
-        lock_file = self.lock_path.open("a+")
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            lock_file.close()
-            raise RuntimeError(f"Another local writer owns the state lock: {self.lock_path}") from exc
-        except BaseException:
-            lock_file.close()
-            raise
-        self._lock_file = lock_file
+        self._database.acquire_lock()
 
     def acquire_startup_lock(self) -> bool:
-        """Admit an unmarked, otherwise empty state directory; never repair a ledger."""
-        if self._lock_file is not None:
-            if self._startup_created is None:
-                raise RuntimeError("State startup requires its own lock acquisition")
-            return self._startup_created
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._acquire_file_lock()
-        try:
-            created = StateBootstrap(self.path).prepare(self.lock_path)
-            self._open_database(create=created, upgrade=created)
-            self._validate_startup_schema()
-            self._startup_created = created
-            return created
-        except sqlite3.DatabaseError:
-            self.close()
-            raise StateBootstrapError("STATE_DATABASE_INVALID") from None
-        except BaseException:
-            self.close()
-            raise
-
-    def _open_database(self, *, create: bool, upgrade: bool) -> None:
-        if self._conn is not None:
-            self._conn.close()
-        mode = "rwc" if create else "rw"
-        self._conn = sqlite3.connect(self.path.as_uri() + f"?mode={mode}", uri=True)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA busy_timeout=5000")
-        self._conn.execute("PRAGMA synchronous=FULL")
-        if create:
-            self._create_ledger_schema()
-        self._conn.execute("SELECT key, value FROM metadata LIMIT 1").fetchall()
-        self._conn.execute("SELECT instance_id FROM task_instances LIMIT 1").fetchall()
-        self._conn.execute("SELECT next_fire_time FROM schedule_cursors LIMIT 1").fetchall()
-        if upgrade:
-            with self._conn:
-                self._conn.execute("""CREATE TABLE IF NOT EXISTS dwd_ready_signals (
-                    window_start TEXT NOT NULL,
-                    dwd_type TEXT NOT NULL,
-                    received_at TEXT NOT NULL,
-                    PRIMARY KEY (window_start, dwd_type)
-                )""")
-
-    def _validate_startup_schema(self) -> None:
-        self._conn.execute("""SELECT instance_id, taskname, scheduled_time,
-            data_start, data_end, status, attempts, retryable, next_retry_at,
-            started_at, finished_at, error, query_id, resolution_note, resolved_at
-            FROM task_instances LIMIT 1""").fetchall()
-        self._conn.execute("SELECT taskname, next_fire_time FROM schedule_cursors LIMIT 1").fetchall()
-        self._conn.execute("SELECT window_start, dwd_type, received_at FROM dwd_ready_signals LIMIT 1").fetchall()
+        return self._database.acquire_startup_lock()
 
     def mark_initialized(self) -> None:
         """Record successful application binding only while holding its lock."""
         self._connection(write=True)
         if not self.get_meta("binding") or not self.get_meta("coverage_start"):
             raise StateBootstrapError("STATE_NOT_INITIALIZED")
-        StateBootstrap(self.path).mark_ready()
-
-    def _create_ledger_schema(self) -> None:
-        """Create the base ledger after the caller admits state initialization."""
-        self._conn.executescript("""
-            CREATE TABLE IF NOT EXISTS metadata (
-                key TEXT PRIMARY KEY, value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS schedule_cursors (
-                taskname TEXT PRIMARY KEY, next_fire_time TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS task_instances (
-                instance_id TEXT PRIMARY KEY,
-                taskname TEXT NOT NULL,
-                scheduled_time TEXT NOT NULL,
-                data_start TEXT NOT NULL,
-                data_end TEXT NOT NULL,
-                status TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                retryable INTEGER NOT NULL DEFAULT 0,
-                next_retry_at TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                error TEXT,
-                query_id TEXT,
-                resolution_note TEXT,
-                resolved_at TEXT
-            );
-            CREATE INDEX IF NOT EXISTS task_instances_status
-                ON task_instances(status, data_end);
-        """)
+        self._database.mark_ready()
 
     def _connection(self, *, write: bool = False) -> sqlite3.Connection:
-        if write and self._lock_file is None:
-            raise RuntimeError("State mutation requires acquire_lock()")
-        if self._conn is None:
-            self._conn = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA busy_timeout=5000")
-        return self._conn
+        return self._database.connection(write=write)
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
-        if self._lock_file is not None:
-            fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
-            self._lock_file.close()
-            self._lock_file = None
-        self._startup_created = None
+        self._database.close()
 
     def get_meta(self, key: str, default: str | None = None) -> str | None:
         row = self._connection().execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()

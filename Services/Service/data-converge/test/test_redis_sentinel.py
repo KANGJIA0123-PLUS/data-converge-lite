@@ -47,17 +47,18 @@ def test_direct_modes_reject_ignored_sentinel_fields(tmp_path):
 
 def test_real_sentinel_pool_uses_distinct_auth_callbacks_and_owned_connections(tmp_path,monkeypatch):
     from data_converge.dwd_ready import redis_source as source_module
+    from data_converge.infrastructure.redis import client as connection_module
     from data_converge.dwd_ready.redis_credentials import SentinelCredentials
     config=load_ready_config(sentinel_config(ssl=True),tmp_path)
-    monkeypatch.setattr(source_module,'load_sentinel_credentials',lambda _:SentinelCredentials((('localhost',26379),),'synthetic'))
-    monkeypatch.setattr(source_module,'create_psm_codec',lambda *_: object())
+    monkeypatch.setattr(connection_module,'load_sentinel_credentials',lambda _:SentinelCredentials((('localhost',26379),),'synthetic'))
+    monkeypatch.setattr(connection_module,'create_psm_codec',lambda *_: object())
     callbacks=[]
     def callback_factory(codec,*,select_db):
         def callback(connection):
             raise AssertionError('offline pool inspection must not open sockets')
         callbacks.append((select_db,callback))
         return callback
-    monkeypatch.setattr(source_module,'make_connect_callback',callback_factory)
+    monkeypatch.setattr(connection_module,'make_connect_callback',callback_factory)
     source=source_module.create_source(config)
     try:
         opts=source._client.connection_pool.connection_kwargs

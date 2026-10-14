@@ -149,7 +149,7 @@ def keys(tmp_path):
 
 
 def create(keys):
-    module = importlib.import_module("data_converge.dwd_ready.psm_crypto")
+    module = importlib.import_module("data_converge.infrastructure.redis.crypto")
     return module.create_psm_codec(*(str(path) for path in keys))
 
 
@@ -177,8 +177,8 @@ def test_module_import_does_not_load_optional_crypto_dependencies(monkeypatch):
         return original(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", restricted)
-    sys.modules.pop("data_converge.dwd_ready.psm_crypto", None)
-    module = importlib.import_module("data_converge.dwd_ready.psm_crypto")
+    sys.modules.pop("data_converge.infrastructure.redis.crypto", None)
+    module = importlib.import_module("data_converge.infrastructure.redis.crypto")
     assert callable(module.create_psm_codec)
 
 

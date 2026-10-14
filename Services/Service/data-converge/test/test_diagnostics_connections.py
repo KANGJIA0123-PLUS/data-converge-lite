@@ -7,6 +7,7 @@ import pytest
 
 from data_converge.dwd_ready.redis_source import RedisSignalError, RedisSignalSource
 from data_converge.config.leadership import LeadershipSettings
+from data_converge.infrastructure.redis import RedisConnection
 
 
 class ReadOnlyRedis:
@@ -213,8 +214,7 @@ class ReadOnlyLeaderRedis(ReadOnlyRedis):
 def test_online_leadership_diagnostic_reads_without_claim_or_renew(monkeypatch):
     from data_converge.diagnostics import connections
     client = ReadOnlyLeaderRedis()
-    monkeypatch.setattr(connections.redis_source, 'create_source',
-                        lambda _: RedisSignalSource(client, ready_config()))
+    monkeypatch.setattr(connections, 'create_connection', lambda _: RedisConnection(client))
     value = definition()
     value.leadership = LeadershipSettings(enabled=True)
     result = connections._leadership_check(value)

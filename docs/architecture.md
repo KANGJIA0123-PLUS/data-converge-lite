@@ -8,6 +8,8 @@
 flowchart TD
     CLI[main：命令边界] --> APP[Application：应用用例]
     APP --> RT[运行时装配与资源生命周期]
+    APP --> OWN[写入准入与账本身份绑定]
+    OWN --> LEASE[LeadershipLease：续租生命周期]
     DEP[RuntimeDependencies：显式工厂] --> RT
     RT --> SCHED[TaskScheduler：窗口与调度]
     SCHED --> DAG[DAGExecutor：依赖与任务执行]
@@ -19,11 +21,53 @@ flowchart TD
     RT --> READY[ReadyCoordinator：就绪门控]
     READY --> SOURCE[ReadySignalSource 接口]
     REDIS[RedisSignalSource：Redis 适配器] -.实现.-> SOURCE
+    REDIS --> CONN[RedisConnection：独占连接资源]
+    LEASE --> ELECT[LeaderElector：原子操作]
+    ELECT --> CONN
     READY --> FACTS[ReadinessState：已提交就绪事实]
     SQLITE -.实现.-> FACTS
+    SQLITE --> DB[LedgerDatabase：连接与文件锁]
 ```
 
 业务核心只依赖需要的能力。接口采用标准库 `typing.Protocol`；实现方无需继承框架基类，也无需向全局注册表注册。默认运行装配仍使用 ClickHouse、Redis 和 SQLite。
+
+## 目录职责
+
+```text
+src/data_converge/
+├── main.py                  # CLI 参数与退出码
+├── application.py           # 应用用例与启动顺序
+├── runtime.py               # 显式工厂装配、资源生命周期
+├── config/                  # 配置解析、不可变策略、校验
+├── dag/                     # 任务模型、依赖执行、仓储与运行器接口
+├── scheduler/               # Cron 窗口规划、持久游标与补偿
+├── dwd_ready/               # 五类就绪信号、窗口门控、消息确认
+├── coordination/            # 写入资格的应用层编排
+│   ├── ports.py             # WriterLease 窄接口
+│   ├── admission.py         # 等待主权、账本身份绑定、本地锁准入
+│   ├── guards.py            # SQL 提交/消息读取与确认前的资格校验
+│   └── factory.py           # 组合租约与专用连接，明确释放顺序
+├── leader_election/         # 原子 Redis 租约与续租线程
+├── infrastructure/redis/    # Redis 连接资源与平台认证实现
+│   ├── client.py            # 数据/Sentinel 连接池的唯一所有者
+│   ├── auth.py              # 平台挑战认证协议
+│   ├── credentials.py       # 凭据加载、账号选择、服务身份
+│   └── crypto.py            # PSM 密钥与加密适配
+├── sql_execution/           # ClickHouse HTTPS、XMS 与执行适配
+├── state/
+│   ├── store.py             # 业务状态转换和事务边界
+│   ├── database.py          # SQLite 连接、文件锁、基础表与首次启动
+│   ├── history.py           # 借用同一事务记录执行尝试和人工处置
+│   └── bootstrap.py         # 首次初始化标记，拒绝静默重建丢失账本
+├── diagnostics/             # 只读状态、失败、历史和连接诊断
+└── observability/           # 文件日志、轮转与保留策略
+```
+
+`infrastructure/redis` 不依赖 DWD 业务模块。消息消费、选主和在线检查使用同一连接工厂，但每次调用都拥有独立连接池，阻塞消费不会占用续租连接。选主不再通过消息消费者创建自身。认证、凭据和 PSM 的旧导入路径保留薄兼容导出，新代码使用共享实现。
+
+`StateStore` 通过组合持有 `LedgerDatabase`，不通过继承共享连接状态。业务事务由 `StateStore` 开始和结束，审计只借用同一个连接，不单独提交。诊断保留只读连接入口；关闭时先关闭数据库，再释放文件锁，异常路径也释放资源。
+
+公司约定的 `Services/Service/data-converge/{src,resources,test}`、`data_converge.main` 入口和配置路径保持不变。目录调整全部在 Python 业务包内，仍由原构建脚本编译、复制纯 `.pyc` 产物，测试不进入镜像。`execution_logging` 和 `logging_config` 保留旧接口兼容，生产持久账本是 `StateStore`。
 
 ## 设计模式对应的实际职责
 
@@ -34,8 +78,9 @@ flowchart TD
 | Adapter，外部系统适配 | SQL 执行和消息消费的实现可替换，错误和确认语义由接口规定 | `sql_execution/runner.py`、`dwd_ready/redis_source.py` |
 | Factory 与显式依赖注入 | 执行器、启动探测、消息源和心跳可在装配时提供，不依靠修改全局变量 | `runtime.py` 的 `RuntimeDependencies`、`ExecutionAdapter` |
 | Strategy，策略分离 | 就绪判断、重试资格与日志保留规则独立于调度和文件操作 | `dwd_ready/coordinator.py`、`dag/retry.py`、`observability/retention.py` |
-| Context Manager，资源生命周期 | 正常退出、部分启动失败和信号停止都按顺序释放资源 | `runtime.py`、`observability/logging.py` |
-| Decorator，提交资格保护 | 对任务提交与消息消费加入租约检查，业务适配器保持原职责 | `coordination.py` 的 `GuardedRunner`、`GuardedSignalSource` |
+| Composition，组合资源所有权 | 账本事务与连接锁管理分离；队列和租约分别拥有独立 Redis 资源 | `state/database.py`、`infrastructure/redis/client.py` |
+| Context Manager，资源生命周期 | 正常退出、部分启动失败和信号停止都按顺序释放资源 | `runtime.py`、`coordination/factory.py`、`observability/logging.py` |
+| Decorator，提交资格保护 | 对任务提交与消息消费加入租约检查，业务适配器保持原职责 | `coordination/guards.py` 的 `GuardedRunner`、`GuardedSignalSource` |
 
 `ExecutionAdapter` 同时提供任务执行器和启动探测函数，通用运行时无需读取某个具体执行器的连接配置。SQL 的默认装配绑定已解析的配置，继续执行原有 `SELECT 1` 探测。
 
@@ -69,6 +114,9 @@ flowchart TD
 | 确认消息失败 | 已提交事实幂等重放 | `test_ack_failure_replays_durable_fact_after_restart` |
 | 信号超时未齐 | 继续等待并告警 | `test_missing_or_zero_signals_timeout_warns_and_never_releases` |
 | 启动失败或停止信号 | 关闭消息源、恢复信号处理、结束心跳，等待在途执行清理 | `test_partial_runtime_startup_releases_source_heartbeat_and_signal_handlers`、`test_launcher_waits_for_child_cleanup_after_stop` |
+| 租约作用域内抛错 | 先停止续租并释放自己的租约，再关闭专用连接 | `test_lease_releases_before_disconnect_on_body_failure` |
+| SQLite 关闭抛错 | 释放文件锁，清理可重复调用，允许后续进程接管 | `test_database_close_failure_releases_writer_lock` |
+| Redis 构造部分失败 | 已创建的数据与 Sentinel 连接池由当前工厂回收 | `test_sentinel_client_creation_failure_releases_discovery_connections` |
 
 这些是代码与故障测试所覆盖的保证，不构成可用率、吞吐量或恢复时间承诺。
 

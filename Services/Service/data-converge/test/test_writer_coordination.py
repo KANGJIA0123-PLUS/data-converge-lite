@@ -191,7 +191,7 @@ def test_standby_has_own_live_but_not_ready_heartbeat(app, monkeypatch):
         return len(attempts) == 2
 
     lease.acquire = acquire
-    monkeypatch.setattr('data_converge.coordination.time.sleep', lambda _: None)
+    monkeypatch.setattr('data_converge.coordination.admission.time.sleep', lambda _: None)
     monkeypatch.setattr(runtime.TaskScheduler, 'start', lambda self: None)
     assert application.serve().exit_code == 0
     assert attempts == [(0, 1), (0, 1)]

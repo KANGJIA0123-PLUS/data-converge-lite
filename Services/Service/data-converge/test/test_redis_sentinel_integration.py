@@ -157,7 +157,7 @@ class RespPeer:
 
 
 def patch_private_sdks(monkeypatch):
-    from data_converge.dwd_ready import redis_source as source_module
+    from data_converge.infrastructure.redis import client as connection_module
 
     # Replace only private SDK boundaries; config, PMS selection and redis-py remain real.
     nonce_module = types.ModuleType("psf.security_api.random_security")
@@ -169,7 +169,7 @@ def patch_private_sdks(monkeypatch):
 
     nonce_module.gen_random_hex_string = nonce
     monkeypatch.setitem(sys.modules, "psf.security_api.random_security", nonce_module)
-    monkeypatch.setattr(source_module, "create_psm_codec", lambda root, work: SyntheticCodec())
+    monkeypatch.setattr(connection_module, "create_psm_codec", lambda root, work: SyntheticCodec())
     return nonce_calls
 
 
@@ -210,7 +210,7 @@ class FailoverScenario:
 
 def create_sentinel_source(tmp_path, monkeypatch, address, account_config, selected_user):
     from data_converge.dwd_ready.config import load_ready_config
-    from data_converge.dwd_ready import redis_credentials as credentials_module
+    from data_converge.infrastructure.redis import credentials as credentials_module
     from data_converge.dwd_ready import redis_source as source_module
 
     host, port = address

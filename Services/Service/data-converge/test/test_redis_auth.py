@@ -113,7 +113,7 @@ def challenge(value=None, prefix=">"):
 
 
 def invoke(connection, *, codec=None, select_db=True):
-    from data_converge.dwd_ready.redis_auth import make_connect_callback
+    from data_converge.infrastructure.redis.auth import make_connect_callback
 
     make_connect_callback(codec or HexCodec(), select_db=select_db)(connection)
 
@@ -277,7 +277,7 @@ def serve_reauthenticated_connections(listener, nonces, prefix, select_db, obser
 @pytest.mark.parametrize("prefix", [b"-ERR >", b"->"])
 @pytest.mark.parametrize("select_db", [False, True])
 def test_real_resp_socket_reauthenticates_with_fresh_nonce_on_reconnect(nonce_sdk, prefix, select_db):
-    from data_converge.dwd_ready.redis_auth import make_connect_callback
+    from data_converge.infrastructure.redis.auth import make_connect_callback
 
     next_nonce = "0123456789abcdef" * 2
     nonce_sdk[1].append(next_nonce)

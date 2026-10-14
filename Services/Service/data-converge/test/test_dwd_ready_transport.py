@@ -263,7 +263,7 @@ def test_cleanup_warns_safely_and_continues_through_all_clients(tmp_path, caplog
     client = CleanupRedis("data", events, failed_operations)
     sentinels = (CleanupRedis("sentinel1", events, failed_operations), CleanupRedis("sentinel2", events))
     source = RedisSignalSource(client, load(enabled_config(), tmp_path), sentinel_clients=sentinels)
-    with caplog.at_level(logging.WARNING, logger="data_converge.dwd_ready.redis_source"):
+    with caplog.at_level(logging.WARNING, logger="data_converge.infrastructure.redis.client"):
         source.close()
         source.close()
     assert events == [("data", "close"), ("data", "disconnect"), ("sentinel1", "close"),
@@ -275,7 +275,7 @@ def test_cleanup_warns_safely_and_continues_through_all_clients(tmp_path, caplog
 
 def test_client_without_dedicated_pool_closes_without_false_warning(tmp_path, caplog):
     source, client, _ = make_source(tmp_path)
-    with caplog.at_level(logging.WARNING, logger="data_converge.dwd_ready.redis_source"):
+    with caplog.at_level(logging.WARNING, logger="data_converge.infrastructure.redis.client"):
         source.close()
     assert client.closed == 1
     assert not caplog.records

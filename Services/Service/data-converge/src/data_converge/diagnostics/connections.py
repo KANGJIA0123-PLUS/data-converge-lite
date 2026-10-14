@@ -4,6 +4,8 @@ from contextlib import closing
 
 from data_converge.dwd_ready import redis_source
 from data_converge.errors import safe_error_details
+from data_converge.infrastructure.redis import create_connection
+from data_converge.leader_election import LeaderElector
 from data_converge.sql_execution import client as sql_client
 from data_converge.sql_execution import config as sql_config
 
@@ -96,8 +98,8 @@ def check_connections(definition) -> list[dict]:
 
 def _leadership_check(definition):
     try:
-        with closing(redis_source.create_source(definition.config['dwd_ready'])) as source:
-            elector = source.create_leader_elector(definition.leadership.cluster_name)
+        with closing(create_connection(definition.config['dwd_ready'])) as connection:
+            elector = LeaderElector(definition.leadership.cluster_name, client=connection.client)
             present = elector.get_current_leader() is not None
             ttl = elector.get_leader_ttl()
             registered = elector.ledger_registered()
