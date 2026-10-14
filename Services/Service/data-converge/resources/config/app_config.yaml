@@ -27,7 +27,7 @@ dwd_ready:
   queue_key: modelverse:dwd:ready
   block_seconds: 1
   batch_size: 100
-  wait_warning_seconds: 60
+  wait_warning_seconds: 120
   redis:
     mode: sentinel
     service_name: redis-cluster  # Sentinel 主节点组名，不是原生 Redis Cluster。
