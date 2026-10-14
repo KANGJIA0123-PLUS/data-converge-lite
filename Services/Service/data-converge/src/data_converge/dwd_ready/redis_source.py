@@ -27,14 +27,6 @@ class RedisSignalSource:
         self._sentinel_clients = tuple(sentinel_clients)
         self.identity = identity
 
-    def create_leader_elector(self, cluster_name):
-        """Use only on a dedicated source which never consumes readiness lists."""
-        from data_converge.leader_election import LeaderElector
-
-        if self._closed:
-            raise RedisSignalError('DWD_READY_REDIS_CLOSED')
-        return LeaderElector(cluster_name, client=self._client)
-
     def inspect(self) -> dict:
         """Read connectivity and list metadata without fetching or moving messages."""
         if self._closed:

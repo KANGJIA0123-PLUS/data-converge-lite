@@ -1,6 +1,5 @@
-"""Redis lease coordination for a continuously shared local ledger."""
+"""选主模块 - Redis实现主备选举"""
 
-__all__ = ['LeaderElector', 'LeadershipError', 'LeadershipLease']
+__all__ = ["LeaderElector"]
 
-from .elector import LeaderElector, LeadershipError
-from .lease import LeadershipLease
+from .elector import LeaderElector

@@ -12,7 +12,6 @@ DESCRIPTION = '''Data Converge Lite · 运行与故障定位
   不知道哪里出问题 / 服务启动不了  --diagnose
   怀疑 ClickHouse 或 Redis 连不上  --diagnose --online
   想找失败、结果未确认或阻断任务   --failures
-  想查每次执行和人工处理的历史     --history
   想追查某个任务为什么异常         --inspect-instance '实例ID'
   想查哪些 DWD 信号没到            --dwd-status
   想看原始状态快照                 --status
@@ -31,14 +30,8 @@ EXAMPLES = f'''可直接复制的查询示例：
   {LAUNCHER} --failures --task task_resource_5min_ads
   {LAUNCHER} --failures --limit 20 --offset 20
 
-  # 执行历史包含成功与失败；支持筛选、分页和 JSON 导出
-  {LAUNCHER} --history
-  {LAUNCHER} --history --task task_resource_5min_ads --limit 20 --offset 20
-  {LAUNCHER} --history --format json
-
   # 实例ID从 --failures 或 --status 复制；下面的时间按现场情况替换
   {LAUNCHER} --inspect-instance 'task_resource_5min_ads@2026-10-14T16:30:00+08:00'
-  {LAUNCHER} --inspect-instance 'task_resource_5min_ads@2026-10-14T16:30:00+08:00' --limit 20 --offset 20
   {LAUNCHER} --dwd-status --window '2026-10-14T16:15:00+08:00'
 
   # 导出便于回传的结构化结果
@@ -47,10 +40,7 @@ EXAMPLES = f'''可直接复制的查询示例：
 结果怎么看：
   PASS=该项通过；WARN=需要关注；FAIL=异常或检查未完成；SKIP=未检查。
   新诊断命令退出码：0=无 FAIL（可能有 WARN/SKIP），1=有 FAIL，2=参数错误。
-  --status 保持原 JSON；--format 仅用于诊断查询命令，默认 text。
-  --history 的 PASS 表示查询成功，历史失败不当作当前告警；当前异常请看 --failures。
-  --inspect-instance 默认附带最近20次执行；--limit / --offset 只控制历史分页。
-  旧版未记录的执行历史显示 SKIP，不生成或追补；人工说明只展示是否记录，不展示正文。
+  --status 保持原 JSON；--format 仅用于四种新诊断命令，默认 text。
   UNKNOWN=执行结果未确认：先用 query_id 核实 ClickHouse，不能直接重跑。
   --window 是窗口开始时间，必须带时区并对齐五分钟；输出使用北京时间。
   实例ID中的时间通常是窗口结束时间，与 --window 的开始时间不同。

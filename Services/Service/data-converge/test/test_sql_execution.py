@@ -19,7 +19,6 @@ import yaml
 
 from data_converge.sql_execution import client as client_module
 from data_converge.sql_execution import runner as runner_module
-from data_converge.errors import TaskExecutionError
 
 
 def make_clickhouse_config(**values):
@@ -189,7 +188,7 @@ def test_sql_task_runner_raises_when_sql_file_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module, "load_config", lambda _: make_clickhouse_config())
     runner = runner_module.SQLTaskRunner(tmp_path / "app.yaml", tmp_path / "sql")
     instance = SimpleNamespace(task=SimpleNamespace(sql_id="missing"), data_start=None, data_end=None)
-    with pytest.raises(TaskExecutionError, match="SQL_PREFLIGHT_FAILED"):
+    with pytest.raises(FileNotFoundError, match="SQL 文件不存在"):
         runner(instance)
 
 

@@ -5,8 +5,6 @@ import json
 import re
 from zoneinfo import ZoneInfo
 
-from data_converge.errors import safe_diagnostic_details
-
 TZ = ZoneInfo('Asia/Shanghai')
 LAUNCHER = 'bash /opt/its/data-converge/bin/start_data_converge.sh'
 
@@ -58,24 +56,6 @@ def task_record(row):
     return value
 
 
-def attempt_record(row):
-    fields = ('query_id', 'instance_id', 'taskname', 'scheduled_time', 'data_start', 'data_end',
-              'attempt_number', 'status', 'started_at', 'finished_at', 'recovered_at',
-              'retryable', 'next_retry_at')
-    value = {key: row.get(key) for key in fields}
-    value['error'] = public_error(row.get('error'))
-    value['diagnostic'] = safe_diagnostic_details(row.get('diagnostic'))
-    resolution = row.get('resolution')
-    value['resolution'] = None if resolution is None else {
-        key: resolution.get(key) for key in ('resolution', 'resolved_at', 'note_recorded')}
-    return value
-
-
-def legacy_resolution_record(row):
-    return {key: row.get(key) for key in (
-        'query_id', 'instance_id', 'taskname', 'resolution', 'resolved_at', 'note_recorded')}
-
-
 def render_text(value):
     lines = [f"{value['command']}  {value['status']}  {value['checked_at']}"]
     for item in value['checks']:
@@ -94,47 +74,7 @@ def render_text(value):
         lines.append(f"{row['status']}  {row['window_start']}  缺少={missing}  等待={row['wait_seconds']}秒")
     if 'instance' in data:
         lines.extend(_render_instance(data))
-    if value['command'] == 'history':
-        lines.extend(_render_history(data))
-    elif 'history' in data:
-        lines.extend(_render_history(data['history']))
     return '\n'.join(lines)
-
-
-def _render_history(data):
-    if not data.get('available'):
-        return ['执行历史: 未记录，无法追补旧版执行过程。'] if data.get('available') is False else []
-    lines = [f"执行历史: 本页 {len(data['attempts'])} 条，偏移 {data['offset']}，每页 {data['limit']} 条"]
-    for row in data['attempts']:
-        lines.extend([f"  {row['status']}  {row['instance_id']}  第 {row['attempt_number']} 次尝试",
-                      f"    窗口: [{row['data_start']}, {row['data_end']})",
-                      f"    query_id: {row['query_id']}  错误码: {row['error'] or '无'}",
-                      f"    started_at: {row['started_at']}  finished_at: {row['finished_at'] or '-'}",
-                      f"    retryable: {row['retryable']}  next_retry_at: {row['next_retry_at'] or '-'}"])
-        if row['recovered_at']:
-            lines.append(f"    恢复为 UNKNOWN 的时间: {row['recovered_at']}")
-        if row['diagnostic']:
-            lines.append('    错误证据: ' + '  '.join(f'{key}={value}' for key, value in row['diagnostic'].items()))
-        if resolution := row['resolution']:
-            note = '已记录（不展示正文）' if resolution['note_recorded'] else '未记录'
-            lines.append(f"    人工处理: {resolution['resolution']}  时间: {resolution['resolved_at']}  说明: {note}")
-    if data['has_more']:
-        lines.append(f"  还有历史记录；下一页使用 --limit {data['limit']} --offset {data['offset'] + data['limit']}。")
-    lines.extend(_render_legacy_resolutions(data))
-    return lines
-
-
-def _render_legacy_resolutions(data):
-    rows = data.get('legacy_resolutions', [])
-    lines = [f"旧版执行的人工处置: 本页 {len(rows)} 条（原始执行过程未记录）"] if rows else []
-    for row in rows:
-        note = '已记录（不展示正文）' if row['note_recorded'] else '未记录'
-        lines.extend([f"  {row['resolution']}  {row['instance_id']}  时间: {row['resolved_at']}",
-                      f"    query_id: {row['query_id'] or '未记录'}  说明: {note}"])
-    if data.get('legacy_resolutions_has_more'):
-        lines.append('  旧版人工处置独立分页；下一页使用 '
-                     f"--limit {data['limit']} --offset {data['offset'] + data['limit']}。")
-    return lines
 
 
 def _render_instance(data):
