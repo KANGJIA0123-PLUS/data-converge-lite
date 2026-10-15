@@ -190,6 +190,7 @@ WITH
             dws.window_time,
             dws.server_name,
             dws.modelinstance_id,
+            dws.node_ip,
             dws.ai_card_id,
             dws.chip_id
         FROM modelmate_metric.t_mops_modelinstance_5min_dws AS dws
@@ -255,7 +256,8 @@ WITH
         FROM instance_card_rel AS r
         INNER JOIN modelmate_metric.t_mops_gpu_5min_dws AS c
             ON  r.window_time = c.window_time
-            AND r.ai_card_id  = c.ai_card_id
+            AND r.node_ip     = c.node_ip
+            AND r.ai_card_id = c.ai_card_index
             AND r.chip_id     = c.chip_id
         WHERE c.window_time >= {start_time:DateTime}
           AND c.window_time <  {end_time:DateTime}
