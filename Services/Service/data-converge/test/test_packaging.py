@@ -292,7 +292,7 @@ def assert_compiled_artifacts(deployed):
     assert (deployed / "src/data_converge/__init__.pyc").is_file()
     expected = {path.name for path in (RESOURCES_ROOT / "sql").glob("*.sql")}
     sql = list((deployed / "resources/sql").glob("*.sql"))
-    assert len(expected) == 52
+    assert len(expected) == 56
     assert {path.name for path in sql} == expected
     for path in sql:
         assert path.read_bytes() == (RESOURCES_ROOT / "sql" / path.name).read_bytes()
@@ -307,7 +307,7 @@ def test_original_framework_excludes_tests_from_image(compiled_application):
     assert not list(home.rglob('test_*.pyc'))
 
 
-def test_original_framework_bytecode_loads_all_52_tasks_outside_checkout(compiled_application):
+def test_original_framework_bytecode_loads_all_56_tasks_outside_checkout(compiled_application):
     temp, _, deployed, env = compiled_application
     result = subprocess.run([sys.executable, "-c",
         "from pathlib import Path; from data_converge import main; "
@@ -316,7 +316,7 @@ def test_original_framework_bytecode_loads_all_52_tasks_outside_checkout(compile
         "raise SystemExit(main.main(['--validate-only']))"],
         cwd=temp, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["tasks"] == 52
+    assert json.loads(result.stdout)["tasks"] == 56
     assert not list(deployed.rglob("*.whl"))
 
 
@@ -325,7 +325,7 @@ def test_launcher_runs_the_original_framework_bytecode(compiled_application):
     result = subprocess.run(["bash", str(home / "bin/start_data_converge.sh"), "--validate-only"],
                             cwd=temp, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["tasks"] == 52
+    assert json.loads(result.stdout)["tasks"] == 56
 
 
 def test_xms_helper_runs_from_original_framework_bytecode(compiled_application):

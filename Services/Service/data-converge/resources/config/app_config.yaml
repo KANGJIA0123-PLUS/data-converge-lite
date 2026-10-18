@@ -1,4 +1,4 @@
-# 平台部署：52个汇聚任务。ClickHouse HTTP端点由Deployment注入。
+# 平台部署：56个汇聚任务。ClickHouse HTTP端点由Deployment注入。
 logging:
   max_bytes: 20971520     # 20 MiB，单条超限日志仍完整保留。
   backup_count: 10       # 最多10个历史文件，不含当前日志。

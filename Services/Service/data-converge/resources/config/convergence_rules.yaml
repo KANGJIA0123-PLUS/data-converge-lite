@@ -513,6 +513,57 @@ convergence_rules:
   # 6.3 资源服务器ADS表 (Server ADS + resource_config -> Resource Server ADS)
   # ============================================================================
 
+  # 6.3.1 资源服务器5分钟ADS
+  - taskname: task_resource_server_5min_ads
+    description: 资源服务器5分钟ADS表
+    source_tables:
+      - t_mops__modelmetric_server__5min_ads
+      - resource_config_local
+    target_table: t_mops__resource_server__5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_model_metric_server_5min_ads
+    sql_id: task_resource_server_5min_ads
+
+  # 6.3.2 资源服务器小时ADS
+  - taskname: task_resource_server_hour_ads
+    description: 资源服务器小时ADS表
+    source_tables:
+      - t_mops__modelmetric_server__hour_ads
+      - resource_config_local
+    target_table: t_mops__resource_server__hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_metric_server_hour_ads
+    sql_id: task_resource_server_hour_ads
+
+  # 6.3.3 资源服务器天ADS
+  - taskname: task_resource_server_day_ads
+    description: 资源服务器天ADS表
+    source_tables:
+      - t_mops__modelmetric_server__day_ads
+      - resource_config_local
+    target_table: t_mops__resource_server__day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_metric_server_day_ads
+    sql_id: task_resource_server_day_ads
+
+  # 6.3.4 资源服务器月ADS
+  - taskname: task_resource_server_month_ads
+    description: 资源服务器月ADS表
+    source_tables:
+      - t_mops__modelmetric_server__month_ads
+      - resource_config_local
+    target_table: t_mops__resource_server__month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_metric_server_month_ads
+    sql_id: task_resource_server_month_ads
 
   # ============================================================================
   # 7.1 请求追踪DWS表 (DWD -> DWS -> DWS -> DWS -> DWS)
