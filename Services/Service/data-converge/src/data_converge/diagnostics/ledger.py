@@ -1,5 +1,6 @@
 """Bounded queries in a consistent, read-only SQLite snapshot."""
 from data_converge.state import StateStore
+from data_converge.state import events
 
 PROBLEM_STATUSES = ('UNKNOWN', 'FAILED', 'BLOCKED')
 
@@ -12,6 +13,12 @@ class DiagnosticLedger(StateStore):
         except BaseException:
             self.close()
             raise
+
+    def events_available(self):
+        return events.available(self._connection())
+
+    def list_execution_events(self, *, after_event=0, limit=20):
+        return events.list_events(self._connection(), after_event=after_event, limit=limit)
 
     def problems(self, *, task=None, limit=20, offset=0):
         clause = "status IN ('UNKNOWN', 'FAILED', 'BLOCKED')"

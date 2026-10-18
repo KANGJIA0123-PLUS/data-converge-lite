@@ -1,5 +1,6 @@
 """Diagnostic CLI options cannot fall through into service startup."""
 import json
+import sys
 
 from .report import render_text
 from .windows import parse_window
@@ -9,33 +10,40 @@ def add_arguments(parser, modes):
     modes.add_argument('--diagnose', action='store_true', help='只读检查配置、状态库、心跳及异常')
     modes.add_argument('--failures', action='store_true', help='查询 UNKNOWN / FAILED / BLOCKED 实例')
     modes.add_argument('--history', action='store_true', help='只读查询各次执行结果与人工处理记录')
+    modes.add_argument('--recovery-plan', action='store_true', help='只读预览可恢复和需核对的实例，不重跑')
+    modes.add_argument('--events', action='store_true', help='只读导出事务内执行事件，支持 JSONL')
     modes.add_argument('--inspect-instance', metavar='ID', help='查看一个实例的错误证据和当前依赖')
     modes.add_argument('--dwd-status', action='store_true', help='查询五分钟窗口的缺失信号')
     parser.add_argument('--online', action='store_true', help='仅与 --diagnose 使用，显式检查远端连接')
     parser.add_argument('--task', help='与 --failures / --history 使用，按完整任务名筛选')
     parser.add_argument('--limit', type=int, help='查询条数或实例历史条数，默认20，最大100')
     parser.add_argument('--offset', type=int, help='--failures / --history / --inspect-instance 分页偏移，默认0')
+    parser.add_argument('--after-event', type=int, help='仅与 --events 使用，读取该事件序号之后的记录')
     parser.add_argument('--window', help='仅与 --dwd-status 使用，含时区的五分钟窗口开始时间')
-    parser.add_argument('--format', choices=('text', 'json'), help='新诊断命令的输出格式，默认text')
+    parser.add_argument('--format', choices=('text', 'json', 'jsonl'),
+                        help='诊断输出默认text；jsonl 仅供 --events 使用')
 
 
 def is_diagnostic(args):
-    return bool(args.diagnose or args.failures or args.history or args.inspect_instance is not None or args.dwd_status)
+    return bool(args.diagnose or args.failures or args.history or args.recovery_plan
+                or args.events or args.inspect_instance is not None or args.dwd_status)
 
 
 def validate_arguments(parser, args):
     for value, option in ((args.inspect_instance, '--inspect-instance'), (args.task, '--task')):
         if value is not None and (not value.strip() or any(ord(char) < 32 for char in value)):
             parser.error(option + ' requires a nonempty value without control characters')
-    paginated = args.failures or args.history or args.inspect_instance is not None
+    paginated = args.failures or args.history or args.recovery_plan or args.inspect_instance is not None
     rules = [
         (args.online, args.diagnose, '--online requires --diagnose'),
         (args.task is not None, args.failures or args.history, '--task requires --failures or --history'),
-        (args.limit is not None, paginated or args.dwd_status,
-         '--limit requires --failures, --history, --inspect-instance or --dwd-status'),
+        (args.limit is not None, paginated or args.dwd_status or args.events,
+         '--limit requires a paginated diagnostic command'),
         (args.offset is not None, paginated, '--offset requires --failures, --history or --inspect-instance'),
         (args.window is not None, args.dwd_status, '--window requires --dwd-status'),
         (args.format is not None, is_diagnostic(args), '--format requires a diagnostic command'),
+        (args.format == 'jsonl', args.events, '--format jsonl requires --events'),
+        (args.after_event is not None, args.events, '--after-event requires --events'),
     ]
     for supplied, allowed, message in rules:
         if supplied and not allowed:
@@ -44,6 +52,8 @@ def validate_arguments(parser, args):
         parser.error('--limit must be between 1 and 100')
     if args.offset is not None and args.offset < 0:
         parser.error('--offset must be nonnegative')
+    if args.after_event is not None and args.after_event < 0:
+        parser.error('--after-event must be nonnegative')
     if args.window is not None:
         try:
             parse_window(args.window)
@@ -51,11 +61,13 @@ def validate_arguments(parser, args):
             parser.error('--window requires an aligned five-minute ISO8601 time with timezone')
     args.limit = 20 if args.limit is None else args.limit
     args.offset = 0 if args.offset is None else args.offset
+    args.after_event = 0 if args.after_event is None else args.after_event
     args.format = args.format or 'text'
 
 
 def run(args):
     from . import service
+    from .recovery import execution_events, recovery_plan
 
     if args.diagnose:
         value = service.diagnose(args.config, online=args.online)
@@ -63,9 +75,24 @@ def run(args):
         value = service.failures(args.config, task=args.task, limit=args.limit, offset=args.offset)
     elif args.history:
         value = service.history(args.config, task=args.task, limit=args.limit, offset=args.offset)
+    elif args.recovery_plan:
+        value = recovery_plan(args.config, limit=args.limit, offset=args.offset)
+    elif args.events:
+        value = execution_events(args.config, after_event=args.after_event, limit=args.limit)
     elif args.inspect_instance is not None:
         value = service.inspect_instance(args.config, args.inspect_instance, limit=args.limit, offset=args.offset)
     else:
         value = service.dwd_status(args.config, limit=args.limit, window=args.window)
-    print(json.dumps(value, ensure_ascii=False, default=str) if args.format == 'json' else render_text(value))
+    _print_result(value, args.format)
     return 1 if value['status'] == 'FAIL' else 0
+
+
+def _print_result(value, output_format):
+    if output_format == 'jsonl':
+        if value['status'] == 'FAIL':
+            print(json.dumps(value, ensure_ascii=False), file=sys.stderr)
+        else:
+            for row in value['data']['events']:
+                print(json.dumps(row, ensure_ascii=False))
+        return
+    print(json.dumps(value, ensure_ascii=False, default=str) if output_format == 'json' else render_text(value))

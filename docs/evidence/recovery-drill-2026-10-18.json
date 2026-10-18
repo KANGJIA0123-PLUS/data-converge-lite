@@ -1,0 +1,604 @@
+{
+  "cases": [
+    {
+      "evidence": {
+        "attempts": [
+          {
+            "attempt_number": 1,
+            "finished_at": "2026-10-18T10:08:17.130167+00:00",
+            "query_id": "50dfb5b4-9066-44db-8596-a2a4f2ecee52",
+            "recovered_at": null,
+            "status": "SUCCESS"
+          }
+        ],
+        "crash_query_id": "79b8b6ac-3fbb-4f35-8ab2-c00f33b77cd6",
+        "current_query_id": "50dfb5b4-9066-44db-8596-a2a4f2ecee52",
+        "events": [
+          {
+            "attempt_number": 0,
+            "event_id": 1,
+            "event_type": "PREPARED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.125029+00:00",
+            "query_id": "79b8b6ac-3fbb-4f35-8ab2-c00f33b77cd6",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 0,
+            "event_id": 2,
+            "event_type": "RECOVERED_UNSUBMITTED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.128048+00:00",
+            "query_id": "79b8b6ac-3fbb-4f35-8ab2-c00f33b77cd6",
+            "schema_version": 1,
+            "status": "PENDING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 0,
+            "event_id": 3,
+            "event_type": "PREPARED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.128849+00:00",
+            "query_id": "50dfb5b4-9066-44db-8596-a2a4f2ecee52",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 1,
+            "event_id": 4,
+            "event_type": "DISPATCHED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.128849+00:00",
+            "query_id": "50dfb5b4-9066-44db-8596-a2a4f2ecee52",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 1,
+            "event_id": 5,
+            "event_type": "SUCCEEDED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.130167+00:00",
+            "query_id": "50dfb5b4-9066-44db-8596-a2a4f2ecee52",
+            "schema_version": 1,
+            "status": "SUCCESS",
+            "taskname": "offline_drill"
+          }
+        ],
+        "receiver": [
+          {
+            "acceptance_id": 1,
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "query_id": "50dfb5b4-9066-44db-8596-a2a4f2ecee52",
+            "sql_id": "offline_fixture_sql"
+          }
+        ]
+      },
+      "expected": {
+        "after_recovery": {
+          "attempts": 0,
+          "history_statuses": [],
+          "receiver_count": 0,
+          "status": "PENDING"
+        },
+        "after_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "after_second_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "before_recovery": {
+          "attempts": 0,
+          "history_statuses": [],
+          "receiver_count": 0,
+          "status": "RUNNING"
+        },
+        "event_types": [
+          "PREPARED",
+          "RECOVERED_UNSUBMITTED",
+          "PREPARED",
+          "DISPATCHED",
+          "SUCCEEDED"
+        ],
+        "exit_code": 91,
+        "recovered": 1,
+        "second_recovered": 0
+      },
+      "name": "prepared_before_dispatch",
+      "observed": {
+        "after_recovery": {
+          "attempts": 0,
+          "history_statuses": [],
+          "receiver_count": 0,
+          "status": "PENDING"
+        },
+        "after_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "after_second_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "before_recovery": {
+          "attempts": 0,
+          "history_statuses": [],
+          "receiver_count": 0,
+          "status": "RUNNING"
+        },
+        "event_types": [
+          "PREPARED",
+          "RECOVERED_UNSUBMITTED",
+          "PREPARED",
+          "DISPATCHED",
+          "SUCCEEDED"
+        ],
+        "exit_code": 91,
+        "recovered": 1,
+        "second_recovered": 0
+      },
+      "passed": true
+    },
+    {
+      "evidence": {
+        "attempts": [
+          {
+            "attempt_number": 1,
+            "finished_at": null,
+            "query_id": "d10abd12-35db-4913-bde5-c9d7a69f8227",
+            "recovered_at": "2026-10-18T10:08:17.170881+00:00",
+            "status": "UNKNOWN"
+          }
+        ],
+        "crash_query_id": "d10abd12-35db-4913-bde5-c9d7a69f8227",
+        "current_query_id": "d10abd12-35db-4913-bde5-c9d7a69f8227",
+        "events": [
+          {
+            "attempt_number": 0,
+            "event_id": 1,
+            "event_type": "PREPARED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.166464+00:00",
+            "query_id": "d10abd12-35db-4913-bde5-c9d7a69f8227",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 1,
+            "event_id": 2,
+            "event_type": "DISPATCHED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.166464+00:00",
+            "query_id": "d10abd12-35db-4913-bde5-c9d7a69f8227",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 1,
+            "event_id": 3,
+            "event_type": "RECOVERY_REQUIRED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.170881+00:00",
+            "query_id": "d10abd12-35db-4913-bde5-c9d7a69f8227",
+            "schema_version": 1,
+            "status": "UNKNOWN",
+            "taskname": "offline_drill"
+          }
+        ],
+        "receiver": []
+      },
+      "expected": {
+        "after_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 0,
+          "status": "UNKNOWN"
+        },
+        "after_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 0,
+          "status": "UNKNOWN"
+        },
+        "after_second_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 0,
+          "status": "UNKNOWN"
+        },
+        "before_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "RUNNING"
+          ],
+          "receiver_count": 0,
+          "status": "RUNNING"
+        },
+        "event_types": [
+          "PREPARED",
+          "DISPATCHED",
+          "RECOVERY_REQUIRED"
+        ],
+        "exit_code": 91,
+        "recovered": 1,
+        "second_recovered": 0
+      },
+      "name": "dispatch_before_receiver",
+      "observed": {
+        "after_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 0,
+          "status": "UNKNOWN"
+        },
+        "after_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 0,
+          "status": "UNKNOWN"
+        },
+        "after_second_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 0,
+          "status": "UNKNOWN"
+        },
+        "before_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "RUNNING"
+          ],
+          "receiver_count": 0,
+          "status": "RUNNING"
+        },
+        "event_types": [
+          "PREPARED",
+          "DISPATCHED",
+          "RECOVERY_REQUIRED"
+        ],
+        "exit_code": 91,
+        "recovered": 1,
+        "second_recovered": 0
+      },
+      "passed": true
+    },
+    {
+      "evidence": {
+        "attempts": [
+          {
+            "attempt_number": 1,
+            "finished_at": null,
+            "query_id": "30b28421-ad9a-46cb-a94d-7dc6ff72e909",
+            "recovered_at": "2026-10-18T10:08:17.207870+00:00",
+            "status": "UNKNOWN"
+          }
+        ],
+        "crash_query_id": "30b28421-ad9a-46cb-a94d-7dc6ff72e909",
+        "current_query_id": "30b28421-ad9a-46cb-a94d-7dc6ff72e909",
+        "events": [
+          {
+            "attempt_number": 0,
+            "event_id": 1,
+            "event_type": "PREPARED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.204859+00:00",
+            "query_id": "30b28421-ad9a-46cb-a94d-7dc6ff72e909",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 1,
+            "event_id": 2,
+            "event_type": "DISPATCHED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.204859+00:00",
+            "query_id": "30b28421-ad9a-46cb-a94d-7dc6ff72e909",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 1,
+            "event_id": 3,
+            "event_type": "RECOVERY_REQUIRED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.207870+00:00",
+            "query_id": "30b28421-ad9a-46cb-a94d-7dc6ff72e909",
+            "schema_version": 1,
+            "status": "UNKNOWN",
+            "taskname": "offline_drill"
+          }
+        ],
+        "receiver": [
+          {
+            "acceptance_id": 1,
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "query_id": "30b28421-ad9a-46cb-a94d-7dc6ff72e909",
+            "sql_id": "offline_fixture_sql"
+          }
+        ]
+      },
+      "expected": {
+        "after_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 1,
+          "status": "UNKNOWN"
+        },
+        "after_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 1,
+          "status": "UNKNOWN"
+        },
+        "after_second_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 1,
+          "status": "UNKNOWN"
+        },
+        "before_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "RUNNING"
+          ],
+          "receiver_count": 1,
+          "status": "RUNNING"
+        },
+        "event_types": [
+          "PREPARED",
+          "DISPATCHED",
+          "RECOVERY_REQUIRED"
+        ],
+        "exit_code": 91,
+        "recovered": 1,
+        "second_recovered": 0
+      },
+      "name": "accepted_before_finish",
+      "observed": {
+        "after_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 1,
+          "status": "UNKNOWN"
+        },
+        "after_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 1,
+          "status": "UNKNOWN"
+        },
+        "after_second_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "UNKNOWN"
+          ],
+          "receiver_count": 1,
+          "status": "UNKNOWN"
+        },
+        "before_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "RUNNING"
+          ],
+          "receiver_count": 1,
+          "status": "RUNNING"
+        },
+        "event_types": [
+          "PREPARED",
+          "DISPATCHED",
+          "RECOVERY_REQUIRED"
+        ],
+        "exit_code": 91,
+        "recovered": 1,
+        "second_recovered": 0
+      },
+      "passed": true
+    },
+    {
+      "evidence": {
+        "attempts": [
+          {
+            "attempt_number": 1,
+            "finished_at": "2026-10-18T10:08:17.244676+00:00",
+            "query_id": "3e354549-7a5e-475c-9da5-e69ab7c678ed",
+            "recovered_at": null,
+            "status": "SUCCESS"
+          }
+        ],
+        "crash_query_id": "3e354549-7a5e-475c-9da5-e69ab7c678ed",
+        "current_query_id": "3e354549-7a5e-475c-9da5-e69ab7c678ed",
+        "events": [
+          {
+            "attempt_number": 0,
+            "event_id": 1,
+            "event_type": "PREPARED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.242586+00:00",
+            "query_id": "3e354549-7a5e-475c-9da5-e69ab7c678ed",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 1,
+            "event_id": 2,
+            "event_type": "DISPATCHED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.242586+00:00",
+            "query_id": "3e354549-7a5e-475c-9da5-e69ab7c678ed",
+            "schema_version": 1,
+            "status": "RUNNING",
+            "taskname": "offline_drill"
+          },
+          {
+            "attempt_number": 1,
+            "event_id": 3,
+            "event_type": "SUCCEEDED",
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "occurred_at": "2026-10-18T10:08:17.244676+00:00",
+            "query_id": "3e354549-7a5e-475c-9da5-e69ab7c678ed",
+            "schema_version": 1,
+            "status": "SUCCESS",
+            "taskname": "offline_drill"
+          }
+        ],
+        "receiver": [
+          {
+            "acceptance_id": 1,
+            "instance_id": "offline_drill@2026-10-18T02:05:00+00:00",
+            "query_id": "3e354549-7a5e-475c-9da5-e69ab7c678ed",
+            "sql_id": "offline_fixture_sql"
+          }
+        ]
+      },
+      "expected": {
+        "after_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "after_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "after_second_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "before_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "event_types": [
+          "PREPARED",
+          "DISPATCHED",
+          "SUCCEEDED"
+        ],
+        "exit_code": 91,
+        "recovered": 0,
+        "second_recovered": 0
+      },
+      "name": "success_before_replay",
+      "observed": {
+        "after_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "after_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "after_second_replay": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "before_recovery": {
+          "attempts": 1,
+          "history_statuses": [
+            "SUCCESS"
+          ],
+          "receiver_count": 1,
+          "status": "SUCCESS"
+        },
+        "event_types": [
+          "PREPARED",
+          "DISPATCHED",
+          "SUCCEEDED"
+        ],
+        "exit_code": 91,
+        "recovered": 0,
+        "second_recovered": 0
+      },
+      "passed": true
+    }
+  ],
+  "clickhouse_cluster_validated": false,
+  "environment": {
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.12.14",
+    "sqlite": "3.53.1"
+  },
+  "fault_mechanism": "subprocess os._exit(91) after committed boundary",
+  "observed_at": "2026-10-18T10:08:17.257698+00:00",
+  "passed": true,
+  "receiver_semantics": "local durable acceptance record; no ClickHouse SQL executed",
+  "schema_version": 1,
+  "scope": "offline_protocol_demonstration",
+  "temporary_files_removed": true
+}

@@ -11,7 +11,7 @@ from data_converge.errors import TaskExecutionError, safe_error_details
 
 from .memory import InMemoryExecutionRepository
 from .models import DAG, TaskInstance, TaskStatus
-from .ports import ExecutionRepository, TaskRunner
+from .ports import CheckpointRepository, ExecutionRepository, TaskRunner
 from .retry import can_start_attempt
 
 
@@ -54,6 +54,7 @@ class DAGExecutor:
         self.readiness_check = readiness_check
         memory = InMemoryExecutionRepository(self.known_statuses)
         self.repository: ExecutionRepository = state_store if state_store is not None else memory
+        self.checkpoints = self.repository if isinstance(self.repository, CheckpointRepository) else None
         self._memory = memory.records
 
     def execute(self, instances: Iterable[TaskInstance], *, now: datetime | None = None,
@@ -93,7 +94,7 @@ class DAGExecutor:
             claimed = [i for i in ready if self._claim(i, now)]
             attempted.update(i.instance_id for i in ready)
             if claimed:
-                self._execute_ready_instances(claimed, now)
+                self._execute_ready_instances(claimed, now, should_stop)
 
         for instance in instance_list:
             if instance.status not in (TaskStatus.PENDING, TaskStatus.BLOCKED):
@@ -123,8 +124,11 @@ class DAGExecutor:
 
     def _eligible(self, instance: TaskInstance, now: datetime) -> bool:
         record = None
-        if instance.status in (TaskStatus.BLOCKED, TaskStatus.FAILED):
+        reserved_pending = self.checkpoints is not None and instance.status == TaskStatus.PENDING
+        if reserved_pending or instance.status in (TaskStatus.BLOCKED, TaskStatus.FAILED):
             record = self.repository.get_instance(instance.instance_id)
+        if reserved_pending and record and record['attempts'] >= self.max_attempts:
+            return False
         return can_start_attempt(
             instance.status, record.get("attempts", 0) if record else 0,
             record.get("retryable", False) if record else False,
@@ -132,13 +136,28 @@ class DAGExecutor:
             now=now, max_attempts=self.max_attempts)
 
     def _claim(self, instance: TaskInstance, now: datetime) -> bool:
-        claimed = self.repository.claim(instance.instance_id, now=now, max_attempts=self.max_attempts)
+        claim = self.checkpoints.prepare_attempt if self.checkpoints is not None else self.repository.claim
+        claimed = claim(instance.instance_id, now=now, max_attempts=self.max_attempts)
         self._restore(instance)
         return claimed
 
-    def _execute_ready_instances(self, instances: List[TaskInstance], now: datetime) -> None:
+    def _submit_instances(self, pool, instances, now, should_stop):
+        futures = {}
+        for instance in instances:
+            if self.checkpoints is not None:
+                if should_stop and should_stop():
+                    break
+                # This commit is the boundary after which recovery must assume
+                # that the external side effect may have happened.
+                self.checkpoints.mark_dispatched(instance.instance_id, instance.query_id, now=now)
+                self._restore(instance)
+            futures[pool.submit(self.runner, instance)] = instance
+        return futures
+
+    def _execute_ready_instances(self, instances: List[TaskInstance], now: datetime,
+                                 should_stop=None) -> None:
         with ThreadPoolExecutor(max_workers=len(instances), thread_name_prefix="dag-task") as pool:
-            futures = {pool.submit(self.runner, instance): instance for instance in instances}
+            futures = self._submit_instances(pool, instances, now, should_stop)
             for future in as_completed(futures):
                 instance = futures[future]
                 retryable = False

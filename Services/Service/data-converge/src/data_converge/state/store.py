@@ -13,7 +13,7 @@ from data_converge.errors import safe_diagnostic_details
 
 from .bootstrap import StateBootstrapError
 from .database import LedgerDatabase
-from . import history
+from . import checkpoints, events, history
 
 
 def _stamp(value: datetime) -> str:
@@ -132,6 +132,12 @@ class StateStore:
         return history.list_legacy_resolutions(self._connection(), instance_id, taskname=taskname,
                                                limit=limit, offset=offset)
 
+    def list_recovery_candidates(self, limit: int = 20, offset: int = 0) -> list[dict]:
+        return checkpoints.recovery_rows(self._connection(), limit=limit, offset=offset)
+
+    def recovery_counts(self) -> dict[str, int]:
+        return checkpoints.recovery_counts(self._connection())
+
     def record_dwd_signal(self, window_start: datetime, dwd_type: str, received_at: datetime) -> None:
         if not isinstance(dwd_type, str) or not dwd_type.strip():
             raise ValueError("dwd_type must be non-empty")
@@ -180,25 +186,70 @@ class StateStore:
                 (_stamp(now), str(uuid.uuid4()), instance_id, status.value))
             if updated.rowcount == 1:
                 history.record_claim(conn, instance_id)
+                events.append_event(conn, "DISPATCHED", instance_id, now)
             return updated.rowcount == 1
+
+    def prepare_attempt(self, instance_id: str, *, now: datetime | None = None,
+                        max_attempts: int = 3) -> bool:
+        """Reserve an eligible instance without allowing external execution yet."""
+        now = now or datetime.now(timezone.utc)
+        conn = self._connection(write=True)
+        with conn:
+            row = conn.execute("SELECT * FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()
+            if row is None:
+                raise KeyError(instance_id)
+            status = TaskStatus(row["status"])
+            if row["attempts"] >= max_attempts or not can_start_attempt(
+                    status, row["attempts"], row["retryable"], row["next_retry_at"],
+                    now=now, max_attempts=max_attempts):
+                return False
+            query_id = str(uuid.uuid4())
+            result = conn.execute("""UPDATE task_instances SET status='RUNNING',
+                started_at=NULL, finished_at=NULL, error=NULL, retryable=0,
+                next_retry_at=NULL, query_id=? WHERE instance_id=? AND status=?""",
+                (query_id, instance_id, status.value))
+            if result.rowcount != 1:
+                return False
+            checkpoints.record_prepared(conn, instance_id, query_id, _stamp(now), max_attempts)
+            events.append_event(conn, "PREPARED", instance_id, now)
+            return True
+
+    def mark_dispatched(self, instance_id: str, query_id: str, *, now: datetime | None = None) -> None:
+        """Commit dispatch intent and its attempt before the runner can be called."""
+        now = now or datetime.now(timezone.utc)
+        conn = self._connection(write=True)
+        with conn:
+            checkpoints.mark_dispatched(conn, instance_id, query_id, _stamp(now))
+            result = conn.execute("""UPDATE task_instances SET attempts=attempts+1, started_at=?
+                WHERE instance_id=? AND query_id=? AND status='RUNNING'""",
+                (_stamp(now), instance_id, query_id))
+            if result.rowcount != 1:
+                raise RuntimeError(f"Prepared reservation changed: {instance_id}")
+            history.record_claim(conn, instance_id)
+            events.append_event(conn, "DISPATCHED", instance_id, now)
 
     def finish(self, instance_id: str, status: TaskStatus, *, error: str | None = None,
                retryable: bool = False, next_retry_at: datetime | None = None,
                now: datetime | None = None, diagnostic: dict | None = None) -> None:
         if status not in (TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.UNKNOWN):
             raise ValueError("finish requires SUCCESS, FAILED or UNKNOWN")
+        now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
         with conn:
+            checkpoints.assert_finish_allowed(conn, instance_id)
             result = conn.execute("""UPDATE task_instances SET status=?, error=?,
                 retryable=?, next_retry_at=?, finished_at=? WHERE instance_id=? AND status='RUNNING'""",
                 (status.value, error, int(retryable and status == TaskStatus.FAILED),
                  _stamp(next_retry_at) if next_retry_at else None,
-                 _stamp(now or datetime.now(timezone.utc)), instance_id))
+                 _stamp(now), instance_id))
             if result.rowcount != 1:
                 raise RuntimeError(f"Cannot finish an unclaimed instance: {instance_id}")
             if diagnostic and status != TaskStatus.SUCCESS:
                 self._save_execution_diagnostic(conn, instance_id, diagnostic)
             history.record_finish(conn, instance_id, diagnostic)
+            event = {TaskStatus.SUCCESS: "SUCCEEDED", TaskStatus.FAILED: "FAILED",
+                     TaskStatus.UNKNOWN: "OUTCOME_UNKNOWN"}[status]
+            events.append_event(conn, event, instance_id, now)
 
     @staticmethod
     def _save_execution_diagnostic(conn, instance_id: str, diagnostic: dict) -> None:
@@ -235,11 +286,20 @@ class StateStore:
     def recover_running(self) -> int:
         conn = self._connection(write=True)
         with conn:
-            history.record_recovery(conn, _stamp(datetime.now(timezone.utc)))
-            result = conn.execute("""UPDATE task_instances SET status='UNKNOWN', retryable=0,
-                next_retry_at=NULL, error='Process stopped before execution outcome was durably recorded'
-                WHERE status='RUNNING'""")
-            return result.rowcount
+            now = _stamp(datetime.now(timezone.utc))
+            rows = checkpoints.classified_rows(conn, include_unknown=False)
+            for row in rows:
+                if row["action"] == "AUTO_RESUME":
+                    checkpoints.recover_unsubmitted(conn, row, now)
+                    events.append_event(conn, "RECOVERED_UNSUBMITTED", row["instance_id"], now)
+            history.record_recovery(conn, now)
+            for row in rows:
+                if row["action"] == "RECONCILE":
+                    conn.execute("""UPDATE task_instances SET status='UNKNOWN', retryable=0,
+                        next_retry_at=NULL, error='Process stopped before execution outcome was durably recorded'
+                        WHERE instance_id=? AND status='RUNNING'""", (row["instance_id"],))
+                    events.append_event(conn, "RECOVERY_REQUIRED", row["instance_id"], now)
+            return len(rows)
 
     def resolve(self, instance_id: str, resolution: str, note: str) -> None:
         resolution = resolution.upper()
@@ -247,13 +307,16 @@ class StateStore:
             raise ValueError("resolution must be SUCCESS or PENDING")
         if not note.strip():
             raise ValueError("A non-empty operator note is required")
+        now = _stamp(datetime.now(timezone.utc))
         conn = self._connection(write=True)
         with conn:
             result = conn.execute("""UPDATE task_instances SET status=?, retryable=0,
                 next_retry_at=NULL, resolution_note=?, resolved_at=?, error=NULL,
                 attempts=CASE WHEN ?='PENDING' THEN 0 ELSE attempts END
                 WHERE instance_id=? AND (status='UNKNOWN' OR (?='PENDING' AND status='FAILED'))""",
-                (resolution, note.strip(), _stamp(datetime.now(timezone.utc)), resolution, instance_id, resolution))
+                (resolution, note.strip(), now, resolution, instance_id, resolution))
             if result.rowcount != 1:
                 raise ValueError(f"Only UNKNOWN can become SUCCESS; only UNKNOWN/FAILED can retry: {instance_id}")
             history.record_resolution(conn, instance_id)
+            event = "RESOLVED_SUCCESS" if resolution == "SUCCESS" else "RETRY_AUTHORIZED"
+            events.append_event(conn, event, instance_id, now)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable, Mapping, Protocol
+from typing import Iterable, Mapping, Protocol, runtime_checkable
 
 from .models import TaskInstance, TaskStatus
 
@@ -12,6 +12,21 @@ class TaskRunner(Protocol):
     """Execute one already claimed task; failures follow TaskExecutionError."""
 
     def __call__(self, instance: TaskInstance) -> None: ...
+
+
+@runtime_checkable
+class CheckpointRepository(Protocol):
+    """Optional durable reservation capability; never implemented by a runner.
+
+    Preparation does not consume an attempt. Dispatch must commit before a
+    worker can call the runner. Missing capability keeps legacy claim semantics.
+    """
+
+    def prepare_attempt(self, instance_id: str, *, now: datetime | None = None,
+                        max_attempts: int = 3) -> bool: ...
+
+    def mark_dispatched(self, instance_id: str, query_id: str, *,
+                        now: datetime | None = None) -> None: ...
 
 
 class ExecutionRepository(Protocol):

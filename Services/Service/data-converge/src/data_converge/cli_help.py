@@ -13,6 +13,8 @@ DESCRIPTION = '''Data Converge Lite · 运行与故障定位
   怀疑 ClickHouse 或 Redis 连不上  --diagnose --online
   想找失败、结果未确认或阻断任务   --failures
   想查每次执行和人工处理的历史     --history
+  想预览哪些任务可安全恢复         --recovery-plan
+  想导出机器可读的执行事件         --events --format jsonl
   想追查某个任务为什么异常         --inspect-instance '实例ID'
   想查哪些 DWD 信号没到            --dwd-status
   想看原始状态快照                 --status
@@ -35,6 +37,10 @@ EXAMPLES = f'''可直接复制的查询示例：
   {LAUNCHER} --history
   {LAUNCHER} --history --task task_resource_5min_ads --limit 20 --offset 20
   {LAUNCHER} --history --format json
+
+  # 恢复预览不会改变状态；事件按序号续读，可重定向到文件
+  {LAUNCHER} --recovery-plan --format json
+  {LAUNCHER} --events --after-event 0 --limit 100 --format jsonl
 
   # 实例ID从 --failures 或 --status 复制；下面的时间按现场情况替换
   {LAUNCHER} --inspect-instance 'task_resource_5min_ads@2026-10-14T16:30:00+08:00'

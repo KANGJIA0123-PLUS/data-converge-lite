@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "base_commit": "a4f6138e2f5fbcb77c20c2304a09b5dc77234512",
+  "baseline": {
+    "failed": 7,
+    "passed": 648,
+    "skipped": 44,
+    "duration_seconds": 15.79,
+    "failure_ids": [
+      "../../../../../../dev/test_packaging.py::test_start_forwards_config_and_arguments_and_waits_for_child",
+      "../../../../../../dev/test_packaging.py::test_platform_start_failure_prevents_application_and_start_status[PRECHECK_EXIT_CODE-expected_hooks0]",
+      "../../../../../../dev/test_packaging.py::test_platform_start_failure_prevents_application_and_start_status[INIT_PYTHON_EXIT_CODE-expected_hooks1]",
+      "../../../../../../dev/test_packaging.py::test_platform_start_restores_company_file_permissions",
+      "../../../../../../dev/test_packaging.py::test_probe_uses_same_interpreter_and_returns_application_exit[liveness_check.sh-liveness]",
+      "../../../../../../dev/test_packaging.py::test_probe_uses_same_interpreter_and_returns_application_exit[readiness_check.sh-readiness]",
+      "../../../../../../dev/test_packaging.py::test_probe_does_not_install_dependencies"
+    ]
+  },
+  "refactored": {
+    "failed": 7,
+    "passed": 732,
+    "skipped": 44,
+    "duration_seconds": 17.96,
+    "failure_ids": [
+      "../../../../../../dev/test_packaging.py::test_start_forwards_config_and_arguments_and_waits_for_child",
+      "../../../../../../dev/test_packaging.py::test_platform_start_failure_prevents_application_and_start_status[PRECHECK_EXIT_CODE-expected_hooks0]",
+      "../../../../../../dev/test_packaging.py::test_platform_start_failure_prevents_application_and_start_status[INIT_PYTHON_EXIT_CODE-expected_hooks1]",
+      "../../../../../../dev/test_packaging.py::test_platform_start_restores_company_file_permissions",
+      "../../../../../../dev/test_packaging.py::test_probe_uses_same_interpreter_and_returns_application_exit[liveness_check.sh-liveness]",
+      "../../../../../../dev/test_packaging.py::test_probe_uses_same_interpreter_and_returns_application_exit[readiness_check.sh-readiness]",
+      "../../../../../../dev/test_packaging.py::test_probe_does_not_install_dependencies"
+    ]
+  },
+  "new_passing_cases": 84,
+  "new_failures": [],
+  "limitations": [
+    "44 skipped cases are not validated",
+    "7 pre-existing packaging/probe failures remain",
+    "offline drill does not validate a ClickHouse cluster"
+  ],
+  "independent_review": "two findings fixed and reverified; no remaining actionable findings"
+}

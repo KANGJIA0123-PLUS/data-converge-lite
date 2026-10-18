@@ -2,6 +2,41 @@
 
 当前目标是让现有汇聚流程易于替换依赖、定位故障和验证行为。当前包含 56 个任务，沿用现有 SQL、命令入口、状态身份和公司字节码构建方式。扩展接口不自动改变线上部署，也不新增消息系统或数据库。
 
+## 恢复设计的核心语言
+
+| 概念 | 职责与不变量 | 代码边界 |
+| --- | --- | --- |
+| 窗口实例 | 一个任务在一个确定窗口的计算；成功实例不可自动重放 | `dag/models.py`、`scheduler/service.py` |
+| 准备 | 占用实例并分配 query_id；没有派发权限，不消费尝试预算 | `StateStore.prepare_attempt` |
+| 派发 | 先提交意图、次数和历史，再允许调用运行器 | `StateStore.mark_dispatched`、`DAGExecutor._submit_instances` |
+| 未知结果 | 外部可能已产生副作用，但没有完成证据；必须核对 | `TaskStatus.UNKNOWN`、`StateStore.resolve` |
+| 事件 | 与业务状态在同一事务追加，不接受任意异常或上下文字段 | `state/events.py` |
+| 恢复计划 | 在一致只读快照中解释下一次恢复会如何分类 | `diagnostics/recovery.py` |
+
+这些概念直接对应接口、持久化事实和测试，不通过给目录改名模拟架构。应用层负责流程，领域接口表达能力，适配层拥有外部 I/O，账本层决定事务原子性。
+
+```mermaid
+sequenceDiagram
+    participant E as DAGExecutor
+    participant S as StateStore
+    participant D as SQLite
+    participant R as TaskRunner
+    E->>S: prepare_attempt(instance_id)
+    S->>D: RUNNING + PREPARED + 事件 / 同事务
+    D-->>S: 已提交，不计尝试次数
+    S-->>E: 已准备
+    E->>S: mark_dispatched(instance_id, query_id)
+    S->>D: DISPATCHED + attempts+1 + 历史 + 事件 / 同事务
+    D-->>S: 已提交
+    S-->>E: 允许派发
+    E->>R: 提交线程池并执行
+    R-->>E: 成功 / 可确认失败 / 结果未知
+    E->>S: finish(result)
+    S->>D: 实例结果 + 历史结果 + 事件 / 同事务
+```
+
+准备后的崩溃可自动重新排队；派发意图提交后的崩溃仍按 UNKNOWN 处理，包括尚未实际进入线程池的保守窗口。SQLite 与 ClickHouse 没有共同事务，因此这里的 DISPATCHED 表示允许发送的持久化意图，不是服务端接收证明。
+
 ## 依赖方向
 
 ```mermaid
@@ -58,6 +93,8 @@ src/data_converge/
 │   ├── store.py             # 业务状态转换和事务边界
 │   ├── database.py          # SQLite 连接、文件锁、基础表与首次启动
 │   ├── history.py           # 借用同一事务记录执行尝试和人工处置
+│   ├── checkpoints.py       # 准备/派发事实与共用恢复分类
+│   ├── events.py            # 同事务追加事件、只读有序分页
 │   └── bootstrap.py         # 首次初始化标记，拒绝静默重建丢失账本
 ├── diagnostics/             # 只读状态、失败、历史和连接诊断
 └── observability/           # 文件日志、轮转与保留策略
@@ -98,6 +135,8 @@ src/data_converge/
 
 实现 `ExecutionRepository` 的领取、完成、状态读取与登记接口，先通过仓储契约测试。领取必须原子检查资格；成功状态不可自动重新领取；UNKNOWN 不自动重试；完成记录提交失败必须向上抛出。
 
+需要支持准备阶段自动恢复时，同时实现可选 `CheckpointRepository.prepare_attempt` 和 `mark_dispatched`。执行器仅在完整能力可用时启用新协议，旧仓储继续调用 `claim()`；不能让运行器自行绕过派发事务。生产 StateStore 实现检查点，内存仓储保留旧行为，不声称具有持久化恢复能力。
+
 这个接口覆盖 DAG 执行状态。完整替换 SQLite 还需要实现调度游标、部署身份、就绪事实、维护操作和写入所有权等职责。内存仓储用于进程内执行与验证，不提供重启恢复，不可当作生产持久化后端。
 
 仓储由调度线程串行访问，工作线程只运行任务，不直接修改账本。现有内存仓储不承诺多线程共享安全；新增后端不能把这个调用约定当作多实例之间的互斥机制。
@@ -107,7 +146,9 @@ src/data_converge/
 | 故障或边界 | 当前行为 | 验收测试 |
 | --- | --- | --- |
 | 重复启动写进程 | 同一状态锁文件只允许一个写进程 | `test_lock_prevents_second_local_writer` |
-| 服务重启 | 已成功任务不重复提交；遗留 RUNNING 转 UNKNOWN | `test_success_survives_reopen_and_is_not_submitted_again`、`test_abandoned_running_is_unknown_and_requires_explicit_resolution` |
+| 服务重启 | 成功不重放；当前 PREPARED 重新排队；已派发或旧版 RUNNING 转 UNKNOWN | `test_dispatch_checkpoints.py`、`test_recovery_drill.py` 及原状态测试 |
+| 派发事务失败 | 工作线程不会调用运行器；准备记录可以安全恢复 | `test_dispatch_commit_failure_prevents_runner_call` |
+| 查询恢复和审计 | 只读一致快照，无建表、状态恢复或远端提交副作用 | `test_recovery_cli.py` |
 | 任务登记中断 | 任务登记与调度游标一起提交或回滚 | `test_cursor_and_window_registration_rollback_together` |
 | SQL 成功但记账失败 | 失败向上传播，停止派发，不转成可重试 SQL 失败 | `test_success_persistence_failure_escapes_instead_of_becoming_retry` |
 | 就绪信号落盘失败 | 不确认消息、不放行窗口 | `test_commit_failure_does_not_ack_or_release` |
@@ -119,6 +160,8 @@ src/data_converge/
 | Redis 构造部分失败 | 已创建的数据与 Sentinel 连接池由当前工厂回收 | `test_sentinel_client_creation_failure_releases_discovery_connections` |
 
 这些是代码与故障测试所覆盖的保证，不构成可用率、吞吐量或恢复时间承诺。
+
+每次正常成功执行新增一条准备检查点及 PREPARED、DISPATCHED、SUCCEEDED 三条事件；派发边界增加一次 SQLite 持久化提交。收益是可判定的恢复范围，成本是磁盘写入与账本容量，吞吐影响需在目标磁盘和真实任务负载下测量。事件和尝试历史暂不自动裁剪；文件日志轮转不会删除账本审计。完整设计及替代方案见 [恢复协议设计](superpowers/specs/2026-10-18-recovery-protocol-design.md)。
 
 ## 分布式高可用的边界
 

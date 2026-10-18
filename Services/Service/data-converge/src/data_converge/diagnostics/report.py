@@ -98,7 +98,31 @@ def render_text(value):
         lines.extend(_render_history(data))
     elif 'history' in data:
         lines.extend(_render_history(data['history']))
+    if value['command'] == 'recovery-plan':
+        lines.extend(_render_recovery(data))
+    if value['command'] == 'events':
+        lines.extend(_render_events(data))
     return '\n'.join(lines)
+
+
+def _render_recovery(data):
+    lines = []
+    for row in data.get('candidates', []):
+        lines.append(f"{row['action']}  {row['instance_id']}  phase={row['phase'] or 'LEGACY'}"
+                     f"  query_id={row['query_id'] or '-'}  attempts={row['attempts']}")
+        lines.append(f"  判断依据: {row['reason']}")
+    if data.get('has_more'):
+        lines.append(f"下一页: --recovery-plan --limit {data['limit']} --offset {data['offset'] + data['limit']}")
+    return lines
+
+
+def _render_events(data):
+    lines = [f"{row['event_id']}  {row['occurred_at']}  {row['event_type']}  {row['instance_id']}"
+             f"  query_id={row['query_id'] or '-'}  attempt={row['attempt_number']}"
+             for row in data.get('events', [])]
+    if data.get('has_more'):
+        lines.append(f"下一页: --events --after-event {data['next_after_event']} --limit {data['limit']}")
+    return lines
 
 
 def _render_history(data):

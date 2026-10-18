@@ -2,6 +2,8 @@
 
 基于 ClickHouse 的汇聚服务：接收 DWD 就绪信号，按任务依赖执行现有 56 个汇聚任务，并在本地账本记录执行结果。业务流程、命令入口和公司字节码构建方式保持兼容。
 
+恢复以持久化派发边界为依据：准备完成但未派发的实例可自动继续；可能已提交的实例保留 UNKNOWN，先核对再处理。执行事件与业务状态同事务保存，可只读预览恢复计划、按序号导出 JSONL。设计、验证和业务价值说明见 [架构](docs/architecture.md)、[故障演练证据](docs/evidence/recovery-verification-2026-10-18.md) 和 [参赛说明](docs/competition.md)。
+
 ## 目录与职责
 
 ```text
@@ -26,6 +28,8 @@ Services/Service/data-converge/
       store.py              # 业务状态转换与事务
       database.py           # SQLite 连接、文件锁与首次启动
       history.py            # 与业务事务一起提交的执行历史
+      checkpoints.py        # 准备、派发及恢复分类
+      events.py             # 事务内事件与有序导出
     observability/
       settings.py           # 不可变日志配置
       retention.py          # 轮转与保留策略
@@ -50,6 +54,8 @@ Services/Service/data-converge/
 ## 快速定位
 
 提供 `--diagnose`、`--diagnose --online`、`--failures`、`--history`、`--inspect-instance`、`--dwd-status`，默认中文文本，支持 `--format json`；原 `--status` 保持兼容。完整容器命令、错误证据及只读边界见 [运行定位指南](docs/diagnostics.md)。
+
+新增 `--recovery-plan` 只读查看恢复分类；`--events --after-event 0 --limit 100 --format jsonl` 导出首批事务事件，使用最后一条 `event_id` 继续分页。服务运行日志继续沿用原轮转策略；事件原始记录在账本中，不依赖日志文件保存成功。
 
 ## 日志
 
