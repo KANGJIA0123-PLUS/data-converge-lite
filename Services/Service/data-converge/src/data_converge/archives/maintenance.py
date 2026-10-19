@@ -245,7 +245,8 @@ def _prune_daily(database, cutoff, check, report):
             _error(report, 'prune_daily', error, check)
 
 
-def _migration_references(database):
+def migration_references(database):
+    """Read the latest audited timestamp for every backup path, without page limits."""
     uri = Path(database).resolve().as_uri() + '?mode=ro'
     references = {}
     with closing(sqlite3.connect(uri, uri=True)) as connection:
@@ -293,7 +294,7 @@ def _maintain_migration(database, path, applied, now, retention, check, report):
 
 def _maintain_migrations(database, now, settings, check, report):
     try:
-        references = _migration_references(database)
+        references = migration_references(database)
     except Exception as error:
         _error(report, 'read_migration_audit', error, check)
         return
@@ -351,10 +352,11 @@ def _availability_paths(database, original_path):
     return None
 
 
-def backup_availability(database, original_path, created_at, settings, now) -> dict:
+def backup_availability(database, original_path, created_at, settings, now, *, references=None) -> dict:
     """Report immutable audit references without creating files or asserting deletion."""
     now, created = _instant(now), _instant(created_at)
-    references = _migration_references(database) if _live_identity(database) else {}
+    if references is None:
+        references = migration_references(database) if _live_identity(database) else {}
     managed = (isinstance(original_path, str) and original_path in references
                and references[original_path] == created
                and _managed_migration(database, original_path))

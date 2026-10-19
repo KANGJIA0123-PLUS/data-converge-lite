@@ -8,7 +8,9 @@ from pathlib import Path
 import stat
 from zoneinfo import ZoneInfo
 
-from data_converge.archives.maintenance import archive_directory, backup_availability, daily_archives
+from data_converge.archives.maintenance import (
+    archive_directory, backup_availability, daily_archives, migration_references,
+)
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.errors import safe_diagnostic_details, safe_error_details
 
@@ -114,10 +116,12 @@ def _backup_references(database, settings, now):
         if recovery and not any(row['migration_id'] == recovery['migration_id'] for row in records):
             records.append(dict(migration_id=recovery['migration_id'], backup_path=recovery['backup_path'],
                                 applied_at=recovery['recovered_at']))
+    references = migration_references(database) if any(row['backup_path'] is not None for row in records) else {}
     result = []
     for row in records:
         if row['backup_path'] is not None:
-            available = backup_availability(database, row['backup_path'], _instant(row['applied_at']), settings, now)
+            available = backup_availability(database, row['backup_path'], _instant(row['applied_at']),
+                                            settings, now, references=references)
             result.append(dict(migration_id=row['migration_id'], original_path=row['backup_path'], **available))
     return result, truncated
 

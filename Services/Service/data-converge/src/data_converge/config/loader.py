@@ -110,11 +110,8 @@ class ConfigLoader:
         - cron: 任务触发时间(cron表达式)
         - sql_id: SQL文件标识符
         """
-        if not self._config:
-            self.load()
-
         errors = []
-        rules = self._config.get("convergence_rules", [])
+        rules = self.get_all_rules()
         tasknames = set()
 
         for idx, rule in enumerate(rules):
@@ -131,9 +128,6 @@ class ConfigLoader:
             tasknames.add(taskname)
 
             self._validate_rule_fields(rule, taskname, errors)
-
-            # depends_on可选，但引用的taskname必须存在（遍历时检查）
-            depends_on = rule.get("depends_on", [])
 
         # 二次遍历检查depends_on引用的完整性
         for rule in rules:
@@ -155,8 +149,6 @@ class ConfigLoader:
             errors.append(f"Task '{taskname}': missing required field 'source_tables'")
         elif not isinstance(source_tables, list):
             errors.append(f"Task '{taskname}': 'source_tables' must be a list")
-        elif len(source_tables) == 0:
-            errors.append(f"Task '{taskname}': 'source_tables' cannot be empty")
 
         # target_table必填
         if not rule.get("target_table"):
@@ -186,11 +178,7 @@ class ConfigLoader:
 
     def get_rule_by_taskname(self, taskname: str) -> Optional[Dict[str, Any]]:
         """根据任务名获取汇聚规则"""
-        if not self._config:
-            self.load()
-
-        rules = self._config.get("convergence_rules", [])
-        for rule in rules:
+        for rule in self.get_all_rules():
             if rule.get("taskname") == taskname:
                 return rule
         return None
@@ -211,13 +199,8 @@ class ConfigLoader:
         Returns:
             依赖关系字典，key是taskname，value是依赖的taskname列表
         """
-        if not self._config:
-            self.load()
-
         dependencies: Dict[str, List[str]] = {}
-        rules = self._config.get("convergence_rules", [])
-
-        for rule in rules:
+        for rule in self.get_all_rules():
             taskname = rule.get("taskname")
             depends_on = rule.get("depends_on", [])
 
@@ -287,11 +270,7 @@ class ConfigLoader:
         Returns:
             匹配的任务列表
         """
-        if not self._config:
-            self.load()
-
-        rules = self._config.get("convergence_rules", [])
-        return [rule for rule in rules if rule.get("aggregation_interval") == interval]
+        return [rule for rule in self.get_all_rules() if rule.get("aggregation_interval") == interval]
 
     def load_sql(self, sql_id: str) -> str:
         """根据sql_id加载SQL语句"""
@@ -309,13 +288,8 @@ class ConfigLoader:
 
     def get_source_tables(self) -> List[str]:
         """获取所有源表"""
-        if not self._config:
-            self.load()
-
-        rules = self._config.get("convergence_rules", [])
         sources = set()
-
-        for rule in rules:
+        for rule in self.get_all_rules():
             source_tables = rule.get("source_tables", [])
             for source in source_tables:
                 sources.add(source)
@@ -324,13 +298,8 @@ class ConfigLoader:
 
     def get_target_tables(self) -> List[str]:
         """获取所有目标表"""
-        if not self._config:
-            self.load()
-
-        rules = self._config.get("convergence_rules", [])
         targets = set()
-
-        for rule in rules:
+        for rule in self.get_all_rules():
             if rule.get("target_table"):
                 targets.add(rule["target_table"])
 
@@ -338,8 +307,4 @@ class ConfigLoader:
 
     def get_all_tasknames(self) -> List[str]:
         """获取所有任务名"""
-        if not self._config:
-            self.load()
-
-        rules = self._config.get("convergence_rules", [])
-        return [rule.get("taskname") for rule in rules if rule.get("taskname")]
+        return [rule.get("taskname") for rule in self.get_all_rules() if rule.get("taskname")]

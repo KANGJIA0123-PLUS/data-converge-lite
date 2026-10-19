@@ -3,6 +3,7 @@
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
+import sqlite3
 
 import pytest
 
@@ -190,6 +191,44 @@ def test_expired_migration_reference_is_explained_without_claiming_deletion(app)
     row = result['evidence']['migration_backups'][0]
     assert row['original_path'] == str(original) and row['status'] == 'expired_or_missing'
     assert database.read_bytes() == before
+
+
+def add_backup_references(database, paths, instant):
+    with closing(StateStore(database)) as store:
+        store.acquire_lock()
+        with store._connection(write=True) as connection:
+            for index, path in enumerate(paths):
+                connection.execute('INSERT INTO configuration_history SELECT ?, previous_revision, '
+                    'revision, ?, ?, manifest, task_starts FROM configuration_history LIMIT 1',
+                    (f'reference-{index}', instant.isoformat(), str(path)))
+
+
+def test_migration_backup_diagnostics_does_not_rescan_audit_for_each_file(app, monkeypatch):
+    original, database = set_migration_backup(app, NOW - timedelta(days=2))
+    paths = [original.with_name('b' * 16 + f'-{index:032x}.sqlite3') for index in range(19)]
+    add_backup_references(database, paths, NOW - timedelta(days=2))
+    statements, connect = [], sqlite3.connect
+
+    def traced_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(sqlite3, 'connect', traced_connect)
+    result = archive_check({}, database.parent, now=NOW)
+    records = result['evidence']['migration_backups']
+    assert len(records) == 20 and all(row['status'] == 'missing' and row['managed'] for row in records)
+    reads = [sql for sql in statements if 'from configuration_history' in sql.lower()]
+    assert len(reads) <= 2  # Recent records plus one full ownership lookup, independent of file count.
+
+
+def test_backup_ownership_uses_audit_entries_outside_recent_page(app):
+    original, database = set_migration_backup(app, NOW - timedelta(days=1))
+    add_backup_references(database, [original] * 21, NOW - timedelta(days=2))
+    result = archive_check({}, database.parent, now=NOW)
+    records = result['evidence']['migration_backups']
+    assert len(records) == 20 and result['evidence']['migration_backups_truncated'] is True
+    assert all(row['managed'] is False and row['status'] == 'unmanaged' for row in records)
 
 
 @pytest.mark.parametrize('code', ['ARCHIVE_SETTINGS_INVALID', 'ARCHIVE_FILE_INVALID',
