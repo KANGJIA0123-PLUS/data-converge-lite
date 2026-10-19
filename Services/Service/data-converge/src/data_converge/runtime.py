@@ -22,6 +22,8 @@ from data_converge.sql_execution import SQLTaskRunner
 from data_converge.sql_execution.client import execute_sql
 from data_converge.state import StateStore
 from data_converge.coordination import create_leadership, GuardedRunner, GuardedSignalSource, WriterLease
+from data_converge.archives.settings import ArchiveSettings
+from data_converge.archives.worker import ArchiveWorker
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,7 @@ class ServiceRuntime:
     heartbeat: Heartbeat
     startup_probe: Callable[[], None] | None = field(default=None, repr=False)
     lease: WriterLease | None = field(default=None, repr=False)
+    maintenance: AbstractContextManager | None = field(default=None, repr=False)
     _probe: Callable[[], None] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -108,8 +111,9 @@ class ServiceRuntime:
         self._probe()
         self._assert_owned()
         if not self.scheduler.stop_requested:
-            self.heartbeat.set_ready(True)
-            self.scheduler.start()
+            with self.maintenance or nullcontext():
+                self.heartbeat.set_ready(True)
+                self.scheduler.start()
         self._assert_owned()
 
     def _assert_owned(self) -> None:
@@ -189,5 +193,7 @@ def open_runtime(config_path: Path, definition: ApplicationDefinition, store: St
             heartbeat.readiness_check = lambda: not lease.lost
         attach_readiness(definition.config['dwd_ready'], store, coverage_start,
                          scheduler, executor, cleanup, dependencies.source_factory, lease)
-        runtime = ServiceRuntime(scheduler, runner, heartbeat, execution.probe, lease)
+        policy = ArchiveSettings.from_mapping(definition.config.get('state', {}).get('archives'))
+        maintenance = ArchiveWorker(store.path, policy, lease=lease)
+        runtime = ServiceRuntime(scheduler, runner, heartbeat, execution.probe, lease, maintenance)
         yield runtime

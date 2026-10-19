@@ -5,6 +5,7 @@ from datetime import datetime
 from data_converge.config.application import load_app_config, state_directory
 from data_converge.dwd_ready.config import load_ready_config
 from data_converge.health import heartbeat_directory
+from .archives import archive_check
 from .checks import (credential_files, definition_check, failure, heartbeat_check,
                      log_check, logging_settings_check, module_check, protected_check,
                      state_check, task_check, leadership_check, inspection_definition, historical_check)
@@ -33,6 +34,7 @@ def diagnose(path, *, online=False):
         checks.append(protected_check('runtime.modules', module_check, definition))
         checks.extend(credential_files(definition))
     checks.extend([protected_check('logging.settings', logging_settings_check, raw),
+                   protected_check('state.archives', archive_check, raw, directory),
                    protected_check('logs', log_check),
                    protected_check('heartbeat', heartbeat_check, heartbeat_directory(directory, raw))])
     checks.extend(_ledger_checks(directory, definition))

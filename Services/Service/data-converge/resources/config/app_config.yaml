@@ -19,6 +19,9 @@ clickhouse:
 
 state:
   directory: /srv/its/MindOpsBOSE/data-converge/data/lite-state
+  archives:
+    enabled: true         # 正常服务后台每天生成一份一致性压缩备份；不删除活动账本记录。
+    retention_days: 30    # 从原快照时间计龄，压缩和重启不重置期限。
 
 # 主备必须使用同一份完整持久账本及同一个锁文件，不支持独立hostPath自动接管。
 # 复用下方Redis认证配置，但使用独立连接；一旦绑定账本，不可通过关闭选主绕过。

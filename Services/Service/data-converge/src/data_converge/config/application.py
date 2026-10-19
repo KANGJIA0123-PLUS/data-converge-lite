@@ -16,6 +16,7 @@ import yaml
 from data_converge.dag import DAG, DAGBuilder
 from data_converge.dwd_ready.config import load_ready_config
 from data_converge.sql_execution.config import connection_origin, validate_config
+from data_converge.archives.settings import ArchiveSettings
 
 from .loader import ConfigLoader
 from .cron import compile_cron_groups
@@ -114,6 +115,7 @@ def settings(config: dict[str, Any]) -> SchedulerSettings:
 def load_definition(config_path: Path, *, raw_config: dict[str, Any] | None = None) -> ApplicationDefinition:
     raw_config = load_app_config(config_path) if raw_config is None else raw_config
     config = validate_config(raw_config, config_path, resolve_password=False)
+    ArchiveSettings.from_mapping(config.get('state', {}).get('archives'))
     config['dwd_ready'] = load_ready_config(config, Path(config_path).parent)
     options = settings(config)
     section = config.get('config', {})
