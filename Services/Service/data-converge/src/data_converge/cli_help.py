@@ -21,6 +21,8 @@ DESCRIPTION = '''Data Converge Lite · 运行与故障定位
   想看原始状态快照                 --status
 
 以下查询在 data-converge 容器内执行，启动辅助脚本会加载 Python 环境。
+镜像与 Chart 配套更新后可直接使用 dc --history、dc --diagnose 等短命令。
+dc 不带参数显示本帮助；默认配置为 /opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml。
 查询命令不重跑任务、不修改任务状态，也不消费 Redis 消息。
 '''
 
@@ -71,7 +73,8 @@ EXAMPLES = f'''可直接复制的查询示例：
   实例ID中的时间通常是窗口结束时间，与 --window 的开始时间不同。
 
 会改变运行状态的操作：
-  不带命令会启动服务；--run-once / --run-task 会真正执行任务与 SQL、写账本。
+  原始启动入口不带命令会启动服务；dc 无参仅显示帮助。
+  --run-once / --run-task 会真正执行任务与 SQL、写账本。
   --run-once 可能补跑多个任务，不是预览；所有辅助参数应随对应主命令使用。
   --init-state 会初始化状态；--resolve-instance 会人工修改实例状态。
   --apply-config 取得租约和状态锁，先备份再事务迁移；不执行 SQL、不清零旧执行事实。

@@ -6,6 +6,29 @@
 
 ## 常用命令
 
+镜像与 Chart 配套更新后，容器已安装 `dc` 命令，新开的终端可以直接使用，无需设置 alias 或每次填写配置路径：
+
+```bash
+dc --history                 # 最近20条执行历史
+dc --history --limit 50      # 最近50条
+dc --diagnose               # 本地健康检查
+dc --diagnose --online      # 包含远端连接检查
+dc --failures               # 当前异常任务
+dc --dwd-status             # 上游窗口就绪状态
+dc                          # 显示帮助，不启动服务
+```
+
+标准部署默认配置为 `/opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml`。
+显式 `--config` 优先于环境变量 `APP_CONF_FILE`，未设置时使用 `${SERVICE_HOME}/lib/data-converge/resources/config/app_config.yaml`；`SERVICE_HOME` 默认 `/opt/its/data-converge`。
+例如 `dc --config /其他路径/app_config.yaml --history` 可以查询其他配置。
+除无参数时显示帮助外，`dc` 原样转发参数并返回原命令退出码，原有写操作仍是写操作。
+
+`dc` 随镜像安装为可执行文件，正式 `start.sh` 启动时将其权限设为服务账号只读、可执行。
+Chart 在容器 `PATH` 首位加入服务 `bin`，并保留标准 Linux 工具目录；这项环境设置在更新 Chart 并重建 Pod 后对新终端生效。
+若使用自定义部署，需要同样设置 `PATH`，并保留平台额外需要的路径。仅更新镜像或在运行进程内临时 export 不会更新已有容器的环境。
+更新后先用 `command -v dc` 确认输出为 `/opt/its/data-converge/bin/dc`，避免误用系统同名计算器；系统工具仍可用其绝对路径调用。
+调试部署跳过正式启动入口时需确认镜像中该文件已有执行权限。旧镜像、旧 Chart 或自行重置 `PATH` 的终端仍可使用下面的完整入口命令。
+
 不熟悉参数时，直接查看内置中文帮助，包含按问题选择的入口、可复制的命令、时间格式和退出码说明：
 
 ```bash

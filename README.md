@@ -53,6 +53,8 @@ Services/Service/data-converge/
 
 ## 快速定位
 
+镜像与 Chart 配套更新后，容器内可直接执行 `dc --history`、`dc --diagnose --online`、`dc --failures` 和 `dc --dwd-status`，无需设置别名或重复输入配置路径。默认使用 `/opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml`，仍支持 `--config` 覆盖；单独执行 `dc` 显示帮助。完整入口 `bash /opt/its/data-converge/bin/start_data_converge.sh` 继续可用。
+
 提供 `--diagnose`、`--diagnose --online`、`--failures`、`--history`、`--inspect-instance`、`--dwd-status`，默认中文文本，支持 `--format json`；原 `--status` 保持兼容。完整容器命令、错误证据及只读边界见 [运行定位指南](docs/diagnostics.md)。
 
 新增 `--recovery-plan` 只读查看恢复分类；`--events --after-event 0 --limit 100 --format jsonl` 导出首批事务事件，使用最后一条 `event_id` 继续分页。服务运行日志继续沿用原轮转策略；事件原始记录在账本中，不依赖日志文件保存成功。

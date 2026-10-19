@@ -12,6 +12,7 @@ function config_permission() {
         chmod -v 500 "/opt/its/${SERVICE_NAME}/bin"
         chmod -v 500 "/opt/its/${SERVICE_NAME}/lib"
         chmod -v 500 "/opt/its/${SERVICE_NAME}/bin/"*.sh
+        chmod -v 500 "/opt/its/${SERVICE_NAME}/bin/dc"
     } >>"${LOG_FILE}"
 }
 

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Short operator entrypoint; keep runtime setup and configuration in one place.
+set -e
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ $# -eq 0 ]]; then
+    set -- --help
+fi
+exec bash "${script_dir}/start_data_converge.sh" "$@"
