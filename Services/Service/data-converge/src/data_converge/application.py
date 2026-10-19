@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from data_converge.config.application import (
 )
 from data_converge.dag import ExecutionReport, TaskStatus
 from data_converge.health import healthcheck, heartbeat_directory
+from data_converge.observability.state import binding_details
 from data_converge.runtime import RuntimeDependencies, open_runtime, service_heartbeat
 from data_converge.state import StateStore
 from data_converge.coordination import admit_writer, acquire_state, bind_writer
@@ -133,15 +135,29 @@ class Application:
             created = acquire_state(store, bootstrap=bootstrap, lease=lease)
             if created:
                 initialize_state(store, fingerprint, None)
-            if store.get_meta('binding') != fingerprint or not store.get_meta('coverage_start'):
-                raise StartupError('STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED')
-            parse_time(store.get_meta('coverage_start'))
+            self._validate_state_binding(store, fingerprint)
             store.mark_initialized()
             bind_writer(store, lease, self.definition.leadership.cluster_name)
             if created:
                 logger.info('STATE_INITIALIZED: coverage_start=%s', store.get_meta('coverage_start'))
             store.recover_running()
             yield store, lease
+
+    def _validate_state_binding(self, store: StateStore, fingerprint: str) -> None:
+        existing = store.get_meta('binding')
+        coverage = store.get_meta('coverage_start')
+        evidence = binding_details(
+            config_path=self.config_path, state_path=store.path,
+            task_count=len(self.definition.dag.tasks), current=fingerprint,
+            stored=existing, coverage=coverage,
+        )
+        # Escape paths and control characters; never serialize arbitrary metadata.
+        diagnostic = json.dumps(evidence, ensure_ascii=True)
+        if existing != fingerprint or not coverage:
+            logger.error('STATE_BINDING_REJECTED diagnostic=%s', diagnostic)
+            raise StartupError('STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED')
+        parse_time(coverage)
+        logger.info('STATE_BINDING_VALIDATED diagnostic=%s', diagnostic)
 
     def resolve(self, instance_id: str, resolution: str, note: str) -> CommandResult:
         with self._active_state() as (store, lease):
