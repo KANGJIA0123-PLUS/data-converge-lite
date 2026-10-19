@@ -94,6 +94,7 @@ def runtime(tmp_path):
     capture = tmp_path / "capture.json"
     env = {
         **os.environ,
+        "HOME": str(tmp_path),
         "SERVICE_HOME": str(home),
         "PYTHON_ENV_FILE": str(python_env),
         "APP_CONF_FILE": str(config),

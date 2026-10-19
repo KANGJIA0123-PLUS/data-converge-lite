@@ -21,11 +21,14 @@ DESCRIPTION = '''Data Converge Lite · 运行与故障定位
   想看原始状态快照                 --status
 
 以下查询在 data-converge 容器内执行，启动辅助脚本会加载 Python 环境。
-短命令使用 dconv，避免与系统计算器 dc 重名。新开的 kubectl exec Bash 终端先执行：
+短命令使用 dconv，避免与系统计算器 dc 重名。正式 start.sh 会为当前业务账号注册 Bash 加载项；
+随后以同一账号新开的交互式 Bash 或登录 Bash 可直接运行 dconv --history 等命令。
+已经打开的终端需重新打开 Bash，或执行一次：
   source /opt/its/data-converge/bin/command_env.sh
-随后可用 dconv --history、dconv --diagnose 等命令；dconv 不带参数显示本帮助。
-环境脚本只向原 PATH 末尾追加服务 bin，重复加载不重复追加，也不启动服务。
-start.sh 加载的环境不会传给新开的 kubectl exec 终端；Chart 不再设置固定 PATH。
+容器外可用 kubectl exec <Pod名> -- bash -lc 'dconv --history'；直接 exec dconv 不加载 Bash 启动文件。
+dconv 不带参数显示本帮助；环境脚本只追加原 PATH，重复加载不重复追加，也不启动服务。
+注册失败会在 start.log 记录 COMMAND_ENV_REGISTRATION_FAILED，服务继续启动；可用上述 source 或完整路径。
+Chart 不再设置固定 PATH。
 此前使用固定 PATH 的部署还需发布移除该项的 Chart 并重建 Pod。
 默认配置为 /opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml，支持 --config 覆盖。
 也可直接执行 bash /opt/its/data-converge/bin/dconv --history，无需加载命令环境。

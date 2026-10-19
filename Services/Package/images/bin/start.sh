@@ -69,6 +69,11 @@ function start_service() {
 function main() {
     show_title "start@${SERVICE_NAME}"
     config_permission
+    if bash ./register_command.sh >>"${LOG_FILE}" 2>&1; then
+        log "info" "COMMAND_ENV_REGISTERED: dconv available in new Bash sessions for this account"
+    else
+        log "warn" "COMMAND_ENV_REGISTRATION_FAILED: service startup continues; use bash /opt/its/${SERVICE_NAME}/bin/dconv"
+    fi
     start_service "$@"
 }
 
