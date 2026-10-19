@@ -8,7 +8,7 @@ function _data_converge_append_command_path() {
     else
         command_dir=.
     fi
-    command_dir=$(CDPATH= cd -- "${command_dir}" && pwd) || return
+    command_dir=$(CDPATH='' cd -- "${command_dir}" && pwd) || return
     case ":${PATH-}:" in
         *":${command_dir}:"*) ;;
         *) PATH="${PATH:+${PATH}:}${command_dir}" ;;

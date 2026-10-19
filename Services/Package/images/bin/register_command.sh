@@ -28,7 +28,7 @@ function append_profile_hook() {
 }
 
 [[ -n "${HOME:-}" && -d "${HOME}" && -w "${HOME}" ]] || registration_error 'HOME is missing or not writable'
-script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 helper="${script_dir}/command_env.sh"
 [[ -r "${helper}" ]] || registration_error "cannot read: ${helper}"
 printf -v profile_hook 'if [ -n "${BASH_VERSION:-}" ] && [ -r %q ]; then . %q; fi # data-converge command environment' "${helper}" "${helper}"
