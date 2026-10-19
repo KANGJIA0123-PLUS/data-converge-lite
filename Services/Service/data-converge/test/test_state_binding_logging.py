@@ -35,7 +35,7 @@ def test_changed_binding_logs_evidence_and_preserves_running_work(local_http_app
     instance = definition.builder.create_instance(
         definition.dag, 'simple', datetime.fromisoformat('2026-10-12T10:06:00+08:00'))
     database = path.parent / 'state/state.sqlite3'
-    # This test retains coverage of the legacy binding-only rejection path.
+    # Manual execution retains the legacy rejection path; only serve may recover new windows.
     with closing(sqlite3.connect(database)) as connection, connection:
         connection.execute("DELETE FROM metadata WHERE key IN ('configuration_snapshot','configuration_required')")
     with closing(StateStore(database)) as store:
@@ -47,7 +47,7 @@ def test_changed_binding_logs_evidence_and_preserves_running_work(local_http_app
     config['clickhouse']['database'] = 'private-database-sentinel'
     config['clickhouse']['username'] = 'private-user-sentinel'
     path.write_text(yaml.safe_dump(config))
-    assert entry.main(['--config', str(path)]) == 1
+    assert entry.main(['--config', str(path), '--run-once']) == 1
     detail = event_details(caplog, 'STATE_BINDING_REJECTED')
     assert detail['reasons'] == ['BINDING_MISMATCH']
     assert detail['stored_binding'] == application.fingerprint

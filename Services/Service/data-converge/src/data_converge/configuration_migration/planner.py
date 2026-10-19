@@ -8,6 +8,7 @@ import json
 from data_converge.application import next_boundary, parse_time
 from data_converge.config.application import StartupError
 from data_converge.config.evolution import compare_manifests, manifest_digest
+from data_converge.config.state_binding import ledger_binding
 
 from .baseline import load_baseline
 
@@ -87,6 +88,7 @@ def _plan_id(public, previous_binding, baseline):
 
 
 def build_plan(application, store, *, previous_config=None, effective_from=None, allow_backfill=False):
+    store.validate_retirement()
     previous_binding, coverage_value = store.get_meta('binding'), store.get_meta('coverage_start')
     if not previous_binding or not coverage_value:
         raise StartupError('CONFIG_STATE_INVALID')
@@ -101,7 +103,9 @@ def build_plan(application, store, *, previous_config=None, effective_from=None,
               for name in current['tasks']}
     required, blockers = _requirements(previous, current, changes, previous_revision is None)
     blockers += _coordination_blockers(store, current)
-    blockers += _task_blockers(constraints, changes, effective, coverage)
+    recovery = store.legacy_recovery()
+    lower_bound = max(coverage, parse_time(recovery['cutover'])) if recovery is not None else coverage
+    blockers += _task_blockers(constraints, changes, effective, lower_bound)
     public = {'legacy': previous_revision is None, 'previous_revision': previous_revision,
               'revision': manifest_digest(current), 'coverage_start': coverage.isoformat(),
               'changes': changes, 'required_confirmations': required, 'blockers': blockers,
@@ -109,5 +113,8 @@ def build_plan(application, store, *, previous_config=None, effective_from=None,
               'restart_cursors': sorted(changes['added'] + changes['changed']),
               'effective_from': effective.isoformat() if effective else None,
               'allow_backfill': bool(allow_backfill), 'constraints': _serialized_constraints(constraints)}
+    if recovery is not None:
+        public['recovery_cutover'] = recovery['cutover']
     public['plan_id'] = _plan_id(public, previous_binding, previous)
-    return MigrationPlan(public, current, application.fingerprint, previous_binding, previous_revision, starts)
+    return MigrationPlan(public, current, ledger_binding(store, application.fingerprint),
+                         previous_binding, previous_revision, starts)

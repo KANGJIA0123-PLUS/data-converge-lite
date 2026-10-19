@@ -24,6 +24,7 @@ from data_converge.config.application import (
 from data_converge.config.evolution import (
     build_manifest, compare_manifests, manifest_digest, validate_configuration_snapshot,
 )
+from data_converge.config.state_binding import ledger_binding
 from data_converge.dag import ExecutionReport, TaskStatus
 from data_converge.health import healthcheck, heartbeat_directory
 from data_converge.observability.state import binding_details
@@ -114,11 +115,17 @@ class Application:
 
     def status(self) -> CommandResult:
         with closing(StateStore(self.directory / 'state.sqlite3')) as store:
-            return CommandResult(payload={
+            store.validate_retirement()
+            payload = {
                 'coverage_start': store.get_meta('coverage_start'),
                 'counts': store.status_counts(), 'instances': store.list_instances(limit=20),
                 'dwd_windows': store.list_dwd_windows(limit=20),
-            })
+            }
+            recovery = store.legacy_recovery()
+            if recovery is not None:
+                payload.update(legacy_recovery=recovery, active_counts=store.active_status_counts(),
+                               historical_counts=store.retired_status_counts())
+            return CommandResult(payload=payload)
 
     def initialize(self, start_time: str | None = None) -> CommandResult:
         fingerprint = self.fingerprint
@@ -134,7 +141,7 @@ class Application:
                 if not store.get_meta('binding') or not store.get_meta('coverage_start'):
                     raise StartupError('STATE_NOT_INITIALIZED')
                 self._validate_configuration(store)
-                initialize_state(store, fingerprint, start)
+                initialize_state(store, ledger_binding(store, fingerprint), start)
             store.mark_initialized()
             return CommandResult(payload={
                 'status': 'INITIALIZED', 'coverage_start': store.get_meta('coverage_start'),
@@ -158,6 +165,7 @@ class Application:
             snapshot = store.configuration_snapshot()
         except (TypeError, ValueError):
             raise StartupError('CONFIG_STATE_INVALID') from None
+        store.validate_retirement()
         if snapshot is None:
             if store.get_meta('configuration_required') is not None:
                 raise StartupError('CONFIG_STATE_INVALID')
@@ -174,6 +182,8 @@ class Application:
 
     @contextmanager
     def _active_state(self, *, bootstrap: bool = False):
+        from data_converge.configuration_migration.legacy_recovery import recover_legacy, log_retained_history
+
         fingerprint = self.fingerprint
         self.manifest
         dependencies = self.dependencies or RuntimeDependencies()
@@ -184,12 +194,15 @@ class Application:
             created = acquire_state(store, bootstrap=bootstrap, lease=lease)
             if created:
                 self._initialize_configuration(store, fingerprint, None)
-            self._validate_state_binding(store, fingerprint)
+            elif bootstrap:
+                recover_legacy(self, store, lease)
+            self._validate_state_binding(store, ledger_binding(store, fingerprint))
             store.mark_initialized()
             bind_writer(store, lease, self.definition.leadership.cluster_name)
             if created:
                 logger.info('STATE_INITIALIZED: coverage_start=%s', store.get_meta('coverage_start'))
             store.recover_running()
+            log_retained_history(store)
             yield store, lease
 
     def _validate_state_binding(self, store: StateStore, fingerprint: str) -> None:

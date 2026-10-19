@@ -11,6 +11,7 @@ from uuid import uuid4
 from data_converge.application import Application, parse_time
 from data_converge.config.application import StartupError
 from data_converge.config.evolution import manifest_digest
+from data_converge.config.state_binding import ledger_binding
 from data_converge.coordination import admit_writer
 from data_converge.diagnostics.ledger import DiagnosticLedger
 from data_converge.runtime import RuntimeDependencies
@@ -48,6 +49,7 @@ def preview_config(application, *, previous_config=None, effective_from=None, al
 
 
 def _already_applied(application, store, plan_id):
+    store.validate_retirement()
     record = store.configuration_migration(plan_id)
     if record is None:
         return None
@@ -57,7 +59,7 @@ def _already_applied(application, store, plan_id):
             snapshot['task_starts'] != record['task_starts'] or
             record['revision'] != manifest_digest(application.manifest) or
             record['revision'] != manifest_digest(record['manifest']) or
-            store.get_meta('binding') != application.fingerprint):
+            store.get_meta('binding') != ledger_binding(store, application.fingerprint)):
         raise StartupError('CONFIG_PLAN_STALE')
     return {'status': 'ALREADY_APPLIED', 'plan_id': plan_id, 'revision': record['revision'],
             'backup_path': record['backup_path'], 'task_starts': record['task_starts']}

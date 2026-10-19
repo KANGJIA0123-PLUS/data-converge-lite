@@ -13,7 +13,7 @@ from data_converge.errors import safe_diagnostic_details
 
 from .bootstrap import StateBootstrapError
 from .database import LedgerDatabase
-from . import checkpoints, configuration, events, history
+from . import checkpoints, configuration, events, history, retirement
 
 
 def _stamp(value: datetime) -> str:
@@ -95,12 +95,31 @@ class StateStore:
 
     def apply_configuration(self, *, expected_binding, expected_revision, manifest, revision,
                             task_starts, binding, migration_id, applied_at, backup_path=None,
-                            reset_task_cursors=()) -> None:
+                            reset_task_cursors=(), retire_existing=False, recovery=None) -> None:
         configuration.apply(self._connection(write=True), expected_binding=expected_binding,
                             expected_revision=expected_revision, manifest=manifest, revision=revision,
                             task_starts=task_starts, binding=binding, migration_id=migration_id,
                             applied_at=applied_at, backup_path=backup_path,
-                            reset_task_cursors=reset_task_cursors)
+                            reset_task_cursors=reset_task_cursors,
+                            retire_existing=retire_existing, recovery=recovery)
+
+    def legacy_window_summary(self) -> dict:
+        return retirement.summary(self._connection())
+
+    def legacy_recovery(self) -> dict | None:
+        return retirement.recovery(self._connection())
+
+    def get_retirement(self, instance_id: str) -> dict | None:
+        return retirement.get(self._connection(), instance_id)
+
+    def retired_status_counts(self) -> dict:
+        return retirement.status_counts(self._connection(), retired=True)
+
+    def active_status_counts(self) -> dict:
+        return retirement.status_counts(self._connection())
+
+    def validate_retirement(self) -> None:
+        retirement.validate(self._connection())
 
     def get_cursor(self, taskname: str) -> datetime | None:
         row = self._connection().execute("SELECT next_fire_time FROM schedule_cursors WHERE taskname=?", (taskname,)).fetchone()
@@ -109,6 +128,8 @@ class StateStore:
     def enqueue_and_advance(self, instances: Iterable[TaskInstance], next_cursors: Mapping[str, datetime]) -> None:
         conn = self._connection(write=True)
         prepared = list(instances)
+        for instance in prepared:
+            retirement.assert_active(conn, instance.instance_id)
         configuration.validate_windows(prepared, self.get_task_effective_starts())
         with conn:
             for instance in prepared:
@@ -127,14 +148,18 @@ class StateStore:
         return dict(row) if row else None
 
     def get_status(self, instance_id: str) -> TaskStatus | None:
+        if self.get_retirement(instance_id) is not None:
+            return None
         row = self._connection().execute("SELECT status FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()
         return TaskStatus(row[0]) if row else None
 
     def list_pending(self) -> list[dict]:
         # Include all blocked rows so a missing old dependency cannot starve new work.
-        rows = self._connection().execute("""SELECT * FROM task_instances
-            WHERE status IN ('PENDING', 'BLOCKED') OR (status='FAILED' AND retryable=1)
-            ORDER BY data_end, taskname""").fetchall()
+        conn = self._connection()
+        active = retirement.active_filter(conn)
+        rows = conn.execute(f"""SELECT * FROM task_instances
+            WHERE (status IN ('PENDING', 'BLOCKED') OR (status='FAILED' AND retryable=1))
+            AND {active} ORDER BY data_end, taskname""").fetchall()
         return [dict(row) for row in rows]
 
     def status_counts(self) -> dict[str, int]:
@@ -200,6 +225,7 @@ class StateStore:
     def claim(self, instance_id: str, *, now: datetime | None = None, max_attempts: int = 3) -> bool:
         now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
+        retirement.assert_active(conn, instance_id)
         with conn:
             row = conn.execute("SELECT * FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()
             if not row:
@@ -223,6 +249,7 @@ class StateStore:
         """Reserve an eligible instance without allowing external execution yet."""
         now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
+        retirement.assert_active(conn, instance_id)
         with conn:
             row = conn.execute("SELECT * FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()
             if row is None:
@@ -247,6 +274,7 @@ class StateStore:
         """Commit dispatch intent and its attempt before the runner can be called."""
         now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
+        retirement.assert_active(conn, instance_id)
         with conn:
             checkpoints.mark_dispatched(conn, instance_id, query_id, _stamp(now))
             result = conn.execute("""UPDATE task_instances SET attempts=attempts+1, started_at=?
@@ -264,6 +292,7 @@ class StateStore:
             raise ValueError("finish requires SUCCESS, FAILED or UNKNOWN")
         now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
+        retirement.assert_active(conn, instance_id)
         with conn:
             checkpoints.assert_finish_allowed(conn, instance_id)
             result = conn.execute("""UPDATE task_instances SET status=?, error=?,
@@ -307,6 +336,7 @@ class StateStore:
 
     def mark_blocked(self, instance_id: str, reason: str) -> None:
         conn = self._connection(write=True)
+        retirement.assert_active(conn, instance_id)
         with conn:
             conn.execute("""UPDATE task_instances SET status='BLOCKED', error=?
                 WHERE instance_id=? AND status IN ('PENDING', 'BLOCKED', 'FAILED')
@@ -338,6 +368,7 @@ class StateStore:
             raise ValueError("A non-empty operator note is required")
         now = _stamp(datetime.now(timezone.utc))
         conn = self._connection(write=True)
+        retirement.assert_active(conn, instance_id)
         with conn:
             result = conn.execute("""UPDATE task_instances SET status=?, retryable=0,
                 next_retry_at=NULL, resolution_note=?, resolved_at=?, error=NULL,

@@ -8,6 +8,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+from . import retirement
+
 
 SNAPSHOT_KEY = "configuration_snapshot"
 
@@ -64,7 +66,8 @@ def migration(conn, migration_id: str) -> dict | None:
 def constraints(conn, tasknames) -> dict:
     tasks = {name: {"unresolved": 0, "latest_end": None} for name in tasknames}
     running = 0
-    for row in conn.execute("SELECT taskname, status, data_end FROM task_instances"):
+    active = retirement.active_filter(conn)
+    for row in conn.execute(f"SELECT taskname, status, data_end FROM task_instances WHERE {active}"):
         running += int(row["status"] == "RUNNING")
         constraint = tasks.get(row["taskname"])
         if constraint is None:
@@ -158,25 +161,48 @@ def _write_metadata(conn, key, value) -> None:
 
 def apply(conn, *, expected_binding, expected_revision, manifest, revision,
           task_starts, binding, migration_id, applied_at, backup_path=None,
-          reset_task_cursors=()) -> None:
+          reset_task_cursors=(), retire_existing=False, recovery=None) -> None:
     _assert_idle(conn)
     cursor_names = tuple(reset_task_cursors)
     starts = {name: _timestamp(value) for name, value in task_starts.items()}
-    current = _json({"manifest": manifest, "revision": revision, "task_starts": starts})
+    current = {"manifest": manifest, "revision": revision, "task_starts": starts}
     record = (migration_id, expected_revision, revision, _timestamp(applied_at),
               str(backup_path) if backup_path is not None else None, _json(manifest), _json(starts))
     with conn:
         conn.execute("BEGIN IMMEDIATE")
         _assert_expected(conn, expected_binding, expected_revision)
+        retirement.validate(conn)
+        _configure_retirement(conn, current, retire_existing, recovery, expected_revision, record, expected_binding, binding)
         _create_history(conn)
         _write_metadata(conn, "configuration_required", "1")
-        _write_metadata(conn, SNAPSHOT_KEY, current)
+        _write_metadata(conn, SNAPSHOT_KEY, _json(current))
         _write_metadata(conn, "binding", binding)
         conn.executemany("DELETE FROM schedule_cursors WHERE taskname=?",
                          ((name,) for name in cursor_names))
         conn.execute("""INSERT INTO configuration_history
             (migration_id, previous_revision, revision, applied_at, backup_path, manifest, task_starts)
             VALUES (?, ?, ?, ?, ?, ?, ?)""", record)
+        retirement.validate(conn)
+
+
+def _configure_retirement(conn, current, retiring, recovery, expected_revision, record, old_binding, binding):
+    previous = snapshot(conn)
+    if retiring:
+        required = conn.execute("SELECT 1 FROM metadata WHERE key='configuration_required'").fetchone()
+        if expected_revision is not None or previous is not None or required is not None:
+            raise ValueError("LEGACY_RETIREMENT_INVALID")
+        expected = {"migration_id": record[0], "previous_binding": old_binding,
+                    "current_binding": binding, "revision": record[2], "backup_path": record[4]}
+        if not isinstance(recovery, dict) or retirement.instant(recovery.get("recovered_at")) != retirement.instant(record[3]):
+            raise ValueError("LEGACY_RETIREMENT_INVALID")
+        current["retirement_id"] = retirement.create(conn, recovery, expected=expected, starts=current["task_starts"])
+    elif recovery is not None:
+        raise ValueError("LEGACY_RETIREMENT_INVALID")
+    elif previous is not None and "retirement_id" in previous:
+        cutover = retirement.instant(retirement.recovery(conn)["cutover"])
+        if any(retirement.instant(start) < cutover for start in current["task_starts"].values()):
+            raise ValueError("LEGACY_RETIREMENT_INVALID")
+        current["retirement_id"] = previous["retirement_id"]
 
 
 def validate_windows(instances, starts) -> None:

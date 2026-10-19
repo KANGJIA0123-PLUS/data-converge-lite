@@ -5,6 +5,7 @@ from pathlib import Path
 from data_converge.application import Application
 from data_converge.diagnostics.checks import failure
 from data_converge.diagnostics.report import check, report
+from data_converge.errors import safe_error_details
 
 
 def add_arguments(parser, modes):
@@ -54,8 +55,18 @@ def preview(args):
                        evidence, '核对任务起点和确认项；清除阻断后使用 --apply-config PLAN_ID 显式应用。')
         return report('plan-config', [result], value)
     except Exception as error:
-        return report('plan-config', [failure('configuration-plan', error, '配置迁移预览未完成',
-            '核对原账本和可信旧配置；旧账本需 --previous-config，任务变化需 --effective-from。')])
+        return report('plan-config', [_preview_failure(error)])
+
+
+def _preview_failure(error):
+    action = '核对原账本和可信旧配置；旧账本需 --previous-config，任务变化需 --effective-from。'
+    if safe_error_details(error).get('error_code') in {
+            'CONFIG_PREVIOUS_CONFIG_REQUIRED', 'CONFIG_PREVIOUS_RESOURCES_REQUIRED'}:
+        action = ('普通配置迁移仍需可信旧基线。旧资料无法找回时，可按原部署方式正常启动服务：'
+                  '符合旧账本恢复条件时，先校验原锁和选主身份、备份，再恢复新窗口；'
+                  '旧窗口和 UNKNOWN 保留待核查，当前不会自动处理。'
+                  '此预览未应用恢复，实际切点以启动成功后的审计记录为准。')
+    return failure('configuration-plan', error, '配置迁移预览未完成', action)
 
 
 def apply(args, application):

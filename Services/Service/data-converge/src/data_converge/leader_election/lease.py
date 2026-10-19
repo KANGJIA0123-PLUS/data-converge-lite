@@ -135,6 +135,22 @@ class LeadershipLease:
                 self._mark_lost()
                 raise LeadershipError('LEADERSHIP_REDIS_FAILED') from None
 
+    def check_ledger(self, ledger_id: str | None, *, require_existing: bool = False) -> None:
+        """Read-only preflight; normal binding still owns registration writes."""
+        with self._command_lock:
+            self.assert_owned()
+            try:
+                valid = self.elector.check_ledger(self._token, ledger_id, require_existing=require_existing)
+                self.assert_owned()
+                if not valid:
+                    raise LeadershipError('LEADERSHIP_LOST')
+            except LeadershipError:
+                self._mark_lost()
+                raise
+            except Exception:
+                self._mark_lost()
+                raise LeadershipError('LEADERSHIP_REDIS_FAILED') from None
+
     def close(self) -> None:
         with self._state_lock:
             if self._closed:

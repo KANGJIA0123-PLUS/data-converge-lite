@@ -7,7 +7,7 @@ from data_converge.dwd_ready.config import load_ready_config
 from data_converge.health import heartbeat_directory
 from .checks import (credential_files, definition_check, failure, heartbeat_check,
                      log_check, logging_settings_check, module_check, protected_check,
-                     state_check, task_check, leadership_check, inspection_definition)
+                     state_check, task_check, leadership_check, inspection_definition, historical_check)
 from .ledger import DiagnosticLedger
 from .report import attempt_record, check, evidence_action, legacy_resolution_record, report, task_record
 from .windows import list_windows, parse_window
@@ -50,7 +50,10 @@ def _ledger_checks(directory, definition):
     try:
         with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
             results.append(state_check(store, definition))
-            results.append(task_check(store.status_counts()))
+            results.append(task_check(store.active_status_counts()))
+            historical = historical_check(store)
+            if historical is not None:
+                results.append(historical)
             if definition is not None:
                 results.append(protected_check('leadership', leadership_check, store, definition))
             if definition is not None and definition.config['dwd_ready']['enabled']:
@@ -71,12 +74,15 @@ def failures(path, *, task=None, limit=20, offset=0):
         _, directory = _read_context(path)
         with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
             counts, rows = store.problems(task=task, limit=limit, offset=offset)
+            historical = historical_check(store)
         total = sum(counts.values())
         data = dict(total=total, limit=limit, offset=offset, task=task,
                     has_more=offset + len(rows) < total, instances=[task_record(row) for row in rows])
         result = task_check(counts)
         result['evidence'].update(total=total, shown=len(rows), offset=offset, has_more=data['has_more'])
-        return report('failures', [result], data)
+        if historical is not None:
+            data['historical_counts'] = historical['evidence']['counts']
+        return report('failures', [result] + ([historical] if historical is not None else []), data)
     except Exception as error:
         return report('failures', [failure('state', error, '异常任务查询失败', '先运行 --diagnose。')])
 
@@ -92,7 +98,8 @@ def dwd_status(path, *, limit=20, window=None):
         late = sum(row['warning_due'] for row in rows)
         result = check('dwd', 'WARN' if late else 'PASS', '窗口信号状态（北京时间）',
                        dict(windows=len(rows), late_windows=late, wait_warning_seconds=ready['wait_warning_seconds']),
-                       'WAITING 时等待上游补齐；BEFORE_COVERAGE/WINDOW_OPEN 不属于当前完整覆盖窗口。')
+                       '当前 WAITING 窗口等待上游补齐；historical=true 仅展示历史信号，不属于当前就绪告警；'
+                       'BEFORE_COVERAGE/WINDOW_OPEN 不属于当前完整覆盖窗口。')
         return report('dwd-status', [result], {'windows': rows})
     except Exception as error:
         return report('dwd-status', [failure('dwd', error, '就绪状态查询失败', '先运行 --diagnose。')])
@@ -106,28 +113,47 @@ def inspect_instance(path, instance_id, *, limit=20, offset=0):
             if row is None:
                 return report('inspect-instance', [check('instance', 'FAIL', '未找到任务实例',
                               {'instance_id': instance_id}, '从 --failures 或 --status 复制完整 instance_id。')])
-            data = dict(instance=task_record(row), diagnostic=None)
-            checks = [task_check({row['status']: 1})]
+            data, checks = _instance_context(store, row)
             _inspect_history(store, instance_id, data, checks, limit=limit, offset=offset)
             try:
                 data['diagnostic'] = store.get_execution_diagnostic(instance_id)
             except Exception as error:
                 checks.append(failure('execution-evidence', error, '附加错误证据不可读，主账本仍可查看',
                                       '按实例 query_id 核对服务端记录，并检查状态库完整性。'))
-            data['action'] = evidence_action(data['diagnostic'], data['instance']['action'])
-            definition, definition_result = definition_check(path, raw)
-            if definition is None:
-                checks.append(check('dependencies', 'SKIP', '配置无效，无法重建依赖',
-                                    definition_result['evidence'], '修复配置后重新检查；实例账本仍可查看。'))
-            else:
-                try:
-                    checks.extend(_inspect_dependencies(store, definition, row, data))
-                except Exception as error:
-                    checks.append(failure('dependencies', error, '无法推断依赖，主账本与错误证据仍可查看',
-                                          '核对历史实例的时间字段、配置版本和状态库完整性。'))
+            data['action'] = (data['instance']['action'] if data.get('retirement') else
+                              evidence_action(data['diagnostic'], data['instance']['action']))
+            checks.extend(_dependency_checks(path, raw, store, row, data))
         return report('inspect-instance', checks, data)
     except Exception as error:
         return report('inspect-instance', [failure('instance', error, '实例查询失败', '先运行 --diagnose。')])
+
+
+def _instance_context(store, row):
+    data = dict(instance=task_record(row), diagnostic=None)
+    retirement = store.get_retirement(row['instance_id'])
+    if retirement is None:
+        return data, [task_check({row['status']: 1})]
+    action = '按原 query_id 和业务数据核查历史结果；这些旧窗口当前不会自动处理，保留记录等待后续方案。'
+    data['retirement'] = retirement
+    data['instance'].update(historical=True, action=action)
+    result = check('historical-instance', 'WARN', '已隔离的历史实例；保留原状态，当前不会自动处理',
+                   dict(original_status=row['status'], **retirement), action)
+    return data, [result]
+
+
+def _dependency_checks(path, raw, store, row, data):
+    if data.get('retirement') is not None:
+        return [check('dependencies', 'SKIP', '历史实例不按当前配置解释依赖', {},
+                      '原始窗口、query_id 和执行证据仍可查看；当前任务从恢复切点后的完整窗口运行。')]
+    definition, definition_result = definition_check(path, raw)
+    if definition is None:
+        return [check('dependencies', 'SKIP', '配置无效，无法重建依赖',
+                      definition_result['evidence'], '修复配置后重新检查；实例账本仍可查看。')]
+    try:
+        return _inspect_dependencies(store, definition, row, data)
+    except Exception as error:
+        return [failure('dependencies', error, '无法推断依赖，主账本与错误证据仍可查看',
+                        '核对历史实例的时间字段、配置版本和状态库完整性。')]
 
 
 def _history_page(store, *, instance_id=None, task=None, limit=20, offset=0):

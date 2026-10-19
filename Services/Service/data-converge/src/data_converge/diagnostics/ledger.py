@@ -10,6 +10,7 @@ class DiagnosticLedger(StateStore):
         super().__init__(path)
         try:
             self._connection().execute('BEGIN')
+            self.validate_retirement()
         except BaseException:
             self.close()
             raise
@@ -21,7 +22,7 @@ class DiagnosticLedger(StateStore):
         return events.list_events(self._connection(), after_event=after_event, limit=limit)
 
     def problems(self, *, task=None, limit=20, offset=0):
-        clause = "status IN ('UNKNOWN', 'FAILED', 'BLOCKED')"
+        clause = "status IN ('UNKNOWN', 'FAILED', 'BLOCKED') AND " + self._active_clause()
         parameters = []
         if task is not None:
             clause += ' AND taskname=?'
@@ -34,6 +35,12 @@ class DiagnosticLedger(StateStore):
                             'data_end DESC, taskname LIMIT ? OFFSET ?',
                             [*parameters, limit, offset]).fetchall()
         return counts, [dict(row) for row in rows]
+
+    def _active_clause(self):
+        if self.get_meta('retirement_required') is None:
+            return '1=1'
+        return ('NOT EXISTS (SELECT 1 FROM retired_instances WHERE '
+                'retired_instances.instance_id=task_instances.instance_id)')
 
     def signals(self, start):
         from datetime import timezone
@@ -50,5 +57,5 @@ class DiagnosticLedger(StateStore):
         row = self._connection().execute('SELECT MAX(data_end) AS newest_window_end, '
             'MAX(finished_at) AS latest_finished_at, MIN(CASE WHEN status IN '
             "('PENDING','RUNNING','BLOCKED') THEN data_start END) AS oldest_active_window "
-            'FROM task_instances').fetchone()
+            'FROM task_instances WHERE ' + self._active_clause()).fetchone()
         return dict(row)

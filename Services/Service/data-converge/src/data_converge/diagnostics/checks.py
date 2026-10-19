@@ -12,6 +12,7 @@ from data_converge.config.application import StartupError, asset_path, binding, 
 from data_converge.config.evolution import (
     build_manifest, compare_manifests, manifest_digest, validate_configuration_snapshot,
 )
+from data_converge.config.state_binding import ledger_binding
 from data_converge.errors import safe_error_details
 from data_converge.observability.logging import log_file_path
 from data_converge.observability.settings import LoggingSettings
@@ -58,7 +59,7 @@ def definition_check(path, raw):
 
 def state_check(store, definition):
     coverage = store.get_meta('coverage_start')
-    counts = store.status_counts()
+    counts = store.active_status_counts()
     evidence = dict(path=str(store.path), coverage_start=coverage, counts=counts, **store.progress())
     if not coverage or not store.get_meta('binding'):
         return check('state', 'FAIL', '状态库未完成初始化', evidence,
@@ -74,9 +75,12 @@ def state_check(store, definition):
         evidence['error_code'] = 'CONFIG_MIGRATION_REQUIRED'
         return check('state', 'FAIL', '当前配置或 SQL 与已批准快照不同，需要显式迁移', evidence,
                      '运行 --plan-config 核对变更和任务起点，再按计划应用；保留原账本。')
-    if definition is not None and binding(definition.config, definition.dag) != store.get_meta('binding'):
+    if definition is not None and ledger_binding(
+            store, binding(definition.config, definition.dag)) != store.get_meta('binding'):
         return check('state', 'FAIL', '当前配置与状态库绑定不一致', evidence,
-                     '核对业务数据和状态卷，使用 --plan-config --previous-config 预览迁移；不要重建状态库。')
+                     '有可信旧资料时使用 --plan-config --previous-config 预览迁移；'
+                     '旧账本无配置快照且资料缺失时可正常启动，通过原锁、选主与备份校验后恢复新窗口，'
+                     '旧窗口保留隔离；不要重建状态库。')
     return check('state', 'PASS', '状态库可只读查询', evidence)
 
 
@@ -105,7 +109,7 @@ def configuration_identity(store, definition):
 
 
 def inspection_definition(store, definition):
-    if binding(definition.config, definition.dag) != store.get_meta('binding'):
+    if ledger_binding(store, binding(definition.config, definition.dag)) != store.get_meta('binding'):
         return False
     return configuration_identity(store, definition).get('configuration_matches', True)
 
@@ -114,8 +118,21 @@ def task_check(counts):
     failed = counts.get('UNKNOWN', 0) + counts.get('FAILED', 0)
     blocked = counts.get('BLOCKED', 0)
     status = 'FAIL' if failed else 'WARN' if blocked else 'PASS'
-    return check('tasks', status, '任务历史状态统计', counts,
+    return check('tasks', status, '当前执行范围任务状态统计', counts,
                  f'{LAUNCHER} --failures' if failed or blocked else '')
+
+
+def historical_check(store):
+    recovery = store.legacy_recovery()
+    if recovery is None:
+        return None
+    evidence = {name: recovery[name] for name in (
+        'migration_id', 'cutover', 'backup_path', 'identity_verified',
+        'previous_definition_available', 'retired_count')}
+    evidence['counts'] = store.retired_status_counts()
+    return check('historical-tasks', 'WARN', '旧窗口已保留隔离，当前不会自动处理', evidence,
+                 '历史 RUNNING 是保留的原状态，不代表当前进程正在执行；'
+                 '按原 query_id 与业务数据核查，历史结果尚未被确认或补算。')
 
 
 def leadership_check(store, definition):

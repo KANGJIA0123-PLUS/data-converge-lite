@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import retirement
+
 
 def available(conn) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -59,7 +61,8 @@ def _recovery_source(conn, include_unknown=True):
         phase = "NULL"
     statuses = "t.status IN ('RUNNING', 'UNKNOWN')" if include_unknown else "t.status='RUNNING'"
     automatic = f"t.status='RUNNING' AND {phase}='PREPARED'"
-    return f"{source} WHERE {statuses}", phase, automatic
+    active = retirement.active_filter(conn, "t.instance_id")
+    return f"{source} WHERE {statuses} AND {active}", phase, automatic
 
 
 def _recovery_query(conn, include_unknown=True):

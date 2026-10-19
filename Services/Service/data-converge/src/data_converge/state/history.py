@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 
 from data_converge.errors import safe_diagnostic_details
 
+from . import retirement
+
 
 def available(conn) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -69,10 +71,11 @@ def record_finish(conn, instance_id: str, diagnostic: dict | None) -> None:
 def record_recovery(conn, recovered_at: str) -> None:
     if not available(conn):
         return
-    conn.execute("""UPDATE execution_attempts SET status='UNKNOWN', retryable=0,
+    active = retirement.active_filter(conn)
+    conn.execute(f"""UPDATE execution_attempts SET status='UNKNOWN', retryable=0,
         next_retry_at=NULL, error='EXECUTION_INTERRUPTED', recovered_at=?
         WHERE status='RUNNING' AND query_id IN
-            (SELECT query_id FROM task_instances WHERE status='RUNNING')""", (recovered_at,))
+            (SELECT query_id FROM task_instances WHERE status='RUNNING' AND {active})""", (recovered_at,))
 
 
 def record_resolution(conn, instance_id: str) -> None:
