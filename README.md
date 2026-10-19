@@ -53,7 +53,7 @@ Services/Service/data-converge/
 
 ## 快速定位
 
-短命令使用 `dconv`，避免与系统计算器 `dc` 重名。更新镜像并通过正式 `start.sh` 启动后，以同一业务账号新开的交互式 Bash 或登录 Bash 可直接查询：
+短命令使用 `dconv`，避免与系统计算器 `dc` 重名。同步更新镜像和 Chart 并重建 Pod 后，Chart 将服务 `bin` 纳入容器级 `PATH`，新终端可直接查询，无需手动加载环境脚本：
 
 ```bash
 dconv --history
@@ -62,9 +62,9 @@ dconv --failures
 dconv --dwd-status
 ```
 
-`start.sh` 为当前业务账号的 Bash 启动文件追加命令环境加载项，保留原内容；环境脚本只把服务 `bin` 追加到原 `PATH` 末尾，重复启动不会重复追加。已经打开的终端需重新打开 Bash，或执行一次 `source /opt/its/data-converge/bin/command_env.sh`。从容器外执行可用 `kubectl exec <Pod名> -- bash -lc 'dconv --history'`；直接 `kubectl exec <Pod名> -- dconv --history` 不会加载 Bash 启动文件。
+从容器外也可直接执行 `kubectl exec <Pod名> -- dconv --history`。Chart 设置完整的 `PATH` 值 `/opt/its/data-converge/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`，会覆盖镜像中的原值；如部署还依赖其他平台命令目录，需显式补入。命令入口仍自动加载平台 `python.env`。
 
-如果账号主目录或启动文件无法安全写入，`start.log` 会记录 `COMMAND_ENV_REGISTRATION_FAILED`，服务仍继续启动；可手动加载环境脚本或使用下方完整路径。Chart 不设置固定 `PATH`；此前部署过固定 `PATH` 的环境，需要发布移除该项的 Chart 并重建 Pod，才能恢复容器原有路径。
+`start.sh` 保留为当前业务账号注册 Bash 命令环境的兼容措施，在 Chart 未生效或 Bash 重置路径时补充服务目录；原启动文件内容和路径顺序保留，重复加载不会重复追加。注册失败会在 `start.log` 记录 `COMMAND_ENV_REGISTRATION_FAILED`，服务仍继续启动；只要容器级 `PATH` 已生效，仍可直接使用 `dconv`。需要手动补充当前 Bash 环境时，可执行 `source /opt/its/data-converge/bin/command_env.sh`。
 
 `dconv` 默认使用 `/opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml`，支持 `--config` 覆盖；单独执行 `dconv` 显示帮助。无需加载命令环境时，可直接执行 `bash /opt/its/data-converge/bin/dconv --history`。完整入口 `bash /opt/its/data-converge/bin/start_data_converge.sh` 继续可用。
 

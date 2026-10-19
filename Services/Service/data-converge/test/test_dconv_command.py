@@ -7,14 +7,24 @@ import subprocess
 import pytest
 
 from data_converge.main import arguments
+from .paths import REPOSITORY_ROOT
 from .test_packaging import compiled_application, runtime
+
+
+def command_environment(home, env):
+    result = dict(env)
+    settings = REPOSITORY_ROOT / 'Services/Package/charts/templates/env_setting_data_converge.conf'
+    for line in settings.read_text().splitlines():
+        fields = line.split(';')
+        if fields[:2] == ['PATH', 'value']:
+            result['PATH'] = fields[2].replace('/opt/its/data-converge/bin', str(home / 'bin'))
+    return result
 
 
 def command_shell(home, env, script, *args):
     return subprocess.run(
-        ['bash', '--noprofile', '--norc', '-c', 'source "$1" || exit\nshift\n' + script,
-         'dconv-test', str(home / 'bin/command_env.sh'), *args],
-        cwd=home.parent, env=env, capture_output=True, text=True, timeout=10,
+        ['bash', '--noprofile', '--norc', '-c', script, 'dconv-test', *args],
+        cwd=home.parent, env=command_environment(home, env), capture_output=True, text=True, timeout=10,
     )
 
 
@@ -25,7 +35,7 @@ def run_dconv(runtime, *args, exit_code='0'):
     return process, data
 
 
-def test_new_shell_finds_service_command_after_loading_environment(runtime):
+def test_new_shell_finds_service_command_without_loading_profiles(runtime):
     home, _, _, env = runtime
     process = command_shell(home, env, 'command -v dconv')
     assert process.returncode == 0, process.stderr
@@ -92,12 +102,13 @@ def test_startup_restores_short_command_execute_permission(runtime):
 
 
 def test_dconv_runs_packaged_bytecode_with_default_configuration(compiled_application):
-    _, home, _, env = compiled_application
-    env = dict(env)
+    temp, home, _, env = compiled_application
+    env = command_environment(home, env)
     env.pop('APP_CONF_FILE')
-    result = command_shell(home, env, 'exec dconv --validate-only')
+    result = subprocess.run(['dconv', '--validate-only'], cwd=temp, env=env,
+                            capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['tasks'] == 56
-    result = command_shell(home, env, 'exec dconv')
+    result = subprocess.run(['dconv'], cwd=temp, env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert '--history' in result.stdout

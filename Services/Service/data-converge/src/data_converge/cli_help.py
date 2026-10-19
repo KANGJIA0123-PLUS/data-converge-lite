@@ -21,15 +21,15 @@ DESCRIPTION = '''Data Converge Lite · 运行与故障定位
   想看原始状态快照                 --status
 
 以下查询在 data-converge 容器内执行，启动辅助脚本会加载 Python 环境。
-短命令使用 dconv，避免与系统计算器 dc 重名。正式 start.sh 会为当前业务账号注册 Bash 加载项；
-随后以同一账号新开的交互式 Bash 或登录 Bash 可直接运行 dconv --history 等命令。
-已经打开的终端需重新打开 Bash，或执行一次：
+短命令使用 dconv，避免与系统计算器 dc 重名。同步更新镜像和 Chart 并重建 Pod 后，
+容器级 PATH 包含服务 bin，新终端可直接运行 dconv --history，无需手动加载环境。
+容器外可直接执行 kubectl exec <Pod名> -- dconv --history，无需登录 Bash。
+Chart 设置包含服务 bin 和标准 Linux 目录的完整 PATH，会覆盖镜像原值；其他平台目录需显式补入。
+正式 start.sh 保留 Bash 环境注册作为兼容措施；需要手动补充当前 Bash 环境时执行：
   source /opt/its/data-converge/bin/command_env.sh
-容器外可用 kubectl exec <Pod名> -- bash -lc 'dconv --history'；直接 exec dconv 不加载 Bash 启动文件。
 dconv 不带参数显示本帮助；环境脚本只追加原 PATH，重复加载不重复追加，也不启动服务。
-注册失败会在 start.log 记录 COMMAND_ENV_REGISTRATION_FAILED，服务继续启动；可用上述 source 或完整路径。
-Chart 不再设置固定 PATH。
-此前使用固定 PATH 的部署还需发布移除该项的 Chart 并重建 Pod。
+注册失败会在 start.log 记录 COMMAND_ENV_REGISTRATION_FAILED，服务继续启动；
+若容器级 PATH 已生效，仍可直接使用 dconv，否则可用上述 source 或完整路径。
 默认配置为 /opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml，支持 --config 覆盖。
 也可直接执行 bash /opt/its/data-converge/bin/dconv --history，无需加载命令环境。
 查询命令不重跑任务、不修改任务状态，也不消费 Redis 消息。

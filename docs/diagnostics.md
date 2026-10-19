@@ -6,7 +6,7 @@
 
 ## 常用命令
 
-镜像提供 `dconv` 命令，避免与系统计算器 `dc` 重名。更新镜像并通过正式 `start.sh` 启动后，以同一业务账号新开的交互式 Bash 或登录 Bash 可直接使用，无需设置 alias 或每次填写配置路径：
+镜像提供 `dconv` 命令，避免与系统计算器 `dc` 重名。同步更新镜像和 Chart 并重建 Pod 后，容器级 `PATH` 包含服务 `bin`，新终端可直接使用，无需设置 alias、加载环境脚本或每次填写配置路径：
 
 ```bash
 dconv --history             # 最近20条执行历史
@@ -23,21 +23,27 @@ dconv                       # 显示帮助，不启动服务
 例如 `dconv --config /其他路径/app_config.yaml --history` 可以查询其他配置。
 除无参数时显示帮助外，`dconv` 原样转发参数并返回原命令退出码，原有写操作仍是写操作。
 
-`start.sh` 在平台环境与命令权限准备完成后，调用 `register_command.sh`，向当前 `$HOME/.bashrc` 及 Bash 首个现有可读登录文件（依次为 `.bash_profile`、`.bash_login`、`.profile`）追加仅供 Bash 使用的加载项；没有登录文件时创建 `.profile`。原文件内容保留，重复启动不会重复注册。注册不需要修改系统目录，也不会覆盖容器 `PATH`。
+Chart 的 `env_setting_data_converge.conf` 设置完整的容器级路径：
 
-`command_env.sh` 只将自身所在的 `bin` 目录追加到原 `PATH` 末尾，保留平台已有目录及其查找顺序；重复加载不会重复追加。加载它不会启动服务、写入启动文件，也不会改变当前目录或 Shell 选项。
-
-已经打开的终端不会自动更新，需重新打开 Bash，或执行一次 `source /opt/its/data-converge/bin/command_env.sh`。单独运行 `bash command_env.sh` 不会修改当前终端环境。`sh`、`bash --norc`、非登录的 `bash -c` 及直接 `kubectl exec -- dconv` 不保证读取上述启动文件；从容器外查询可显式使用登录 Bash：
-
-```bash
-kubectl exec <Pod名> -- bash -lc 'dconv --history'
+```text
+PATH;value;/opt/its/data-converge/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;;
 ```
 
-如果 `$HOME` 缺失或不可写，或待更新的启动文件不可读、不可写、不是当前账号拥有的普通文件（包括符号链接），注册会拒绝写入，并在 `start.log` 记录 `COMMAND_ENV_REGISTRATION_FAILED`，服务仍继续启动。此时可手动加载环境脚本，或直接使用完整路径；自定义部署跳过正式 `start.sh` 时也可使用这两种方式。
+该配置覆盖镜像原有的 `PATH`，不是动态追加；如部署依赖其他平台命令目录，需显式补入此值。仅更新镜像不会更新旧 Pod 的环境变量，需同时发布 Chart 并重建 Pod。`dconv` 的启动辅助脚本仍自动加载平台 `python.env`，无需在此固定值中写入具体 Python 版本路径。
 
-Chart 不再覆盖容器 `PATH`。此前部署过固定 `PATH` 的环境，需要发布移除该项的 Chart 并重建 Pod；仅更新镜像无法去掉旧 Chart 注入的固定值。
+容器外查询不再依赖登录 Bash，可直接执行：
 
-加载后可用 `command -v dconv` 确认输出为 `/opt/its/data-converge/bin/dconv`。`dconv` 随镜像安装为可执行文件，正式 `start.sh` 启动时将其权限设为服务账号只读、可执行；调试部署跳过正式启动入口时需确认镜像中该文件已有执行权限。
+```bash
+kubectl exec <Pod名> -- dconv --history
+```
+
+`start.sh` 保留 Bash 环境注册作为兼容措施，用于 Chart 未生效或 Bash 启动文件重置路径的场景。在平台环境与命令权限准备完成后，它调用 `register_command.sh`，向当前 `$HOME/.bashrc` 及 Bash 首个现有可读登录文件（依次为 `.bash_profile`、`.bash_login`、`.profile`）追加仅供 Bash 使用的加载项；没有登录文件时创建 `.profile`。原文件内容保留，重复启动不会重复注册。
+
+`command_env.sh` 只将自身所在的 `bin` 目录追加到原 `PATH` 末尾，保留已有目录及其查找顺序；重复加载不会重复追加。加载它不会启动服务、写入启动文件，也不会改变当前目录或 Shell 选项。需要手动补充当前 Bash 环境时，执行 `source /opt/its/data-converge/bin/command_env.sh`；单独运行 `bash command_env.sh` 不会修改当前终端环境。
+
+如果 `$HOME` 缺失或不可写，或待更新的启动文件不可读、不可写、不是当前账号拥有的普通文件（包括符号链接），注册会拒绝写入，并在 `start.log` 记录 `COMMAND_ENV_REGISTRATION_FAILED`，服务仍继续启动。只要容器级 `PATH` 已生效，注册失败不影响直接使用 `dconv`；否则可手动加载环境脚本，或使用完整路径。
+
+可用 `command -v dconv` 确认输出为 `/opt/its/data-converge/bin/dconv`。`dconv` 随镜像安装为可执行文件，正式 `start.sh` 启动时将其权限设为服务账号只读、可执行；调试部署跳过正式启动入口时需确认镜像中该文件已有执行权限。
 
 也可以不加载命令环境，直接使用完整路径：
 
