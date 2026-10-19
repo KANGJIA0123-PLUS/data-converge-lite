@@ -10,8 +10,8 @@ class ArchiveSettings:
     retention_days: int = 30
 
     def __post_init__(self):
-        if (type(self.enabled) is not bool or type(self.retention_days) is not int
-                or self.retention_days < 1):
+        if (not isinstance(self.enabled, bool) or not isinstance(self.retention_days, int)
+                or isinstance(self.retention_days, bool) or self.retention_days < 1):
             raise ValueError('ARCHIVE_SETTINGS_INVALID')
 
     @classmethod

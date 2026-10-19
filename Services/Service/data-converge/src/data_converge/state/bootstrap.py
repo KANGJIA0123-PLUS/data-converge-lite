@@ -10,7 +10,7 @@ class StateBootstrapError(ValueError):
 
 
 def _sync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY)
+    descriptor = os.open(directory, os.O_RDONLY, 0o700)
     try:
         os.fsync(descriptor)
     finally:

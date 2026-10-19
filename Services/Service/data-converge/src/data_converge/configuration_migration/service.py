@@ -97,7 +97,7 @@ def _prepare_directory(directory):
         parent = parent.parent
     for path in reversed(missing):
         path.mkdir(mode=0o700, exist_ok=True)
-        descriptor = os.open(path.parent, os.O_RDONLY)
+        descriptor = os.open(path.parent, os.O_RDONLY, 0o700)
         try:
             os.fsync(descriptor)
         finally:

@@ -212,3 +212,27 @@ def test_missing_sql_raises_fixed_error_without_exposing_path(app):
     (app.parent / 'sql/simple.sql').unlink()
     with pytest.raises(StartupError, match='^CONFIGURATION_SQL_UNREADABLE$'):
         build_manifest(definition)
+
+
+@pytest.mark.parametrize('section', ['readiness', 'coordination'])
+@pytest.mark.parametrize('value', [0, 1, 'true'])
+def test_manifest_switches_reject_non_boolean_values(app, section, value):
+    manifest = build_manifest(load_definition(app))
+    manifest[section]['enabled'] = value
+    with pytest.raises(StartupError, match='^CONFIGURATION_MANIFEST_INVALID$'):
+        validate_manifest(manifest)
+
+
+@pytest.mark.parametrize('path', [('schema_version',), ('readiness', 'redis', 'db'),
+                                  ('readiness', 'redis', 'port')])
+@pytest.mark.parametrize('value', [True, False, 1.0])
+def test_manifest_integer_fields_reject_booleans_and_floats(app, path, value):
+    manifest = build_manifest(load_definition(app))
+    manifest['readiness'] = {'enabled': True, 'queue_key': 'ready', 'redis': {
+        'mode': 'standalone', 'db': 0, 'host': 'redis', 'port': 6379}}
+    target = manifest
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    with pytest.raises(StartupError, match='^CONFIGURATION_MANIFEST_INVALID$'):
+        validate_manifest(manifest)

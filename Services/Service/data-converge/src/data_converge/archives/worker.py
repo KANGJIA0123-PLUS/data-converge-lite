@@ -38,7 +38,7 @@ def _persist_status(directory, report):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, destination)
-        descriptor = os.open(directory, os.O_RDONLY)
+        descriptor = os.open(directory, os.O_RDONLY, 0o700)
         try:
             os.fsync(descriptor)
         finally:

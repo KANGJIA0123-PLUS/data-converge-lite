@@ -34,7 +34,7 @@ def _read_status(path):
     try:
         if path.parent.is_symlink():
             raise ValueError('ARCHIVE_STATUS_INVALID')
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
         with os.fdopen(descriptor, 'rb') as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise ValueError('ARCHIVE_STATUS_INVALID')
@@ -49,14 +49,15 @@ def _read_status(path):
 
 
 def _status_fields(value):
-    if (not isinstance(value, dict) or type(value.get('schema_version')) is not int or
+    if (not isinstance(value, dict) or not isinstance(value.get('schema_version'), int) or
+            isinstance(value.get('schema_version'), bool) or
             value['schema_version'] != 1 or value.get('status') not in ('PASS', 'WARN')):
         raise ValueError('ARCHIVE_STATUS_INVALID')
     result = {name: value[name] for name in ('schema_version', 'status', 'checked_at')}
     _instant(result['checked_at'])
     for name in ('created', 'compressed', 'removed'):
         count = value.get(name)
-        if type(count) is not int or not 0 <= count < 2**63:
+        if not isinstance(count, int) or isinstance(count, bool) or not 0 <= count < 2**63:
             raise ValueError('ARCHIVE_STATUS_INVALID')
         result[name] = count
     snapshot = value.get('latest_snapshot_at')

@@ -23,7 +23,7 @@ def archive_config(path, **settings):
     path.write_text(yaml.safe_dump(config))
 
 
-@pytest.mark.parametrize('settings', [dict(enabled='false'), dict(retention_days=0),
+@pytest.mark.parametrize('settings', [dict(enabled='false'), dict(enabled=0), dict(enabled=1), dict(retention_days=0),
     dict(retention_days=-1), dict(retention_days=True), dict(retention_days=1.5), dict(unknown=30)])
 def test_bad_archive_policy_rejected_before_creating_state(app, settings):
     archive_config(app, **settings)

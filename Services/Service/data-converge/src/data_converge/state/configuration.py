@@ -109,7 +109,7 @@ def _remove_owned_backup(destination: Path, identity) -> None:
 
 
 def _sync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY)
+    descriptor = os.open(directory, os.O_RDONLY, 0o700)
     try:
         os.fsync(descriptor)
     finally:

@@ -129,7 +129,7 @@ def _text(value) -> bool:
 
 
 def _validate_readiness(ready: dict) -> None:
-    _require(isinstance(ready, dict) and type(ready.get('enabled')) is bool)
+    _require(isinstance(ready, dict) and isinstance(ready.get('enabled'), bool))
     if not ready['enabled']:
         _require_fields(ready, {'enabled'})
         return
@@ -141,12 +141,13 @@ def _validate_readiness(ready: dict) -> None:
     _require(mode in ('standalone', 'cluster', 'sentinel'))
     fields = _SENTINEL_REDIS_FIELDS if mode == 'sentinel' else _DIRECT_REDIS_FIELDS
     _require_fields(redis, fields)
-    _require(type(redis['db']) is int and redis['db'] >= 0)
+    _require(isinstance(redis['db'], int) and not isinstance(redis['db'], bool) and redis['db'] >= 0)
     if mode == 'sentinel':
         _require(all(_text(redis[key]) for key in ('service_name', 'username', 'password_file')))
         _require(redis['paas_name'] is None or _text(redis['paas_name']))
     else:
-        _require(_text(redis['host']) and type(redis['port']) is int and 1 <= redis['port'] <= 65535)
+        _require(_text(redis['host']) and isinstance(redis['port'], int)
+                 and not isinstance(redis['port'], bool) and 1 <= redis['port'] <= 65535)
         _require(mode != 'cluster' or redis['db'] == 0)
 
 
@@ -170,7 +171,8 @@ def _validate_task(name: str, task: dict) -> None:
 def validate_manifest(manifest: dict) -> None:
     """Reject unsupported, malformed or inconsistent stored snapshots with a safe code."""
     _require_fields(manifest, _MANIFEST_FIELDS)
-    _require(type(manifest['schema_version']) is int and manifest['schema_version'] == 1)
+    _require(isinstance(manifest['schema_version'], int) and not isinstance(manifest['schema_version'], bool)
+             and manifest['schema_version'] == 1)
     _dataset_id(manifest['dataset_id'], 'CONFIGURATION_MANIFEST_INVALID')
     connection = manifest['connection']
     _require_fields(connection, {'endpoint', 'database', 'username'})
@@ -178,7 +180,7 @@ def validate_manifest(manifest: dict) -> None:
     _validate_readiness(manifest['readiness'])
     coordination = manifest['coordination']
     _require_fields(coordination, {'enabled', 'cluster_name'})
-    _require(type(coordination['enabled']) is bool and _text(coordination['cluster_name']))
+    _require(isinstance(coordination['enabled'], bool) and _text(coordination['cluster_name']))
     tasks = manifest['tasks']
     _require(isinstance(tasks, dict) and bool(tasks))
     for name, task in tasks.items():

@@ -100,7 +100,7 @@ def daily_archives(database) -> list[dict]:
 def _archive_lock(directory):
     directory.mkdir(mode=0o700, exist_ok=True)
     identity = _directory_identity(directory)
-    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, 0o700)
     descriptor = None
     try:
         if not _same_file(identity, os.fstat(directory_fd)):
@@ -147,7 +147,7 @@ def _paired_final(directory, temporary, expected):
 
 
 def _recover_publish_pair(temporary, final, expected, check):
-    descriptor = os.open(temporary.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptor = os.open(temporary.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, 0o700)
     try:
         check()
         first = os.stat(temporary.name, dir_fd=descriptor, follow_symlinks=False)

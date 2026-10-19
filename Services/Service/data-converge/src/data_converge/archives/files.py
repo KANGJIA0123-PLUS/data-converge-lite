@@ -47,7 +47,7 @@ def _unchanged(path: Path, expected: os.stat_result, *, contents=True) -> None:
 
 
 def _fsync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, 0o700)
     try:
         os.fsync(descriptor)
     finally:
@@ -98,7 +98,7 @@ def _reader(path: Path):
     expected = regular_file(path)
     if expected is None:
         raise ValueError("ARCHIVE_FILE_INVALID")
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW, 0o600)
     try:
         opened = os.fstat(descriptor)
         if opened.st_nlink != 1 or not _same_contents(opened, expected):

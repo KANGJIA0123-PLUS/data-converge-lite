@@ -137,6 +137,19 @@ def test_worker_stage_errors_are_bounded_and_sanitized(tmp_path):
     assert 'never-show-this' not in json.dumps(result)
 
 
+@pytest.mark.parametrize('field', ['schema_version', 'created', 'compressed', 'removed'])
+@pytest.mark.parametrize('value', [True, 1.0])
+def test_worker_status_integer_fields_reject_booleans_and_floats(tmp_path, field, value):
+    path = make_archive(tmp_path / 'state')
+    status = write_status(path)
+    content = json.loads(status.read_text())
+    content[field] = value
+    status.write_text(json.dumps(content))
+    result = archive_check({}, tmp_path / 'state', now=NOW)
+    assert result['status'] == 'WARN'
+    assert result['evidence']['error_code'] == 'ARCHIVE_STATUS_INVALID'
+
+
 def test_status_symlink_is_not_followed(tmp_path):
     path = make_archive(tmp_path / 'state')
     secret = tmp_path / 'secret'
