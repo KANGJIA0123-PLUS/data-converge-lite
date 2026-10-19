@@ -66,6 +66,7 @@ class TaskScheduler:
         if start_time is not None and start_time.tzinfo is None:
             raise ValueError("coverage_start must include a timezone")
         self.start_time = start_time.astimezone(self.timezone) if start_time else None
+        self.task_starts = self.state_store.get_task_effective_starts() if self.state_store else {}
         self.poll_interval_seconds = poll_interval_seconds
         self.catchup_limit = catchup_limit
         self.ready_poller = ready_poller
@@ -104,9 +105,6 @@ class TaskScheduler:
         normalized_time = self._normalize_time(
             scheduled_time
         )
-        actual_now = self._normalize_time(None)
-        actual_now = self._poll_ready(actual_now)
-
         instances = [
             self.dag_builder.create_instance(
                 dag=self.dag,
@@ -115,8 +113,9 @@ class TaskScheduler:
             )
             for taskname in tasknames
         ]
-        if self.start_time and any(i.data_start < self.start_time for i in instances):
-            raise ValueError("Requested window begins before the initialized coverage_start")
+        for instance in instances:
+            self._validate_window_start(instance)
+        actual_now = self._poll_ready(self._normalize_time(None))
 
         logger.info(
             "开始执行Cron任务组：scheduled_time=%s, "
@@ -130,6 +129,19 @@ class TaskScheduler:
                                            should_stop=lambda: self.stop_requested)
         self._log_group_result(normalized_time, report)
         return report
+
+    def _effective_start(self, taskname: str) -> datetime | None:
+        task_start = self.task_starts.get(taskname)
+        if self.start_time is None:
+            return task_start
+        return max(self.start_time, task_start) if task_start is not None else self.start_time
+
+    def _validate_window_start(self, instance: TaskInstance) -> None:
+        if self.start_time and instance.data_start < self.start_time:
+            raise ValueError("Requested window begins before the initialized coverage_start")
+        task_start = self.task_starts.get(instance.taskname)
+        if task_start and instance.data_start < task_start:
+            raise ValueError("TASK_WINDOW_BEFORE_EFFECTIVE_START")
 
     def _log_group_result(self, scheduled_time: datetime, report: ExecutionReport) -> None:
         logger.info(
@@ -227,15 +239,16 @@ class TaskScheduler:
         next_cursors = {}
         for taskname in self.dag.topological_order:
             trigger = self._triggers[taskname]
+            effective_start = self._effective_start(taskname)
             cursor = cursors.get(taskname)
-            if cursor is None:
-                cursor = trigger.get_next_fire_time(None, self.start_time)
+            if cursor is None or cursor < effective_start:
+                cursor = trigger.get_next_fire_time(None, effective_start)
             count = 0
             while cursor is not None and cursor <= now and count < self.catchup_limit:
                 instance = self.dag_builder.create_instance(self.dag, taskname, cursor.astimezone(self.timezone))
                 # First deployment starts only with whole new windows. It never
                 # silently replays the partial hour/day/month before the cutover.
-                if instance.data_start >= self.start_time:
+                if instance.data_start >= effective_start:
                     instances.append(instance)
                 count += 1
                 cursor = trigger.get_next_fire_time(cursor, cursor)
@@ -269,7 +282,8 @@ class TaskScheduler:
             if start < self.start_time or end > now:
                 continue
             for taskname in self.dag.topological_order:
-                if self.dag.tasks[taskname].aggregation_interval == "PT5M":
+                if (self.dag.tasks[taskname].aggregation_interval == "PT5M"
+                        and start >= self._effective_start(taskname)):
                     instances.append(self.dag_builder.create_instance(self.dag, taskname, end))
         # Events may precede cron by a minute, but share the same window identity.
         # Never advance cron cursors here: they still enumerate missing windows.
@@ -287,6 +301,7 @@ class TaskScheduler:
                     or instance.data_start != datetime.fromisoformat(record["data_start"])
                     or instance.data_end != datetime.fromisoformat(record["data_end"])):
                 raise ValueError(f"Persisted window no longer matches task definition: {record['instance_id']}")
+            self._validate_window_start(instance)
             instances.append(instance)
         # Read all pending rows, but bound actual submissions. Old BLOCKED rows
         # cannot monopolize a LIMIT query and starve unrelated ready windows.

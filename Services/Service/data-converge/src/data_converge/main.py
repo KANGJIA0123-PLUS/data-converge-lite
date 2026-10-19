@@ -16,6 +16,7 @@ from data_converge.state.bootstrap import StateBootstrapError
 from data_converge.diagnostics import cli as diagnostics
 from data_converge.errors import safe_error_details
 from data_converge.cli_help import add_operation_arguments, create_parser
+from data_converge.configuration_migration import cli as configuration_migration
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +26,20 @@ def arguments(argv):
     modes = parser.add_mutually_exclusive_group()
     diagnostics.add_arguments(parser, modes)
     add_operation_arguments(parser, modes)
+    configuration_migration.add_arguments(parser, modes)
     args = parser.parse_args(argv)
     diagnostics.validate_arguments(parser, args)
-    if args.start_time and not args.init_state:
+    configuration_migration.validate_arguments(parser, args)
+    if args.start_time is not None and not args.init_state:
         parser.error('--start-time requires --init-state')
-    if args.now and not args.run_once:
+    if args.now is not None and not args.run_once:
         parser.error('--now requires --run-once')
     if args.run_task and not args.scheduled_time:
         parser.error('--run-task requires --scheduled-time')
+    if args.scheduled_time is not None and not args.run_task:
+        parser.error('--scheduled-time requires --run-task')
+    if (args.resolution is not None or args.note is not None) and not args.resolve_instance:
+        parser.error('--resolution and --note require --resolve-instance')
     if args.resolve_instance and (not args.resolution or not args.note):
         parser.error('--resolve-instance requires --resolution and --note')
     return args
@@ -44,6 +51,8 @@ def output(value):
 
 def run(args, *, raw_config=None) -> CommandResult:
     application = Application(args.config, raw_config=raw_config)
+    if args.apply_config is not None:
+        return CommandResult(payload=configuration_migration.apply(args, application))
     if args.healthcheck:
         return application.check_health(args.healthcheck)
     if args.status:

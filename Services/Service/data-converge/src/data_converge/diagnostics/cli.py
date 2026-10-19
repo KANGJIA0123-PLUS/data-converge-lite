@@ -26,7 +26,7 @@ def add_arguments(parser, modes):
 
 def is_diagnostic(args):
     return bool(args.diagnose or args.failures or args.history or args.recovery_plan
-                or args.events or args.inspect_instance is not None or args.dwd_status)
+                or args.events or args.inspect_instance is not None or args.dwd_status or args.plan_config)
 
 
 def validate_arguments(parser, args):
@@ -69,7 +69,10 @@ def run(args):
     from . import service
     from .recovery import execution_events, recovery_plan
 
-    if args.diagnose:
+    if args.plan_config:
+        from data_converge.configuration_migration.cli import preview
+        value = preview(args)
+    elif args.diagnose:
         value = service.diagnose(args.config, online=args.online)
     elif args.failures:
         value = service.failures(args.config, task=args.task, limit=args.limit, offset=args.offset)

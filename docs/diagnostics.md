@@ -88,6 +88,8 @@ DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号�
 
 `STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED` 表示启动未通过账本校验：当前配置指纹与账本中记录的不一致，或缺少绑定/覆盖起点信息。它发生在本次任务恢复和 SQL 执行之前。用同一配置运行 `--diagnose --format json`，`state` 项会区分“当前配置与状态库绑定不一致”和“状态库未完成初始化”。
 
+新建或已迁移账本保存完整配置快照及 SQL 摘要，变化时报告 `CONFIG_MIGRATION_REQUIRED`。`CONFIGURATION_REJECTED` 日志给出前后版本摘要和新增、变化、移除的任务名，不输出连接身份原值。使用 `--plan-config` 查看差异，按 [配置迁移指南](configuration-migration.md) 备份并显式应用；不要删库或直接改指纹。`CONFIG_STATE_INVALID` 则表示配置快照、任务起点或初始化信息不完整，不能作为正常升级直接放行。
+
 ### 名词与职责
 
 | 名词 | 含义 |

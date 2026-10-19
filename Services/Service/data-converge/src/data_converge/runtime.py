@@ -42,9 +42,10 @@ def _legacy_sql_probe(runner: SQLTaskRunner) -> None:
 
 
 def _create_sql_execution(config_path: Path, definition: ApplicationDefinition) -> ExecutionAdapter:
+    optional = {} if definition.sql_hashes is None else {'expected_sql_hashes': definition.sql_hashes}
     runner = SQLTaskRunner(config_path, definition.sql_dir,
                            timeout=definition.options.default_timeout_seconds,
-                           config=definition.config)
+                           config=definition.config, **optional)
     return ExecutionAdapter(runner, partial(_probe_clickhouse, runner.config))
 
 

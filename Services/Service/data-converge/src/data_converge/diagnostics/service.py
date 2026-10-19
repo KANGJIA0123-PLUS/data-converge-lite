@@ -2,12 +2,12 @@
 from contextlib import closing
 from datetime import datetime
 
-from data_converge.config.application import binding, load_app_config, state_directory
+from data_converge.config.application import load_app_config, state_directory
 from data_converge.dwd_ready.config import load_ready_config
 from data_converge.health import heartbeat_directory
 from .checks import (credential_files, definition_check, failure, heartbeat_check,
                      log_check, logging_settings_check, module_check, protected_check,
-                     state_check, task_check, leadership_check)
+                     state_check, task_check, leadership_check, inspection_definition)
 from .ledger import DiagnosticLedger
 from .report import attempt_record, check, evidence_action, legacy_resolution_record, report, task_record
 from .windows import list_windows, parse_window
@@ -173,9 +173,14 @@ def _inspect_history(store, instance_id, data, checks, *, limit, offset):
 
 
 def _inspect_dependencies(store, definition, row, data):
-    if binding(definition.config, definition.dag) != store.get_meta('binding'):
-        return [check('dependencies', 'SKIP', '当前配置与账本绑定不一致，未推断历史依赖', {},
-                      '核对部署版本；实例原始状态与已保存错误证据仍可查看。')]
+    if not inspection_definition(store, definition):
+        return [check('dependencies', 'SKIP', '当前配置或 SQL 与账本版本不一致，未推断历史依赖', {},
+                      '运行 --plan-config 核对部署版本；实例原始状态与已保存错误证据仍可查看。')]
+    effective = store.get_task_effective_starts().get(row['taskname'])
+    if effective is not None and datetime.fromisoformat(row['data_start']) < effective:
+        return [check('dependencies', 'SKIP', '实例窗口早于当前任务版本生效起点，未推断历史依赖',
+                      {'task_effective_start': effective.isoformat()},
+                      '历史版本不能按当前配置解释；按原实例记录和历史执行证据核对。')]
     expected = definition.builder.create_instance(definition.dag, row['taskname'],
                                                   datetime.fromisoformat(row['scheduled_time']))
     same = expected.instance_id == row['instance_id'] and all(

@@ -6,7 +6,7 @@
 
 - 不修改业务 SQL、公司部署/打包/启动脚本，不增加产品依赖。Python 函数和测试函数不超过 50 行。
 - 旧 binding 算法保持原样，继续用于旧账本证明与兼容；新配置快照采用显式字段和 schema_version=1，不对 dataclass 内部字段自动做身份推导。
-- 原实例 ID、成功记录、UNKNOWN、尝试记录、原任务游标、coverage_start、选主账本身份不因迁移被重置。迁移不发业务 SQL、不恢复 RUNNING、不消费 DWD。
+- 原实例 ID、成功记录、UNKNOWN、尝试记录、未变化任务的游标、coverage_start、选主账本身份不因迁移被重置。新增/变化任务的旧游标保存在迁移前备份中，迁移事务清除其当前游标，使新版本从指定起点按新 Cron 规划。迁移不发业务 SQL、不恢复 RUNNING、不消费 DWD。
 - 只读预览不创建表、日志、心跳或备份。写迁移必须取得原有租约和物理账本文件锁，拒绝残留 RUNNING，重新计算预览 ID，备份后用事务提交配置、任务起点、审计。
 - 连接身份变更必须由操作者确认仍属于同一业务数据；工具不会声称 SELECT 1 或相同表名能证明数据归属。不同业务数据/已有 dataset_id 改变必须使用独立账本与独立选主命名空间。
 
@@ -28,7 +28,7 @@ StateStore 新接口：
 - `get_task_effective_starts() -> dict[str, datetime]`，旧库返回空映射。
 - `configuration_constraints(tasknames) -> dict`，返回 running 总数和 tasks[name]={unresolved,latest_end}；unresolved 是状态非 SUCCESS 的实例计数，latest_end 以时间值比较而非字符串字典序。
 - `backup_configuration(destination: Path) -> Path`，持写锁、拒绝覆盖，SQLite backup 一致性副本，0600，验证 quick_check，失败只清理本次新文件。
-- `apply_configuration(*, expected_binding, expected_revision, manifest, revision, task_starts, binding, migration_id, applied_at, backup_path=None) -> None`，持写锁，在事务内CAS检查当前binding/revision，原子保存快照和迁移历史；保留历史版本快照，任务游标不变。
+- `apply_configuration(*, expected_binding, expected_revision, manifest, revision, task_starts, binding, migration_id, applied_at, backup_path=None, reset_task_cursors=()) -> None`，持写锁，在事务内CAS检查当前binding/revision，原子保存快照、必需快照标记和迁移历史，仅清除显式列出的新增/变更任务游标；未变化任务游标不变。
 
 快照元数据仅保存脱敏快照。迁移历史包含 migration_id、前后revision、applied_at、backup_path、manifest、task_starts。重复migration_id不能覆盖历史。新增任务起点和任务版本在快照历史中持久保留，旧实例ID无需改写。
 
@@ -47,6 +47,8 @@ StateStore 新接口：
 ## 所有执行入口遵守任务起点
 
 每任务起点由task_starts保存。cron没有游标时从max(coverage,task_start)规划；DWD事件按每任务起点过滤；手动执行在创建运行资源前拒绝更早窗口；run_pending遇到非法旧窗口拒绝执行。旧库无task_starts时维持原行为。日/月等只处理data_start位于起点之后的完整窗口。
+
+复审修正：不能让变更任务沿用旧 Cron 的未来游标。例如旧小时任务的下一游标为 12:03，新五分钟 Cron 在 11:00 生效；沿用旧游标会漏排 11 点整之后的窗口。计划显式列出 `restart_cursors`，迁移原子清除这些游标，首次调度按生效起点重新计算；原值仍可在一致性备份中核对。
 
 SQLTaskRunner 可接收启动时的预期 SQL 摘要映射（保持旧构造调用兼容），执行时在发送前核对同一份已读取SQL文本的摘要。文件运行中被替换时返回确定未提交的固定错误，禁止执行未批准SQL。
 

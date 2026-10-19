@@ -57,6 +57,8 @@ Services/Service/data-converge/
 
 新增 `--recovery-plan` 只读查看恢复分类；`--events --after-event 0 --limit 100 --format jsonl` 导出首批事务事件，使用最后一条 `event_id` 继续分页。服务运行日志继续沿用原轮转策略；事件原始记录在账本中，不依赖日志文件保存成功。
 
+同一业务数据的配置升级使用 `--plan-config` 预览、`--apply-config PLAN_ID` 显式应用。任务定义和 SQL 正文均纳入版本检查；新增或变更任务须指定生效起点。迁移先备份，再事务保存配置与审计，保留已有执行事实。首次迁移旧账本需要可信的旧配置、规则和 SQL；具体命令及边界见 [配置迁移指南](docs/configuration-migration.md)。
+
 ## 日志
 
 业务日志优先写入 `${LOG_PATH}/${SERVICE_NAME}.log`，同时保留 stderr 输出。没有 `LOG_PATH` 时兼容部署注入的完整文件名 `SERVICE_LOG_PATH`，再按 `PRODUCT_NAME` 拼接平台路径。本地没有平台日志变量时只输出到 stderr。公司启动日志 `start.log` 继续由平台管理。

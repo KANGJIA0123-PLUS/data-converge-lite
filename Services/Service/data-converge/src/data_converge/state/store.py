@@ -13,7 +13,7 @@ from data_converge.errors import safe_diagnostic_details
 
 from .bootstrap import StateBootstrapError
 from .database import LedgerDatabase
-from . import checkpoints, events, history
+from . import checkpoints, configuration, events, history
 
 
 def _stamp(value: datetime) -> str:
@@ -75,14 +75,43 @@ class StateStore:
         with conn:
             conn.execute("INSERT INTO metadata VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
 
+    def configuration_snapshot(self) -> dict | None:
+        return configuration.snapshot(self._connection())
+
+    def configuration_history(self, limit: int = 20) -> list[dict]:
+        return configuration.history(self._connection(), limit)
+
+    def configuration_migration(self, migration_id: str) -> dict | None:
+        return configuration.migration(self._connection(), migration_id)
+
+    def get_task_effective_starts(self) -> dict[str, datetime]:
+        return configuration.effective_starts(self._connection())
+
+    def configuration_constraints(self, tasknames: Iterable[str]) -> dict:
+        return configuration.constraints(self._connection(), tasknames)
+
+    def backup_configuration(self, destination: Path) -> Path:
+        return configuration.backup(self._connection(write=True), destination)
+
+    def apply_configuration(self, *, expected_binding, expected_revision, manifest, revision,
+                            task_starts, binding, migration_id, applied_at, backup_path=None,
+                            reset_task_cursors=()) -> None:
+        configuration.apply(self._connection(write=True), expected_binding=expected_binding,
+                            expected_revision=expected_revision, manifest=manifest, revision=revision,
+                            task_starts=task_starts, binding=binding, migration_id=migration_id,
+                            applied_at=applied_at, backup_path=backup_path,
+                            reset_task_cursors=reset_task_cursors)
+
     def get_cursor(self, taskname: str) -> datetime | None:
         row = self._connection().execute("SELECT next_fire_time FROM schedule_cursors WHERE taskname=?", (taskname,)).fetchone()
         return datetime.fromisoformat(row[0]) if row else None
 
     def enqueue_and_advance(self, instances: Iterable[TaskInstance], next_cursors: Mapping[str, datetime]) -> None:
         conn = self._connection(write=True)
+        prepared = list(instances)
+        configuration.validate_windows(prepared, self.get_task_effective_starts())
         with conn:
-            for instance in instances:
+            for instance in prepared:
                 conn.execute("""INSERT OR IGNORE INTO task_instances
                     (instance_id, taskname, scheduled_time, data_start, data_end, status)
                     VALUES (?, ?, ?, ?, ?, ?)""",

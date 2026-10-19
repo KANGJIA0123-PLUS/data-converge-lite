@@ -1,13 +1,17 @@
 """Independent local checks; failure in one component does not hide the others."""
 import json
 import importlib.util
+from datetime import datetime
 import math
 import os
 from pathlib import Path
 import time
 import sys
 
-from data_converge.config.application import asset_path, binding, load_definition
+from data_converge.config.application import StartupError, asset_path, binding, load_definition
+from data_converge.config.evolution import (
+    build_manifest, compare_manifests, manifest_digest, validate_configuration_snapshot,
+)
 from data_converge.errors import safe_error_details
 from data_converge.observability.logging import log_file_path
 from data_converge.observability.settings import LoggingSettings
@@ -64,10 +68,46 @@ def state_check(store, definition):
     except (ValueError, TypeError):
         return check('state', 'FAIL', '状态库覆盖起点无效', evidence,
                      '核对原账本与部署版本；不要重置覆盖起点来绕过检查。')
+    identity = configuration_identity(store, definition)
+    evidence.update(identity)
+    if identity.get('configuration_matches') is False:
+        evidence['error_code'] = 'CONFIG_MIGRATION_REQUIRED'
+        return check('state', 'FAIL', '当前配置或 SQL 与已批准快照不同，需要显式迁移', evidence,
+                     '运行 --plan-config 核对变更和任务起点，再按计划应用；保留原账本。')
     if definition is not None and binding(definition.config, definition.dag) != store.get_meta('binding'):
         return check('state', 'FAIL', '当前配置与状态库绑定不一致', evidence,
-                     '核对数据库、账号、任务配置和状态卷是否属于同一部署；不要重建状态库。')
+                     '核对业务数据和状态卷，使用 --plan-config --previous-config 预览迁移；不要重建状态库。')
     return check('state', 'PASS', '状态库可只读查询', evidence)
+
+
+def configuration_identity(store, definition):
+    try:
+        snapshot = store.configuration_snapshot()
+    except (TypeError, ValueError):
+        raise StartupError('CONFIG_STATE_INVALID') from None
+    if snapshot is None:
+        if store.get_meta('configuration_required') is not None:
+            raise StartupError('CONFIG_STATE_INVALID')
+        return {'configuration_snapshot_present': False}
+    try:
+        coverage_value = store.get_meta('coverage_start')
+        coverage = datetime.fromisoformat(coverage_value) if coverage_value else None
+        previous, stored_revision, _ = validate_configuration_snapshot(snapshot, coverage)
+    except (TypeError, ValueError):
+        raise StartupError('CONFIG_STATE_INVALID') from None
+    if definition is None:
+        return dict(configuration_snapshot_present=True, configuration_revision=stored_revision)
+    current = build_manifest(definition)
+    revision = manifest_digest(current)
+    return dict(configuration_snapshot_present=True, configuration_matches=stored_revision == revision,
+                configuration_revision=stored_revision, current_configuration_revision=revision,
+                configuration_changes=compare_manifests(previous, current))
+
+
+def inspection_definition(store, definition):
+    if binding(definition.config, definition.dag) != store.get_meta('binding'):
+        return False
+    return configuration_identity(store, definition).get('configuration_matches', True)
 
 
 def task_check(counts):

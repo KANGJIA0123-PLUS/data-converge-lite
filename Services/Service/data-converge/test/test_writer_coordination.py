@@ -1,5 +1,6 @@
 """Writer admission is checked before state recovery or any external work."""
 from contextlib import contextmanager, closing
+import sqlite3
 
 import pytest
 import yaml
@@ -136,6 +137,9 @@ def test_bound_ledger_cannot_disable_leadership(app):
     enable_leadership(app)
     Application(app).initialize(START.isoformat())
     Application(app, dependencies=dependencies(Lease(), [])).run_once(NOW.isoformat())
+    # The legacy ledger still relies on its existing coordination guard.
+    with closing(sqlite3.connect(app.parent / 'state/state.sqlite3')) as connection, connection:
+        connection.execute("DELETE FROM metadata WHERE key IN ('configuration_snapshot','configuration_required')")
     config = yaml.safe_load(app.read_text())
     config['leadership']['enabled'] = False
     app.write_text(yaml.safe_dump(config))

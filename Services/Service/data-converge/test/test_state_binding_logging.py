@@ -35,6 +35,9 @@ def test_changed_binding_logs_evidence_and_preserves_running_work(local_http_app
     instance = definition.builder.create_instance(
         definition.dag, 'simple', datetime.fromisoformat('2026-10-12T10:06:00+08:00'))
     database = path.parent / 'state/state.sqlite3'
+    # This test retains coverage of the legacy binding-only rejection path.
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("DELETE FROM metadata WHERE key IN ('configuration_snapshot','configuration_required')")
     with closing(StateStore(database)) as store:
         store.acquire_lock()
         store.enqueue_and_advance([instance], {})

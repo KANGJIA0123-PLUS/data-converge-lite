@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +23,12 @@ class SQLTaskRunner:
         timeout: int = 300,
         *,
         config: dict[str, Any] | None = None,
+        expected_sql_hashes: dict[str, str] | None = None,
     ):
         self.config_path = Path(config_path)
         self.sql_directory = Path(sql_directory)
         self.timeout = timeout
+        self.expected_sql_hashes = None if expected_sql_hashes is None else dict(expected_sql_hashes)
 
         # Reuse the validated startup snapshot so binding and execution agree.
         self.config: dict[str, Any] = (
@@ -44,6 +47,14 @@ class SQLTaskRunner:
                 query_id=getattr(instance, "query_id", None),
                 diagnostic=safe_error_details(error),
             ) from None
+
+        if (self.expected_sql_hashes is not None
+                and self.expected_sql_hashes.get(instance.taskname)
+                != hashlib.sha256(sql.encode("utf-8")).hexdigest()):
+            raise TaskExecutionError(
+                "SQL_CONFIGURATION_CHANGED", retryable=False, outcome_unknown=False,
+                query_id=getattr(instance, "query_id", None),
+            )
 
         execute_sql(
             config=self.config,

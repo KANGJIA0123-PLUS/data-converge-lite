@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import cached_property
 from pathlib import Path
@@ -19,6 +20,9 @@ from data_converge.config.application import (
     load_app_config,
     load_definition,
     state_directory,
+)
+from data_converge.config.evolution import (
+    build_manifest, compare_manifests, manifest_digest, validate_configuration_snapshot,
 )
 from data_converge.dag import ExecutionReport, TaskStatus
 from data_converge.health import healthcheck, heartbeat_directory
@@ -94,9 +98,14 @@ class Application:
     def fingerprint(self) -> str:
         return binding(self.definition.config, self.definition.dag)
 
+    @cached_property
+    def manifest(self) -> dict:
+        return build_manifest(self.definition)
+
     def validate(self) -> CommandResult:
         # Validate the same deployment identity used by initialization/execution.
         self.fingerprint
+        self.manifest
         return CommandResult(payload={'status': 'VALID', 'tasks': len(self.definition.dag.tasks)})
 
     def check_health(self, mode: str) -> CommandResult:
@@ -113,20 +122,60 @@ class Application:
 
     def initialize(self, start_time: str | None = None) -> CommandResult:
         fingerprint = self.fingerprint
+        self.manifest
         start = parse_time(start_time) if start_time else None
         if start and next_boundary(start) != start:
             raise StartupError('START_TIME_MUST_BE_A_FIVE_MINUTE_BOUNDARY')
         with closing(StateStore(self.directory / 'state.sqlite3', create=True)) as store:
-            store.acquire_startup_lock()
-            initialize_state(store, fingerprint, start)
+            created = store.acquire_startup_lock()
+            if created:
+                self._initialize_configuration(store, fingerprint, start)
+            else:
+                if not store.get_meta('binding') or not store.get_meta('coverage_start'):
+                    raise StartupError('STATE_NOT_INITIALIZED')
+                self._validate_configuration(store)
+                initialize_state(store, fingerprint, start)
             store.mark_initialized()
             return CommandResult(payload={
                 'status': 'INITIALIZED', 'coverage_start': store.get_meta('coverage_start'),
             })
 
+    def _initialize_configuration(self, store: StateStore, fingerprint: str,
+                                  start_time: datetime | None) -> None:
+        store.set_meta('configuration_required', '1')
+        initialize_state(store, fingerprint, start_time)
+        coverage = parse_time(store.get_meta('coverage_start'))
+        store.apply_configuration(
+            expected_binding=fingerprint, expected_revision=None, manifest=self.manifest,
+            revision=manifest_digest(self.manifest),
+            task_starts={name: coverage for name in self.definition.dag.tasks},
+            binding=fingerprint, migration_id=uuid.uuid4().hex,
+            applied_at=datetime.now(ZoneInfo('Asia/Shanghai')),
+        )
+
+    def _validate_configuration(self, store: StateStore) -> None:
+        try:
+            snapshot = store.configuration_snapshot()
+        except (TypeError, ValueError):
+            raise StartupError('CONFIG_STATE_INVALID') from None
+        if snapshot is None:
+            if store.get_meta('configuration_required') is not None:
+                raise StartupError('CONFIG_STATE_INVALID')
+            return
+        coverage_value = store.get_meta('coverage_start')
+        coverage = parse_time(coverage_value) if coverage_value else None
+        previous, previous_revision, _ = validate_configuration_snapshot(snapshot, coverage)
+        current_revision = manifest_digest(self.manifest)
+        if current_revision != previous_revision:
+            diagnostic = dict(previous_revision=previous_revision, current_revision=current_revision,
+                              changes=compare_manifests(previous, self.manifest))
+            logger.error('CONFIGURATION_REJECTED diagnostic=%s', json.dumps(diagnostic, ensure_ascii=True))
+            raise StartupError('CONFIG_MIGRATION_REQUIRED')
+
     @contextmanager
     def _active_state(self, *, bootstrap: bool = False):
         fingerprint = self.fingerprint
+        self.manifest
         dependencies = self.dependencies or RuntimeDependencies()
         with (
             admit_writer(self.definition, wait=bootstrap, factory=dependencies.leadership_factory) as lease,
@@ -134,7 +183,7 @@ class Application:
         ):
             created = acquire_state(store, bootstrap=bootstrap, lease=lease)
             if created:
-                initialize_state(store, fingerprint, None)
+                self._initialize_configuration(store, fingerprint, None)
             self._validate_state_binding(store, fingerprint)
             store.mark_initialized()
             bind_writer(store, lease, self.definition.leadership.cluster_name)
@@ -153,6 +202,11 @@ class Application:
         )
         # Escape paths and control characters; never serialize arbitrary metadata.
         diagnostic = json.dumps(evidence, ensure_ascii=True)
+        try:
+            self._validate_configuration(store)
+        except StartupError:
+            logger.error('STATE_BINDING_REJECTED diagnostic=%s', diagnostic)
+            raise
         if existing != fingerprint or not coverage:
             logger.error('STATE_BINDING_REJECTED diagnostic=%s', diagnostic)
             raise StartupError('STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED')
@@ -172,7 +226,9 @@ class Application:
             optional['lease'] = lease
         if heartbeat is not None:
             optional['heartbeat'] = heartbeat
-        return open_runtime(self.config_path, self.definition, store, self.directory,
+        definition = replace(self.definition, sql_hashes={
+            name: task['sql_sha256'] for name, task in self.manifest['tasks'].items()})
+        return open_runtime(self.config_path, definition, store, self.directory,
                             parse_time(store.get_meta('coverage_start')), **optional)
 
     def run_task(self, taskname: str, scheduled_time: str) -> CommandResult:
@@ -181,6 +237,9 @@ class Application:
             candidate = self.definition.builder.create_instance(self.definition.dag, taskname, scheduled)
             if candidate.data_start < parse_time(store.get_meta('coverage_start')):
                 raise StartupError('WINDOW_PRECEDES_COVERAGE_START')
+            task_start = store.get_task_effective_starts().get(taskname)
+            if task_start is not None and candidate.data_start < task_start:
+                raise StartupError('TASK_WINDOW_BEFORE_EFFECTIVE_START')
             with self._runtime(store, lease) as runtime:
                 return report_result(runtime.run_task(taskname, scheduled))
 

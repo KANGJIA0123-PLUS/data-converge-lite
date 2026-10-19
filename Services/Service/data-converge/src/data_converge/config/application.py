@@ -64,6 +64,7 @@ class ApplicationDefinition:
     dag: DAG
     sql_dir: Path
     leadership: LeadershipSettings = field(default_factory=LeadershipSettings)
+    sql_hashes: dict[str, str] | None = field(default=None, repr=False)
 
 
 def load_app_config(path: Path) -> dict[str, Any]:
