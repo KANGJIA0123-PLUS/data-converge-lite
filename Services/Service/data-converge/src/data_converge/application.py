@@ -30,7 +30,7 @@ from data_converge.health import healthcheck, heartbeat_directory
 from data_converge.observability.state import binding_details
 from data_converge.runtime import RuntimeDependencies, open_runtime, service_heartbeat
 from data_converge.state import StateStore
-from data_converge.coordination import admit_writer, acquire_state, bind_writer
+from data_converge.coordination import admit_writer, acquire_state
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,10 @@ class Application:
                 recover_legacy(self, store, lease)
             self._validate_state_binding(store, ledger_binding(store, fingerprint))
             store.mark_initialized()
-            bind_writer(store, lease, self.definition.leadership.cluster_name)
+            if lease is not None:
+                lease.assert_owned()
+                if bootstrap:
+                    logger.warning('LEADERSHIP_LEDGER_CHECK_DISABLED: issue=DC-STATE-001')
             if created:
                 logger.info('STATE_INITIALIZED: coverage_start=%s', store.get_meta('coverage_start'))
             store.recover_running()

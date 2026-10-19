@@ -1,6 +1,5 @@
 """Writer admission is checked before state recovery or any external work."""
 from contextlib import contextmanager, closing
-import sqlite3
 
 import pytest
 import yaml
@@ -72,16 +71,22 @@ def test_busy_lease_prevents_state_recovery_and_sql(app):
         assert store.get_meta('leadership_ledger_id') is None
 
 
-def test_successive_writers_bind_the_same_durable_ledger(app):
+def test_successive_writers_keep_completed_tasks_without_registry_binding(app):
+    from .test_dwd_ready_coordinator import signals
+
     enable_leadership(app)
     Application(app).initialize(START.isoformat())
-    leases = [Lease(), Lease()]
+    leases, seen = [Lease(), Lease()], []
     for lease in leases:
-        Application(app, dependencies=dependencies(lease, [])).run_once(NOW.isoformat())
-    assert leases[0].bindings[0][0] == leases[1].bindings[0][0]
-    assert leases[0].bindings[0][1] is False
-    assert leases[1].bindings[0][1] is True
-    assert all(lease.closed for lease in leases)
+        adapters = RuntimeDependencies(
+            execution_factory=lambda *_: ExecutionAdapter(lambda i: seen.append(i.taskname), lambda: None),
+            source_factory=lambda _: Source(signals()), leadership_factory=lambda _: leased(lease))
+        assert Application(app, dependencies=adapters).run_once(NOW.isoformat()).exit_code == 0
+    assert seen == ['simple']
+    assert all(lease.closed and lease.bindings == [] for lease in leases)
+    with closing(StateStore(app.parent / 'state/state.sqlite3')) as store:
+        assert store.get_meta('leadership_ledger_id') is None
+        assert store.get_meta('leadership_cluster') is None
 
 
 @pytest.mark.parametrize('value', [None, [], {'enabled': 'true'},
@@ -96,20 +101,17 @@ def test_leadership_config_rejects_invalid_settings(app, value):
         load_definition(app)
 
 
-def test_ledger_mismatch_rejects_before_recovery_or_runtime(app, monkeypatch):
+def test_lost_lease_rejects_before_recovery_or_runtime(app, monkeypatch):
     enable_leadership(app)
     Application(app).initialize(START.isoformat())
     lease, seen = Lease(), []
 
-    def reject(*args, **kwargs):
-        raise LeadershipError('LEADERSHIP_LEDGER_MISMATCH')
-
     def forbidden(*args):
-        pytest.fail('foreign ledger must not recover running tasks')
+        pytest.fail('a lost lease must not recover running tasks')
 
-    lease.bind_ledger = reject
+    lease.lost = True
     monkeypatch.setattr(StateStore, 'recover_running', forbidden)
-    with pytest.raises(LeadershipError, match='LEDGER_MISMATCH'):
+    with pytest.raises(LeadershipError, match='LEADERSHIP_LOST'):
         Application(app, dependencies=dependencies(lease, seen)).run_once(NOW.isoformat())
     assert seen == [] and lease.closed
 
@@ -133,20 +135,18 @@ def test_lost_lease_blocks_signal_read_ack_and_sql_submission():
     assert seen == [] and source.acknowledged == []
 
 
-def test_bound_ledger_cannot_disable_leadership(app):
-    enable_leadership(app)
+def test_historical_coordination_metadata_does_not_require_leadership(app):
+    enable_ready(app)
     Application(app).initialize(START.isoformat())
-    Application(app, dependencies=dependencies(Lease(), [])).run_once(NOW.isoformat())
-    # The legacy ledger still relies on its existing coordination guard.
-    with closing(sqlite3.connect(app.parent / 'state/state.sqlite3')) as connection, connection:
-        connection.execute("DELETE FROM metadata WHERE key IN ('configuration_snapshot','configuration_required')")
-    config = yaml.safe_load(app.read_text())
-    config['leadership']['enabled'] = False
-    app.write_text(yaml.safe_dump(config))
+    with closing(StateStore(app.parent / 'state/state.sqlite3')) as store:
+        store.acquire_lock()
+        store.set_meta('leadership_cluster', 'former-cluster')
+        store.set_meta('leadership_ledger_id', 'former-ledger')
     seen = []
-    with pytest.raises(LeadershipError, match='REQUIRED_FOR_LEDGER'):
-        Application(app, dependencies=dependencies(Lease(), seen)).run_once(NOW.isoformat())
-    assert seen == []
+    Application(app, dependencies=dependencies(Lease(), seen)).run_once(NOW.isoformat())
+    with closing(StateStore(app.parent / 'state/state.sqlite3')) as store:
+        assert store.get_meta('leadership_cluster') == 'former-cluster'
+        assert store.get_meta('leadership_ledger_id') == 'former-ledger'
 
 
 def test_lease_loss_drains_completed_sql_and_restart_runs_only_remaining_task(app):
@@ -178,7 +178,7 @@ def test_lease_loss_drains_completed_sql_and_restart_runs_only_remaining_task(ap
         source_factory=lambda _: Source(), leadership_factory=lambda _: leased(next_lease))
     result = Application(app, dependencies=adapters).run_once(NOW.isoformat())
     assert result.exit_code == 0 and seen == ['simple', 'child']
-    assert next_lease.bindings[0][0] == lease.bindings[0][0]
+    assert next_lease.bindings == lease.bindings == []
 
 
 def test_standby_has_own_live_but_not_ready_heartbeat(app, monkeypatch):

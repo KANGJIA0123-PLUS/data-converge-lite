@@ -1,5 +1,7 @@
 # Legacy New Windows Implementation Plan
 
+> 历史实施计划保留。2026-10-19 后续的临时措施已取代（superseded）其中选主账本身份及 Redis 永久注册校验约定；现状见 [DC-STATE-001](../../known-issues.md#dc-state-001)。
+
 **Goal:** 旧资料缺失时正常启动自动恢复新窗口，完整保留并隔离旧执行事实。
 **Architecture:** 同账本历史实例映射隔离；备份后事务建立新基线；执行/恢复/诊断统一区分历史与当前。
 **Tech Stack:** 原Python、SQLite和pytest，无新依赖。

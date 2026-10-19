@@ -129,7 +129,7 @@ def bind_existing_ledger(path):
         store.set_meta('leadership_ledger_id', 'existing-ledger')
 
 
-def test_bound_ledger_keeps_registry_identity_and_failed_registry_changes_nothing(app):
+def test_migration_ignores_legacy_registry_and_preserves_identity(app):
     enable_leadership(app)
     Application(app).initialize(START)
     bind_existing_ledger(app)
@@ -137,21 +137,23 @@ def test_bound_ledger_keeps_registry_identity_and_failed_registry_changes_nothin
     lease = Lease()
     target = Application(app, dependencies=dependencies(lease, []))
     plan = preview_config(target, effective_from=CUTOVER, allow_backfill=True)
-    before = dump_database(app)
+    lease.registry = 'another-ledger'
 
-    def reject(identity, *, require_existing):
-        assert identity == 'existing-ledger' and require_existing
-        raise LeadershipError('LEADERSHIP_LEDGER_MISMATCH')
+    def forbidden(*args, **kwargs):
+        pytest.fail('migration must not access the retired registry')
 
-    lease.bind_ledger = reject
-    with pytest.raises(LeadershipError, match='LEADERSHIP_LEDGER_MISMATCH'):
-        apply_config(target, plan['plan_id'], effective_from=CUTOVER, allow_backfill=True)
-    assert dump_database(app) == before and lease.closed
-    assert not (app.parent / 'configuration-backups').exists()
+    lease.bind_ledger = lease.check_ledger = forbidden
+    result = apply_config(target, plan['plan_id'], effective_from=CUTOVER, allow_backfill=True)
+    assert result['status'] == 'APPLIED'
+    with closing(StateStore(target.directory / 'state.sqlite3')) as store:
+        assert store.get_meta('leadership_cluster') == 'unit'
+        assert store.get_meta('leadership_ledger_id') == 'existing-ledger'
+        assert store.configuration_snapshot()['revision'] == result['revision']
+    assert lease.registry == 'another-ledger' and lease.closed
 
 
 @pytest.mark.parametrize('change', ['disabled', 'renamed'])
-def test_bound_ledger_cannot_change_coordination_identity(app, change):
+def test_old_metadata_does_not_block_coordination_configuration_migration(app, change):
     enable_leadership(app)
     Application(app).initialize(START)
     bind_existing_ledger(app)
@@ -161,8 +163,52 @@ def test_bound_ledger_cannot_change_coordination_identity(app, change):
     else:
         raw['leadership']['cluster_name'] = 'another'
     app.write_text(yaml.safe_dump(raw))
-    plan = preview_config(Application(app))
-    assert {'code': 'CONFIG_COORDINATION_CHANGED'} in plan['blockers']
+    target = Application(app, dependencies=dependencies(Lease(), []))
+    plan = preview_config(target)
+    assert plan['changes']['coordination_changed']
+    assert plan['blockers'] == []
+    assert apply_config(target, plan['plan_id'])['status'] == 'APPLIED'
+    with closing(StateStore(target.directory / 'state.sqlite3')) as store:
+        assert store.get_meta('leadership_cluster') == 'unit'
+        assert store.get_meta('leadership_ledger_id') == 'existing-ledger'
+
+
+def test_missing_old_identity_does_not_block_migration(app):
+    enable_leadership(app)
+    Application(app).initialize(START)
+    with closing(StateStore(app.parent / 'state/state.sqlite3')) as store:
+        store.acquire_lock()
+        store.set_meta('leadership_cluster', 'unit')
+    add_task(app)
+    target = Application(app, dependencies=dependencies(Lease(), []))
+    plan = preview_config(target, effective_from=CUTOVER, allow_backfill=True)
+    assert plan['blockers'] == []
+    assert apply_config(target, plan['plan_id'], effective_from=CUTOVER,
+                        allow_backfill=True)['status'] == 'APPLIED'
+    with closing(StateStore(target.directory / 'state.sqlite3')) as store:
+        assert store.get_meta('leadership_cluster') == 'unit'
+        assert store.get_meta('leadership_ledger_id') is None
+
+
+def test_lease_loss_during_migration_backup_prevents_commit(app, monkeypatch):
+    enable_leadership(app)
+    Application(app).initialize(START)
+    add_task(app)
+    lease = Lease()
+    target = Application(app, dependencies=dependencies(lease, []))
+    plan = preview_config(target, effective_from=CUTOVER, allow_backfill=True)
+    before = dump_database(app)
+    backup = StateStore.backup_configuration
+
+    def lost_backup(store, destination):
+        result = backup(store, destination)
+        lease.lost = True
+        return result
+
+    monkeypatch.setattr(StateStore, 'backup_configuration', lost_backup)
+    with pytest.raises(LeadershipError, match='LEADERSHIP_LOST'):
+        apply_config(target, plan['plan_id'], effective_from=CUTOVER, allow_backfill=True)
+    assert dump_database(app) == before and lease.closed
 
 
 def test_live_facts_make_preview_stale_before_any_backup(app):

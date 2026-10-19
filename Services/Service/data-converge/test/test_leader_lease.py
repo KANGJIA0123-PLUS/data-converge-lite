@@ -12,7 +12,6 @@ class Elector:
         self.tokens = []
         self.renew_calls = 0
         self.renew = lambda: True
-        self.bind = lambda: True
         self.on_acquire = lambda: None
 
     def elect_as_leader(self, token, ttl):
@@ -32,9 +31,6 @@ class Elector:
             return False
         self.owner = None
         return True
-
-    def bind_ledger(self, token, ledger_id, require_existing=False):
-        return self.owner == token and self.bind()
 
 
 def wait_until(predicate):
@@ -147,21 +143,6 @@ def test_close_joins_renewal_and_never_releases_replacement_owner():
     lease.close()
 
 
-def test_binding_failure_marks_lease_lost_and_preserves_safe_code():
-    from data_converge.leader_election import LeadershipError
-    elector = Elector()
-
-    def missing():
-        raise LeadershipError('LEADERSHIP_REGISTRY_MISSING')
-
-    elector.bind = missing
-    with make_lease(elector) as lease:
-        assert lease.acquire()
-        with pytest.raises(LeadershipError, match='LEADERSHIP_REGISTRY_MISSING'):
-            lease.bind_ledger('ledger-id', require_existing=True)
-        assert lease.lost
-
-
 def test_exceptional_body_still_releases_owned_lease():
     elector = Elector()
     with pytest.raises(RuntimeError, match='body failed'):
@@ -179,9 +160,9 @@ def test_timely_renewal_extends_admission_beyond_original_deadline():
         assert lease.acquire()
         clock[0] = 0.5
         wait_until(lambda: elector.renew_calls > 0)
-        lease.bind_ledger('ledger-id')  # Serialize after the completed renewal.
-        clock[0] = 1.1
-        lease.assert_owned()
+        with lease._command_lock:
+            clock[0] = 1.1
+            lease.assert_owned()
 
 
 def test_uncertain_acquisition_is_released_on_context_cleanup():

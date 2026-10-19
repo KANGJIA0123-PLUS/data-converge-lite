@@ -10,7 +10,6 @@ from data_converge.application import next_boundary, parse_time
 from data_converge.config.application import StartupError
 from data_converge.config.evolution import manifest_digest
 from data_converge.config.state_binding import fenced_binding
-from data_converge.leader_election import LeadershipError
 
 from .service import _assert_files_unchanged, _backup
 
@@ -40,22 +39,6 @@ def _candidate(application, store):
     return old, start
 
 
-def _check_registry(application, store, lease):
-    previous = store.get_meta('leadership_cluster')
-    if lease is None:
-        if previous is not None:
-            raise LeadershipError('LEADERSHIP_REQUIRED_FOR_LEDGER')
-        return
-    if previous is not None and previous != application.definition.leadership.cluster_name:
-        raise LeadershipError('LEADERSHIP_CLUSTER_CHANGED')
-    identity = store.get_meta('leadership_ledger_id')
-    if previous is not None and not identity:
-        raise StartupError('LEGACY_RECOVERY_INVALID')
-    lease.assert_owned()
-    lease.check_ledger(identity, require_existing=previous is not None)
-    lease.assert_owned()
-
-
 def _record(application, store, old, coverage, migration_id, backup_path):
     summary = store.legacy_window_summary()
     instant = _utc_now()
@@ -73,7 +56,8 @@ def recover_legacy(application, store, lease):
     if candidate is None:
         return
     old, coverage = candidate
-    _check_registry(application, store, lease)
+    if lease is not None:
+        lease.assert_owned()
     migration_id = uuid4().hex
     backup_path = _backup(application, store, migration_id, None)
     try:

@@ -37,16 +37,6 @@ def _effective_start(value, required):
     return result
 
 
-def _coordination_blockers(store, current):
-    previous = store.get_meta('leadership_cluster')
-    coordination = current['coordination']
-    if previous is not None and (not coordination['enabled'] or previous != coordination['cluster_name']):
-        return [{'code': 'CONFIG_COORDINATION_CHANGED'}]
-    if previous is not None and not store.get_meta('leadership_ledger_id'):
-        return [{'code': 'CONFIG_STATE_INVALID'}]
-    return []
-
-
 def _requirements(previous, current, changes, legacy):
     required = ['accept_legacy_baseline'] if legacy else []
     if changes['connection_changed'] or changes['readiness_changed'] or changes['dataset_changed']:
@@ -102,7 +92,6 @@ def build_plan(application, store, *, previous_config=None, effective_from=None,
     starts = {name: effective if name in changes['added'] + changes['changed'] else old_starts[name]
               for name in current['tasks']}
     required, blockers = _requirements(previous, current, changes, previous_revision is None)
-    blockers += _coordination_blockers(store, current)
     recovery = store.legacy_recovery()
     lower_bound = max(coverage, parse_time(recovery['cutover'])) if recovery is not None else coverage
     blockers += _task_blockers(constraints, changes, effective, lower_bound)

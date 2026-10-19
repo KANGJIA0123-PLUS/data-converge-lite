@@ -41,7 +41,7 @@ Services/Service/data-converge/
 
 `Application` 作为用例门面；运行时工厂负责装配，`ExitStack` 管理资源释放；SQL/Redis 适配器连接外部系统；`StateStore` 管理业务事务，组合 `LedgerDatabase` 管理连接与文件锁；日志策略与文件操作分别维护。旧的 `logging_config`、`scheduler.scheduler`、DWD 认证模块和 ClickHouse `client` 配置函数保留兼容导出。
 
-任务执行、执行状态和就绪消息源通过 `Protocol` 定义契约；运行依赖可通过 `RuntimeDependencies` 显式注入。Redis 租约协调主备，本地文件锁和同一持久账本保证单写与状态连续。选主配置、逐次执行历史及能力边界见 [六项可靠性问题核对](docs/reliability.md)；扩展约定见 [业务架构](docs/architecture.md)。
+任务执行、执行状态和就绪消息源通过 `Protocol` 定义契约；运行依赖可通过 `RuntimeDependencies` 显式注入。Redis 租约协调主备，本地文件锁控制同一物理账本的写入；历史连续性依赖完整持久状态卷及其存储保障。选主配置、逐次执行历史及能力边界见 [六项可靠性问题核对](docs/reliability.md)；扩展约定见 [业务架构](docs/architecture.md)。
 
 ## 启动与状态
 
@@ -50,6 +50,8 @@ Services/Service/data-converge/
 初始化标记保存在状态目录的父目录，默认与 `lite-state/` 同级。删除账本或状态子目录但保留标记时，启动会报 `STATE_DATABASE_MISSING`；数据库损坏、不完整或部署绑定不匹配时也不会自动重建。不要通过删除标记绕过恢复检查。需要指定首次覆盖起点时，仍可在首次服务启动前使用 `--init-state --start-time`，它不能重置已有覆盖起点。
 
 标记与账本都在本地存储中。整个 hostPath 丢失、Pod 调度到另一个空节点目录，或旧版本在写入标记前已经丢失账本时，无法仅凭空目录区别首次部署与状态丢失。正式迁移需保证账本存储连续；自动初始化不提供跨节点状态恢复。
+
+按现场要求，已临时移除本地 `leadership_cluster` / `leadership_ledger_id` 与 Redis 永久 `:ledger` 注册项的身份阻断；旧元数据与注册键保留，新版本不再读写这些身份项。临时选主租约、续租、失租停止、本地锁、配置版本和缺失/损坏状态检查继续保留。这只消除身份不一致导致的拒绝启动，不会恢复丢失历史，也不保证独立状态卷接管不重复写入。遗留问题、后续方案和验收条件见 [DC-STATE-001](docs/known-issues.md#dc-state-001)。
 
 ## 快速定位
 

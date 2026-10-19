@@ -13,28 +13,6 @@ RELEASE_SCRIPT = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
 return redis.call('DEL', KEYS[1])
 """
-BIND_SCRIPT = """
-if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
-local previous = redis.call('GET', KEYS[2])
-if previous then
-    if previous ~= ARGV[2] then return -1 end
-elseif ARGV[3] == '1' then
-    return -2
-else
-    redis.call('SET', KEYS[2], ARGV[2], 'NX')
-end
-return 1
-"""
-CHECK_LEDGER_SCRIPT = """
-if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
-local previous = redis.call('GET', KEYS[2])
-if previous then
-    if ARGV[2] == '' or previous ~= ARGV[2] then return -1 end
-elseif ARGV[3] == '1' then
-    return -2
-end
-return 1
-"""
 
 
 class LeadershipError(RuntimeError):
@@ -59,7 +37,6 @@ class LeaderElector:
             raise ValueError('LEADERSHIP_SETTINGS_INVALID')
         self.cluster_name = cluster_name
         self.leader_key = f'{self.LEADER_KEY_PREFIX}{{{cluster_name}}}'
-        self.ledger_key = self.leader_key + ':ledger'
         self.redis_client = client if client is not None else self._create_client(redis_host, redis_port)
 
     @staticmethod
@@ -92,30 +69,6 @@ class LeaderElector:
         return self._command(self.redis_client.eval, RELEASE_SCRIPT, 1,
                              self.leader_key, node_id) == 1
 
-    def bind_ledger(self, node_id: str, ledger_id: str, *, require_existing: bool = False) -> bool:
-        """Keep the permanent ledger identity separate from the expiring owner."""
-        if not isinstance(ledger_id, str) or not ledger_id or not isinstance(require_existing, bool):
-            raise ValueError('LEADERSHIP_LEDGER_INVALID')
-        return self._ledger_command(BIND_SCRIPT, node_id, ledger_id, require_existing)
-
-    def check_ledger(self, node_id: str, ledger_id: str | None, *, require_existing: bool = False) -> bool:
-        """Check ownership and registration atomically without creating either key."""
-        if ((ledger_id is not None and (not isinstance(ledger_id, str) or not ledger_id))
-                or not isinstance(require_existing, bool)):
-            raise ValueError('LEADERSHIP_LEDGER_INVALID')
-        return self._ledger_command(CHECK_LEDGER_SCRIPT, node_id,
-                                    ledger_id if ledger_id is not None else '', require_existing)
-
-    def _ledger_command(self, script, node_id, ledger_id, require_existing):
-        result = self._command(self.redis_client.eval, script, 2,
-                               self.leader_key, self.ledger_key, node_id,
-                               ledger_id, '1' if require_existing else '0')
-        if result == -1:
-            raise LeadershipError('LEADERSHIP_LEDGER_MISMATCH')
-        if result == -2:
-            raise LeadershipError('LEADERSHIP_REGISTRY_MISSING')
-        return result == 1
-
     def get_current_leader(self) -> str | None:
         value = self._command(self.redis_client.get, self.leader_key)
         return value.decode('utf-8', errors='replace') if isinstance(value, bytes) else value
@@ -126,6 +79,3 @@ class LeaderElector:
 
     def get_leader_ttl(self) -> int:
         return self._command(self.redis_client.ttl, self.leader_key)
-
-    def ledger_registered(self) -> bool:
-        return self._command(self.redis_client.exists, self.ledger_key) == 1

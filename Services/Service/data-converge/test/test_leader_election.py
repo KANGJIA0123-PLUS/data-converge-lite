@@ -1,6 +1,6 @@
-"""Atomic ownership operations and ledger identity checks at the Redis boundary."""
+"""Atomic ownership operations at the Redis boundary."""
 
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -32,23 +32,25 @@ def test_old_owner_cannot_mutate_new_owner(operation, result, expected):
     client.delete.assert_not_called()
 
 
-@pytest.mark.parametrize('result,code', [
-    (0, None), (1, None), (-1, 'LEADERSHIP_LEDGER_MISMATCH'),
-    (-2, 'LEADERSHIP_REGISTRY_MISSING'),
-])
-def test_binding_checks_ownership_and_existing_ledger(result, code):
-    from data_converge.leader_election import LeadershipError
+def test_ownership_lifecycle_only_addresses_owner_key():
     client = Mock()
-    client.eval.return_value = result
+    client.set.return_value = True
+    client.get.return_value = 'token'
+    client.ttl.return_value = 25
+    client.eval.return_value = 1
     elector = LeaderElector('deployment', client=client)
-    if code:
-        with pytest.raises(LeadershipError, match=code):
-            elector.bind_ledger('token', 'ledger-uuid', require_existing=True)
-    else:
-        assert elector.bind_ledger('token', 'ledger-uuid', require_existing=True) is bool(result)
-    assert client.eval.call_args.args[1:] == (
-        2, 'data_converge:leader:{deployment}',
-        'data_converge:leader:{deployment}:ledger', 'token', 'ledger-uuid', '1')
+    assert elector.elect_as_leader('token')
+    assert elector.is_leader('token')
+    assert elector.get_leader_ttl() == 25
+    assert elector.renew_leadership('token')
+    assert elector.release_leadership('token')
+    owner_key = 'data_converge:leader:{deployment}'
+    assert client.set.call_args == call(owner_key, 'token', nx=True, px=30000)
+    assert client.get.call_args_list == [call(owner_key)]
+    assert client.ttl.call_args_list == [call(owner_key)]
+    assert [entry.args[1:] for entry in client.eval.call_args_list] == [
+        (1, owner_key, 'token', 30000), (1, owner_key, 'token')]
+    assert [entry[0] for entry in client.method_calls] == ['set', 'get', 'ttl', 'eval', 'eval']
 
 
 def test_redis_error_is_fixed_and_does_not_expose_remote_details():
@@ -62,7 +64,7 @@ def test_redis_error_is_fixed_and_does_not_expose_remote_details():
 
 
 @pytest.mark.parametrize('cluster', ['', '{nested}', 'bad}name'])
-def test_cluster_name_cannot_break_ledger_key_slot(cluster):
+def test_cluster_name_cannot_break_owner_key_slot(cluster):
     with pytest.raises(ValueError):
         LeaderElector(cluster, client=Mock())
 

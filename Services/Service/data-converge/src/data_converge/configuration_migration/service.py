@@ -81,15 +81,6 @@ def _validate_time(plan, now):
         raise StartupError('CONFIG_EFFECTIVE_FROM_PAST')
 
 
-def _validate_registry(store, lease):
-    if lease is not None:
-        lease.assert_owned()
-        previous = store.get_meta('leadership_cluster')
-        if previous is not None:
-            lease.bind_ledger(store.get_meta('leadership_ledger_id'), require_existing=True)
-        lease.assert_owned()
-
-
 def _prepare_directory(directory):
     missing, parent = [], directory.absolute()
     while not parent.exists():
@@ -153,5 +144,6 @@ def apply_config(application, plan_id, *, previous_config=None, effective_from=N
         plan = build_plan(application, store, previous_config=previous_config,
                           effective_from=effective_from, allow_backfill=allow_backfill)
         _validate_apply(plan, plan_id, confirmations, now or datetime.now(timezone.utc))
-        _validate_registry(store, lease)
+        if lease is not None:
+            lease.assert_owned()
         return _commit(application, store, lease, plan, backup_dir, now)

@@ -43,7 +43,7 @@ sequenceDiagram
 flowchart TD
     CLI[main：命令边界] --> APP[Application：应用用例]
     APP --> RT[运行时装配与资源生命周期]
-    APP --> OWN[写入准入与账本身份绑定]
+    APP --> OWN[租约与本地锁写入准入]
     OWN --> LEASE[LeadershipLease：续租生命周期]
     DEP[RuntimeDependencies：显式工厂] --> RT
     RT --> SCHED[TaskScheduler：窗口与调度]
@@ -79,7 +79,7 @@ src/data_converge/
 ├── dwd_ready/               # 五类就绪信号、窗口门控、消息确认
 ├── coordination/            # 写入资格的应用层编排
 │   ├── ports.py             # WriterLease 窄接口
-│   ├── admission.py         # 等待主权、账本身份绑定、本地锁准入
+│   ├── admission.py         # 等待主权与本地锁准入
 │   ├── guards.py            # SQL 提交/消息读取与确认前的资格校验
 │   └── factory.py           # 组合租约与专用连接，明确释放顺序
 ├── leader_election/         # 原子 Redis 租约与续租线程
@@ -165,7 +165,7 @@ src/data_converge/
 
 ## 分布式高可用的边界
 
-当前接入 Redis 租约协调，但仍要求同一份完整持久账本。SQLite 与 POSIX 文件锁保证同一账本单写，不能用于两个独立 hostPath 的自动接管。Redis 永久注册项校验账本身份，阻止新的独立账本冒充原部署恢复。
+当前接入 Redis 租约协调；要延续原执行历史，仍需同一份完整持久账本及支持相应同步与锁语义的存储。SQLite 与 POSIX 文件锁只协调同一物理账本，不能让两个独立 hostPath 共享执行事实。按现场请求，账本身份和 Redis 永久注册校验已临时移除；新版不再读写这些身份项，旧值保留。独立账本可以在取得租约后通过该项准入，但其历史缺口及重复写风险尚未解决，见 [DC-STATE-001](known-issues.md#dc-state-001)。
 
 `leader_election/` 通过随机会话 token、原子 Lua 续租/释放、保守截止时间与独立续租线程控制资格；失租后停止新派发，在途 SQL 收尾前持有账本锁。它不是 ClickHouse 端 fencing。心跳按实例隔离，Python 备机探针不读取主机心跳。公司探针脚本目前提前 `exit 0`，本轮保持部署与探针脚本不变。
 

@@ -1,4 +1,4 @@
-"""Admit one lease holder to the same physical durable ledger before recovery."""
+"""Admit one lease holder and serialize access to local state before recovery."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from contextlib import AbstractContextManager, contextmanager, ExitStack
 import logging
 import signal
 import time
-import uuid
 
 from data_converge.config.application import ApplicationDefinition
 from data_converge.leader_election import LeadershipError
@@ -47,24 +46,6 @@ def admit_writer(definition: ApplicationDefinition, *, wait: bool = False,
         lease.assert_owned()
         logger.info('LEADERSHIP_ACQUIRED')
         yield lease
-
-
-def bind_writer(store: StateStore, lease: WriterLease | None, cluster_name: str) -> None:
-    if lease is None:
-        if store.get_meta('leadership_cluster') is not None:
-            raise LeadershipError('LEADERSHIP_REQUIRED_FOR_LEDGER')
-        return
-    lease.assert_owned()
-    previous = store.get_meta('leadership_cluster')
-    if previous is not None and previous != cluster_name:
-        raise LeadershipError('LEADERSHIP_CLUSTER_CHANGED')
-    identity = store.get_meta('leadership_ledger_id')
-    if identity is None:
-        identity = uuid.uuid4().hex
-        store.set_meta('leadership_ledger_id', identity)
-    lease.bind_ledger(identity, require_existing=previous is not None)
-    lease.assert_owned()
-    store.set_meta('leadership_cluster', cluster_name)
 
 
 def acquire_state(store: StateStore, *, bootstrap: bool, lease: WriterLease | None) -> bool:

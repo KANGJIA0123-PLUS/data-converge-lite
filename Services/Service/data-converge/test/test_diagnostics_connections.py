@@ -198,26 +198,75 @@ def test_unexpected_component_failure_still_checks_the_other_component(monkeypat
 
 
 class ReadOnlyLeaderRedis(ReadOnlyRedis):
+    def __init__(self, *, present=True, ttl=20):
+        super().__init__()
+        self.present = present
+        self.lease_ttl = ttl
+
     def get(self, key):
         self.commands.append(('GET', key))
-        return b'private lease token'
+        assert not key.endswith(':ledger')
+        return b'private lease token' if self.present else None
 
     def ttl(self, key):
         self.commands.append(('TTL', key))
-        return 20
+        return self.lease_ttl
 
     def exists(self, key):
-        self.commands.append(('EXISTS', key))
-        return 1
+        raise AssertionError('diagnostics must not inspect legacy ledger registration')
 
 
-def test_online_leadership_diagnostic_reads_without_claim_or_renew(monkeypatch):
+@pytest.mark.parametrize('present, ttl, expected', [
+    (True, 20, 'PASS'), (False, -2, 'WARN'), (True, 0, 'WARN'), (True, -1, 'WARN'),
+])
+def test_online_leadership_diagnostic_reads_without_claim_or_renew(monkeypatch, present, ttl, expected):
     from data_converge.diagnostics import connections
-    client = ReadOnlyLeaderRedis()
+    client = ReadOnlyLeaderRedis(present=present, ttl=ttl)
     monkeypatch.setattr(connections, 'create_connection', lambda _: RedisConnection(client))
     value = definition()
     value.leadership = LeadershipSettings(enabled=True)
     result = connections._leadership_check(value)
-    assert result['status'] == 'PASS'
-    assert [command[0] for command in client.commands] == ['GET', 'TTL', 'EXISTS']
+    assert result['status'] == expected
+    assert [command[0] for command in client.commands] == ['GET', 'TTL']
+    assert result['evidence'] == {
+        'leader_present': present, 'ttl_seconds': ttl, 'ledger_identity_enforced': False,
+    }
+    assert client.closed and 'private' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('enabled, expected', [(True, 'PASS'), (False, 'WARN')])
+def test_local_leadership_diagnostic_ignores_and_preserves_legacy_metadata(tmp_path, enabled, expected):
+    from data_converge.diagnostics.checks import leadership_check
+    from data_converge.state import StateStore
+    value = definition()
+    value.leadership = LeadershipSettings(enabled=enabled, cluster_name='current')
+    store = StateStore(tmp_path / 'state.sqlite3', create=True)
+    try:
+        store.acquire_lock()
+        store.set_meta('leadership_cluster', 'previous')
+        store.set_meta('leadership_ledger_id', 'original-ledger')
+        result = leadership_check(store, value)
+        assert result['status'] == expected
+        assert result['evidence']['ledger_identity_enforced'] is False
+        assert 'ledger_bound' not in result['evidence']
+        assert store.get_meta('leadership_cluster') == 'previous'
+        assert store.get_meta('leadership_ledger_id') == 'original-ledger'
+    finally:
+        store.close()
+
+
+def test_online_leadership_failure_still_discloses_disabled_identity_check(monkeypatch):
+    from data_converge.diagnostics import connections
+    client = ReadOnlyLeaderRedis()
+
+    def unavailable(_):
+        raise ConnectionError('private redis details')
+
+    monkeypatch.setattr(client, 'get', unavailable)
+    monkeypatch.setattr(connections, 'create_connection', lambda _: RedisConnection(client))
+    result = connections._leadership_check(definition())
+    assert result['status'] == 'FAIL'
+    assert result['evidence']['ledger_identity_enforced'] is False
+    assert result['evidence']['error_type'] == 'LeadershipError'
+    assert result['evidence']['error_code'] == 'LEADERSHIP_REDIS_FAILED'
     assert client.closed and 'private' not in json.dumps(result)

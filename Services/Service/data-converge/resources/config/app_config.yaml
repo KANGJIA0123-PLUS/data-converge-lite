@@ -24,7 +24,7 @@ state:
     retention_days: 30    # 从原快照时间计龄，压缩和重启不重置期限。
 
 # 主备必须使用同一份完整持久账本及同一个锁文件，不支持独立hostPath自动接管。
-# 复用下方Redis认证配置，但使用独立连接；一旦绑定账本，不可通过关闭选主绕过。
+# 复用下方Redis认证配置，但使用独立连接；账本身份校验已临时移除，见docs/known-issues.md。
 leadership:
   enabled: true
   cluster_name: data-converge-modelmate-metric  # 同一业务部署的所有副本必须一致。

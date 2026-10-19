@@ -97,16 +97,17 @@ def check_connections(definition) -> list[dict]:
 
 
 def _leadership_check(definition):
+    evidence = {'ledger_identity_enforced': False}
     try:
         with closing(create_connection(definition.config['dwd_ready'])) as connection:
             elector = LeaderElector(definition.leadership.cluster_name, client=connection.client)
             present = elector.get_current_leader() is not None
             ttl = elector.get_leader_ttl()
-            registered = elector.ledger_registered()
-        status = 'PASS' if present and ttl > 0 and registered else 'WARN'
-        return _result('leadership.redis', status, 'Redis 租约与账本注册信息（只读瞬时观察）',
-                       dict(leader_present=present, ttl_seconds=ttl, ledger_registered=registered),
-                       '主备须使用同一持久账本。此检查不抢租、不续租，也不验证 EVAL 写权限。')
+        status = 'PASS' if present and ttl > 0 else 'WARN'
+        return _result('leadership.redis', status, 'Redis 临时租约信息（只读瞬时观察）',
+                       dict(evidence, leader_present=present, ttl_seconds=ttl),
+                       '此检查不抢租、不续租，也不验证 EVAL 写权限或账本历史连续性；'
+                       '主备仍需使用同一持久账本。')
     except Exception as error:
-        return _failed('leadership.redis', 'Redis 租约信息不可读取', error, {},
-                       '核对 Redis 连接和 GET/TTL/EXISTS 权限；不要删除租约或账本注册键。')
+        return _failed('leadership.redis', 'Redis 租约信息不可读取', error, evidence,
+                       '核对 Redis 连接和 GET/TTL 权限；不要删除正在使用的租约。')

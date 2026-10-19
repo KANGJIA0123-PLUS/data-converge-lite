@@ -120,30 +120,6 @@ class LeadershipLease:
                 else:
                     self._deadline = started + self._validity
 
-    def bind_ledger(self, ledger_id: str, *, require_existing: bool = False) -> None:
-        self._ledger_command(lambda: self.elector.bind_ledger(
-            self._token, ledger_id, require_existing=require_existing))
-
-    def check_ledger(self, ledger_id: str | None, *, require_existing: bool = False) -> None:
-        """Read-only preflight; normal binding still owns registration writes."""
-        self._ledger_command(lambda: self.elector.check_ledger(
-            self._token, ledger_id, require_existing=require_existing))
-
-    def _ledger_command(self, operation: Callable[[], bool]) -> None:
-        with self._command_lock:
-            self.assert_owned()
-            try:
-                valid = operation()
-                self.assert_owned()
-                if not valid:
-                    raise LeadershipError('LEADERSHIP_LOST')
-            except LeadershipError:
-                self._mark_lost()
-                raise
-            except Exception:
-                self._mark_lost()
-                raise LeadershipError('LEADERSHIP_REDIS_FAILED') from None
-
     def close(self) -> None:
         with self._state_lock:
             if self._closed:

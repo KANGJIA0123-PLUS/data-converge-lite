@@ -1,5 +1,7 @@
 # Configuration Migration Implementation Plan
 
+> 历史实施计划保留。2026-10-19 后续的临时措施已取代（superseded）其中选主账本身份及 Redis 永久注册校验约定；配置迁移的其他身份和版本约束仍保留。现状见 [DC-STATE-001](../../known-issues.md#dc-state-001)。
+
 > **For agentic workers:** Use the approved design and test-driven implementation; independent modules can proceed in parallel with disjoint file ownership. Root integrates and commissions independent review.
 
 **Goal:** 支持保留执行账本的受控配置升级，明确任务生效起点。
