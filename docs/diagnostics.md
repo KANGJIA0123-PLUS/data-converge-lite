@@ -6,28 +6,39 @@
 
 ## 常用命令
 
-镜像与 Chart 配套更新后，容器已安装 `dc` 命令，新开的终端可以直接使用，无需设置 alias 或每次填写配置路径：
+镜像提供 `dconv` 命令，避免与系统计算器 `dc` 重名。每次通过 `kubectl exec` 打开新的 Bash 终端，先在当前终端加载命令环境，随后即可使用短命令，无需设置 alias 或每次填写配置路径：
 
 ```bash
-dc --history                 # 最近20条执行历史
-dc --history --limit 50      # 最近50条
-dc --diagnose               # 本地健康检查
-dc --diagnose --online      # 包含远端连接检查
-dc --failures               # 当前异常任务
-dc --dwd-status             # 上游窗口就绪状态
-dc                          # 显示帮助，不启动服务
+source /opt/its/data-converge/bin/command_env.sh
+dconv --history             # 最近20条执行历史
+dconv --history --limit 50   # 最近50条
+dconv --diagnose            # 本地健康检查
+dconv --diagnose --online   # 包含远端连接检查
+dconv --failures            # 当前异常任务
+dconv --dwd-status          # 上游窗口就绪状态
+dconv                       # 显示帮助，不启动服务
 ```
 
 标准部署默认配置为 `/opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml`。
 显式 `--config` 优先于环境变量 `APP_CONF_FILE`，未设置时使用 `${SERVICE_HOME}/lib/data-converge/resources/config/app_config.yaml`；`SERVICE_HOME` 默认 `/opt/its/data-converge`。
-例如 `dc --config /其他路径/app_config.yaml --history` 可以查询其他配置。
-除无参数时显示帮助外，`dc` 原样转发参数并返回原命令退出码，原有写操作仍是写操作。
+例如 `dconv --config /其他路径/app_config.yaml --history` 可以查询其他配置。
+除无参数时显示帮助外，`dconv` 原样转发参数并返回原命令退出码，原有写操作仍是写操作。
 
-`dc` 随镜像安装为可执行文件，正式 `start.sh` 启动时将其权限设为服务账号只读、可执行。
-Chart 在容器 `PATH` 首位加入服务 `bin`，并保留标准 Linux 工具目录；这项环境设置在更新 Chart 并重建 Pod 后对新终端生效。
-若使用自定义部署，需要同样设置 `PATH`，并保留平台额外需要的路径。仅更新镜像或在运行进程内临时 export 不会更新已有容器的环境。
-更新后先用 `command -v dc` 确认输出为 `/opt/its/data-converge/bin/dc`，避免误用系统同名计算器；系统工具仍可用其绝对路径调用。
-调试部署跳过正式启动入口时需确认镜像中该文件已有执行权限。旧镜像、旧 Chart 或自行重置 `PATH` 的终端仍可使用下面的完整入口命令。
+`command_env.sh` 只将自身所在的 `bin` 目录追加到原 `PATH` 末尾，保留平台已有目录及其查找顺序；重复加载不会重复追加。加载它不会启动服务，也不会改变当前目录或 Shell 选项，不会自动写入用户的 profile。
+
+正式 `start.sh` 在平台 `function.sh` 之后加载该环境脚本，其环境设置只对该进程及其子进程有效。新开的 `kubectl exec` 终端不会继承它导出的 `PATH`，因此仍需执行上面的 `source`；单独运行 `bash command_env.sh` 也不会修改当前终端环境。
+
+Chart 不再覆盖容器 `PATH`。此前部署过固定 `PATH` 的环境，需要发布移除该项的 Chart 并重建 Pod；仅更新镜像无法去掉旧 Chart 注入的固定值。自定义部署也应保留容器与平台提供的原有 `PATH`，再在需要使用短命令的终端加载环境脚本。
+
+加载后可用 `command -v dconv` 确认输出为 `/opt/its/data-converge/bin/dconv`。`dconv` 随镜像安装为可执行文件，正式 `start.sh` 启动时将其权限设为服务账号只读、可执行；调试部署跳过正式启动入口时需确认镜像中该文件已有执行权限。
+
+也可以不加载命令环境，直接使用完整路径：
+
+```bash
+bash /opt/its/data-converge/bin/dconv --history
+```
+
+旧镜像或需要使用原始入口时，下面的完整入口命令继续可用。
 
 不熟悉参数时，直接查看内置中文帮助，包含按问题选择的入口、可复制的命令、时间格式和退出码说明：
 

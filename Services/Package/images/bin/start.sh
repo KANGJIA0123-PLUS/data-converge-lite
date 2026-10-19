@@ -4,6 +4,7 @@ set -e
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 LOG_NAME="start.log"
 source "./function.sh"
+source "./command_env.sh"
 source start_data_converge.sh
 #配置权限
 function config_permission() {
@@ -12,7 +13,7 @@ function config_permission() {
         chmod -v 500 "/opt/its/${SERVICE_NAME}/bin"
         chmod -v 500 "/opt/its/${SERVICE_NAME}/lib"
         chmod -v 500 "/opt/its/${SERVICE_NAME}/bin/"*.sh
-        chmod -v 500 "/opt/its/${SERVICE_NAME}/bin/dc"
+        chmod -v 500 "/opt/its/${SERVICE_NAME}/bin/dconv"
     } >>"${LOG_FILE}"
 }
 

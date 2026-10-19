@@ -21,8 +21,14 @@ DESCRIPTION = '''Data Converge Lite · 运行与故障定位
   想看原始状态快照                 --status
 
 以下查询在 data-converge 容器内执行，启动辅助脚本会加载 Python 环境。
-镜像与 Chart 配套更新后可直接使用 dc --history、dc --diagnose 等短命令。
-dc 不带参数显示本帮助；默认配置为 /opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml。
+短命令使用 dconv，避免与系统计算器 dc 重名。新开的 kubectl exec Bash 终端先执行：
+  source /opt/its/data-converge/bin/command_env.sh
+随后可用 dconv --history、dconv --diagnose 等命令；dconv 不带参数显示本帮助。
+环境脚本只向原 PATH 末尾追加服务 bin，重复加载不重复追加，也不启动服务。
+start.sh 加载的环境不会传给新开的 kubectl exec 终端；Chart 不再设置固定 PATH。
+此前使用固定 PATH 的部署还需发布移除该项的 Chart 并重建 Pod。
+默认配置为 /opt/its/data-converge/lib/data-converge/resources/config/app_config.yaml，支持 --config 覆盖。
+也可直接执行 bash /opt/its/data-converge/bin/dconv --history，无需加载命令环境。
 查询命令不重跑任务、不修改任务状态，也不消费 Redis 消息。
 '''
 
@@ -73,7 +79,7 @@ EXAMPLES = f'''可直接复制的查询示例：
   实例ID中的时间通常是窗口结束时间，与 --window 的开始时间不同。
 
 会改变运行状态的操作：
-  原始启动入口不带命令会启动服务；dc 无参仅显示帮助。
+  原始启动入口不带命令会启动服务；dconv 无参仅显示帮助。
   --run-once / --run-task 会真正执行任务与 SQL、写账本。
   --run-once 可能补跑多个任务，不是预览；所有辅助参数应随对应主命令使用。
   --init-state 会初始化状态；--resolve-instance 会人工修改实例状态。
