@@ -31,7 +31,7 @@ INSERT INTO modelmate_metric.t_mops_request_month_dws (
 )
 SELECT
     -- 1. 时间维度：将天窗口起始时间向下取整对齐到月开始时间
-    toStartOfMonth(d.window_time) AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
 
     -- 2. 维度键
     d.agent_id,
@@ -100,10 +100,10 @@ SELECT
     any(d.sync_flag)                                    AS sync_flag
 
 FROM modelmate_metric.t_mops_request_day_dws AS d
-WHERE d.window_time >= {start_time:DateTime}  -- 调度时传入的月份时间范围（例如月初 00:00:00，左闭右开）
-  AND d.window_time <  {end_time:DateTime}
+WHERE d.window_time >= toDateTime({start_time:UInt32}, 'UTC')  -- 调度时传入的月份时间范围（例如月初 00:00:00，左闭右开）
+  AND d.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND d.sync_flag = 0
 GROUP BY
-    window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     d.agent_id,
     d.server_name;

@@ -164,7 +164,7 @@ SELECT
     -- 【动态化】：QPM 改为通过动态分钟数计算 (区间秒数 / 60.0)
     CAST(coalesce(
         sumIf(group_request_received_delta, process_role IN ('coordinator', 'single'))
-        / nullIf(dateDiff('second', {start_time:DateTime}, {end_time:DateTime}) / 60.0, 0.0),
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0, 0.0),
         0.0
     ) AS Float32) AS coord_request_received_total_qpm_avg,
 
@@ -254,20 +254,20 @@ SELECT
     -- 【动态化】：Token 速率分母改为动态秒数 (dateDiff)
     CAST(coalesce(
         sumIf(group_prompt_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_prompt_tokens_total_delta_rate_avg,
 
     CAST(coalesce(
         sumIf(group_generation_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_generation_tokens_total_delta_rate_avg,
 
     CAST(coalesce(
         (sumIf(group_prompt_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
             + sumIf(group_generation_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single')))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0), 0.0
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0), 0.0
     ) AS Float32) AS engine_total_throughput_rate,
     avgIf(group_prompt_throughput_avg,   process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_avg_prompt_throughput_toks_per_s_avg,
     sumIf(group_prompt_throughput_delta, process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_avg_prompt_throughput_toks_per_s_delta,
@@ -536,8 +536,8 @@ FROM
         avg(dws.npu_prefix_cache_hit_rate_avg) AS group_prefix_cache_hit_rate_avg
 
     FROM modelmate_metric.t_mops__modelmetric_instance__5min_dws AS dws
-    WHERE dws.window_time >= {start_time:DateTime}
-      AND dws.window_time <  {end_time:DateTime}
+    WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+      AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
       AND dws.sync_flag = 0
       AND dws.process_role != 'worker' -- 【关键新增】：彻底排除所有跨机/多卡的从属节点
     GROUP BY

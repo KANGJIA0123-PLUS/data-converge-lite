@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from data_converge.errors import TaskExecutionError, safe_error_details
+from data_converge.time_policy import system_timezone, system_timezone_name
 
 # Keep the established client configuration API for operational commands.
 from .config import (
@@ -47,18 +48,22 @@ def load_sql(sql_file: Path) -> str:
 
 
 def format_clickhouse_datetime(value: datetime | str) -> str:
-    if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
-    value = value.strip()
-    if not value:
-        raise ValueError("时间参数不能为空")
-    return value
+    """Encode an absolute Unix second for the SQL UInt32 window parameters."""
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            raise ValueError("时间参数不能为空")
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=system_timezone())
+    return str(int(value.timestamp()))
 
 
 def _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, query_id):
     """Keep credentials in headers and preserve ClickHouse's SQL placeholders."""
     parameters = dict(database=clickhouse["database"], default_format="JSONCompact",
-                      wait_end_of_query="1", max_execution_time=str(timeout), query_id=query_id)
+                      wait_end_of_query="1", max_execution_time=str(timeout), query_id=query_id,
+                      param_system_timezone=system_timezone_name())
     if start_time is not None:
         parameters.update(param_start_time=format_clickhouse_datetime(start_time),
                           param_end_time=format_clickhouse_datetime(end_time))

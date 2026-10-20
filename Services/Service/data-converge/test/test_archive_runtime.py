@@ -15,6 +15,7 @@ from data_converge.state import StateStore
 
 from .test_main import app, local_http_app
 from .test_configuration_migration import START, dump_database
+from .timezone_fixtures import deployment_zone
 
 
 def archive_config(path, **settings):
@@ -121,7 +122,8 @@ def test_background_archive_does_not_block_task_transactions_and_stops_before_ex
         assert stopped.is_set()
 
 
-def test_worker_schedules_next_beijing_day_and_retries_failures(app, monkeypatch):
+def test_worker_schedules_next_beijing_day_and_retries_failures(app, monkeypatch, deployment_zone):
+    deployment_zone('Asia/Shanghai')
     from data_converge.archives import worker
     from data_converge.archives.settings import ArchiveSettings
     calls = []

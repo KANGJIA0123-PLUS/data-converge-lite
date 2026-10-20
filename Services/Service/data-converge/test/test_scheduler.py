@@ -372,7 +372,8 @@ def persistent_scheduler(tmp_path, calls, coverage_start, *, create=True, catchu
     dag = builder.build()
     executor = DAGExecutor(dag, lambda i: calls.append(i.instance_id), state_store=store)
     scheduler = TaskScheduler(dag, builder, executor, state_store=store,
-                              start_time=coverage_start, catchup_limit=catchup_limit)
+                              start_time=coverage_start, catchup_limit=catchup_limit,
+                              timezone="Asia/Shanghai")
     return scheduler, store
 
 

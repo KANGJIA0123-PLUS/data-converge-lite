@@ -11,7 +11,7 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +20,8 @@ import yaml
 from data_converge.sql_execution import client as client_module
 from data_converge.sql_execution import runner as runner_module
 from data_converge.errors import TaskExecutionError
+
+WINDOW_SQL = "SELECT toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')"
 
 
 def make_clickhouse_config(**values):
@@ -54,16 +56,17 @@ def capture_http(monkeypatch, body=b"", error=None):
 
 def test_execute_sql_posts_original_sql_and_parameterized_window(monkeypatch):
     calls, handlers = capture_http(monkeypatch, b'{"data":[[1]]}')
-    sql = "SELECT {start_time:DateTime}, {end_time:DateTime}"
+    sql = WINDOW_SQL
     rows = client_module.execute_sql(
         make_clickhouse_config(), sql, timeout=123,
-        start_time=datetime(2026, 9, 9, 1), end_time=datetime(2026, 9, 9, 2))
+        start_time=datetime(2026, 9, 9, 1, tzinfo=timezone.utc),
+        end_time=datetime(2026, 9, 9, 2, tzinfo=timezone.utc))
     request, timeout = calls[0]
     params = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
     assert request.get_method() == "POST"
     assert request.data == sql.encode()
-    assert params["param_start_time"] == ["2026-09-09 01:00:00"]
-    assert params["param_end_time"] == ["2026-09-09 02:00:00"]
+    assert params["param_start_time"] == ["1788915600"]
+    assert params["param_end_time"] == ["1788919200"]
     assert params["database"] == ["metrics"]
     assert params["default_format"] == ["JSONCompact"]
     assert params["wait_end_of_query"] == ["1"]
@@ -168,7 +171,7 @@ def test_runner_resolves_password_once_and_preserves_window(tmp_path, monkeypatc
     monkeypatch.setenv("TEST_CH_PASSWORD", "first password")
     sql_directory = tmp_path / "sql"
     sql_directory.mkdir()
-    (sql_directory / "hour.sql").write_text("SELECT {start_time:DateTime}, {end_time:DateTime}")
+    (sql_directory / "hour.sql").write_text(WINDOW_SQL)
     calls, _ = capture_http(monkeypatch)
     runner = runner_module.SQLTaskRunner(path, sql_directory, timeout=120)
     monkeypatch.setenv("TEST_CH_PASSWORD", "changed password")
@@ -180,7 +183,7 @@ def test_runner_resolves_password_once_and_preserves_window(tmp_path, monkeypatc
     for request, timeout in calls:
         assert base64.b64decode(request.get_header("Authorization").split()[1]) == b"user:first password"
         assert timeout == 120
-        assert "{start_time:DateTime}" in request.data.decode()
+        assert request.data.decode() == WINDOW_SQL
     urls = [urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query) for request, _ in calls]
     assert urls[0]["query_id"] != urls[1]["query_id"]
 
@@ -261,10 +264,11 @@ def test_real_http_posts_exact_sql_parameters_and_basic_auth(localhost_clickhous
     # Direct transport must not hand credentials to an environment-configured proxy.
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
     monkeypatch.setenv("no_proxy", "")
-    sql = "SELECT {start_time:DateTime}, {end_time:DateTime}"
+    monkeypatch.setattr(client_module, "system_timezone_name", lambda: "UTC")
+    sql = WINDOW_SQL
     rows = client_module.execute_sql(
         make_clickhouse_config(port=observed.port), sql, timeout=2,
-        start_time="2026-09-09 01:00:00", end_time="2026-09-09 02:00:00",
+        start_time="2026-09-09T01:00:00Z", end_time="2026-09-09T02:00:00Z",
         query_id="persisted-local-attempt")
     assert rows == [[7]]
     assert len(observed.requests) == 1
@@ -276,8 +280,9 @@ def test_real_http_posts_exact_sql_parameters_and_basic_auth(localhost_clickhous
         "database": ["metrics"], "default_format": ["JSONCompact"],
         "wait_end_of_query": ["1"], "max_execution_time": ["2"],
         "query_id": ["persisted-local-attempt"],
-        "param_start_time": ["2026-09-09 01:00:00"],
-        "param_end_time": ["2026-09-09 02:00:00"],
+        "param_start_time": ["1788915600"],
+        "param_end_time": ["1788919200"],
+        "param_system_timezone": ["UTC"],
     }
     assert "private" not in request["path"]
 

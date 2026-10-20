@@ -14,6 +14,8 @@ from data_converge.archives import maintenance
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.state import StateStore
 
+from .timezone_fixtures import deployment_zone
+
 NOW = datetime(2026, 10, 19, 16, 30, tzinfo=timezone.utc)
 
 
@@ -44,7 +46,8 @@ def add_migration(database, when, *, parent=None, name=None):
     return path
 
 
-def test_daily_snapshot_is_idempotent_by_beijing_date_and_preserves_database(database):
+def test_daily_snapshot_is_idempotent_by_beijing_date_and_preserves_database(database, deployment_zone):
+    deployment_zone('Asia/Shanghai')
     before = database.read_bytes()
     first = run(database)
     second = run(database, NOW + timedelta(hours=3))
@@ -57,7 +60,8 @@ def test_daily_snapshot_is_idempotent_by_beijing_date_and_preserves_database(dat
     assert maintenance.archive_directory(database).stat().st_mode & 0o777 == 0o700
 
 
-def test_beijing_midnight_creates_new_snapshot(database):
+def test_beijing_midnight_creates_new_snapshot(database, deployment_zone):
+    deployment_zone('Asia/Shanghai')
     before_midnight = NOW.replace(hour=15, minute=59)
     assert run(database, before_midnight)['created'] == 1
     assert run(database, before_midnight + timedelta(minutes=1))['created'] == 1

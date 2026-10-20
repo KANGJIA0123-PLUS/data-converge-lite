@@ -186,8 +186,8 @@ WITH card_agg AS (
         
     FROM modelmate_metric.t_mops_gpu_hour_dws AS dws
     -- 使用动态调度时间窗口参数
-    WHERE dws.window_time >= {start_time:DateTime}
-      AND dws.window_time <  {end_time:DateTime}
+    WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+      AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
       AND dws.sync_flag = 0
     GROUP BY dws.window_time, dws.node_id
 )
@@ -327,6 +327,6 @@ SELECT
 FROM modelmate_metric.t_mops_node_hour_dws n
 LEFT JOIN card_agg c
     ON n.window_time = c.window_time AND n.node_id = c.node_id
-WHERE n.window_time >= {start_time:DateTime}
-  AND n.window_time <  {end_time:DateTime}
+WHERE n.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND n.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND n.sync_flag = 0;

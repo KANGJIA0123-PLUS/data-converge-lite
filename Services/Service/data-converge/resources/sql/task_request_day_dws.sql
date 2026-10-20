@@ -31,7 +31,7 @@ INSERT INTO modelmate_metric.t_mops_request_day_dws (
 )
 SELECT
     -- 1. 时间维度：将小时窗口起始时间向下取整对齐到天开始时间
-    toStartOfDay(h.window_time) AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
 
     -- 2. 维度键
     h.agent_id,
@@ -100,10 +100,10 @@ SELECT
     any(h.sync_flag)                                    AS sync_flag
 
 FROM modelmate_metric.t_mops_request_hour_dws AS h
-WHERE h.window_time >= {start_time:DateTime}  -- 调度时传入的天级时间范围（如当天的 00:00:00，左闭右开）
-  AND h.window_time <  {end_time:DateTime}
+WHERE h.window_time >= toDateTime({start_time:UInt32}, 'UTC')  -- 调度时传入的天级时间范围（如当天的 00:00:00，左闭右开）
+  AND h.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND h.sync_flag = 0
 GROUP BY
-    window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     h.agent_id,
     h.server_name;

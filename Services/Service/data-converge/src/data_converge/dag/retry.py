@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from .models import TaskStatus
+from .builder import timeline_time
 
 
 def can_start_attempt(status: TaskStatus, attempts: int, retryable: bool,
@@ -21,4 +22,4 @@ def can_start_attempt(status: TaskStatus, attempts: int, retryable: bool,
         return False
     if isinstance(next_retry_at, str):
         next_retry_at = datetime.fromisoformat(next_retry_at)
-    return next_retry_at is None or next_retry_at <= now
+    return next_retry_at is None or timeline_time(next_retry_at) <= timeline_time(now)

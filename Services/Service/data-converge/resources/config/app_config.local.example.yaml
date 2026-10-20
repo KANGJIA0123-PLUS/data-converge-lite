@@ -18,7 +18,7 @@ dwd_ready:
 state:
   directory: ./var/lite-state
 scheduler:
-  timezone: Asia/Shanghai
+  # 调度时区跟随当前进程的 TZ 或系统时区配置。
   default_timeout_seconds: 300
   max_concurrent_tasks: 4
   poll_interval_seconds: 5

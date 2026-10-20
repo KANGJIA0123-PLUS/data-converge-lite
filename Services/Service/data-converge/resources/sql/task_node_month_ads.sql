@@ -126,7 +126,7 @@ INSERT INTO modelmate_metric.t_mops_node_month_ads
 WITH card_agg AS (
     SELECT
         -- 将 window_time 强制对齐到目标月份 1 号 00:00:00（自动感知夏令时）
-        toStartOfMonth(dws.window_time, 'Asia/Shanghai') AS window_time,  -- dws.window_time
+        toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,  -- dws.window_time
         dws.node_id,                                                      -- dws.node_id
         
         -- 基础算力卡性能指标二次汇聚
@@ -197,14 +197,14 @@ WITH card_agg AS (
         min(dws.idle_time_ai_core_util_min)  AS idle_time_ai_core_util_min    -- dws.idle_time_ai_core_util_min
     FROM modelmate_metric.t_mops_gpu_month_dws AS dws  -- 源表别名 dws
     -- 改为动态时间范围传参
-    WHERE dws.window_time >= {start_time:DateTime}
-      AND dws.window_time <  {end_time:DateTime}
+    WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+      AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
       AND dws.sync_flag = 0
     GROUP BY dws.window_time, dws.node_id
 )
 SELECT
     -- 确保写入 ADS 表的 window_time 准确对齐到月首 00:00:00
-    toStartOfMonth(n.window_time, 'Asia/Shanghai') AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
     n.node_id,
 
     -- 2. 节点维表/属性字段
@@ -352,6 +352,6 @@ FROM modelmate_metric.t_mops_node_month_dws n
 LEFT JOIN card_agg c
     ON n.window_time = c.window_time
    AND n.node_id = c.node_id
-WHERE n.window_time >= {start_time:DateTime}
-  AND n.window_time <  {end_time:DateTime}
+WHERE n.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND n.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND n.sync_flag = 0;

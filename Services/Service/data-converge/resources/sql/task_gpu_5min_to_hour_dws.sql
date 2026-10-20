@@ -66,7 +66,7 @@ INSERT INTO modelmate_metric.t_mops_gpu_hour_dws (
 )
 SELECT
     -- 1. 时间维度：对齐到 1 小时窗口起点
-    toStartOfHour(window_time)                                             AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                                             AS window_time,
 
     -- 2. 核心维度键 (GROUP BY)
     ai_card_type,
@@ -92,7 +92,7 @@ SELECT
     avg(ai_core_util_avg)                                                  AS ai_core_util_avg,
     max(ai_core_util_max)                                                  AS ai_core_util_max,
     min(ai_core_util_min)                                                  AS ai_core_util_min,
-    argMax(ai_core_util_argMax, window_time)                               AS ai_core_util_argMax,
+    argMax(ai_core_util_argMax, f.window_time)                               AS ai_core_util_argMax,
 
     avg(hbm_bandwidth_util_avg)                                            AS hbm_bandwidth_util_avg,
     max(hbm_bandwidth_util_max)                                            AS hbm_bandwidth_util_max,
@@ -114,7 +114,7 @@ SELECT
     max(bandwidth_rx_max)                                                  AS bandwidth_rx_max,
     min(bandwidth_rx_min)                                                  AS bandwidth_rx_min,
     
-    argMax(ai_card_health_argMax, window_time)                             AS ai_card_health_argMax,
+    argMax(ai_card_health_argMax, f.window_time)                             AS ai_card_health_argMax,
 
     -- 5. 健康/异常计数器累加与占比重新计算（加权平均）
     sum(ai_card_normal_state_counter)                                      AS ai_card_normal_state_counter,
@@ -148,11 +148,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_gpu_5min_dws AS f
 /* 调度时按小时传入时间约束区间，例如按小时增量调度 */
-WHERE f.window_time >=  {start_time:DateTime}
-  AND f.window_time <  {end_time:DateTime}
+WHERE f.window_time >=  toDateTime({start_time:UInt32}, 'UTC')
+  AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND f.sync_flag = 0 -- 仅针对探针汇聚数据进行二次汇聚
 GROUP BY
-    toStartOfHour(f.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     f.ai_card_type,
     f.ai_card_id,
     f.chip_id;

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import OrderedDict
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 from .message import DWD_TYPES, ReadyMessageError, parse_message
 from .ports import ReadinessState, ReadySignalSource, SignalSourceError
@@ -32,6 +32,7 @@ class ReadyCoordinator:
         self._warnings = OrderedDict()
 
     def poll(self, now):
+        now = now.astimezone(timezone.utc)
         completed = set()
         # Limit both message count and time between dispatch/stop checks. One
         # in-progress Redis command retains its configured socket timeout.
@@ -79,17 +80,19 @@ class ReadyCoordinator:
     def reason(self, instance, now):
         if instance.task.aggregation_interval != 'PT5M':
             return None
+        now = now.astimezone(timezone.utc)
+        window_start = instance.data_start.astimezone(timezone.utc)
         missing = sorted(DWD_TYPES - self.store.get_dwd_types(instance.data_start))
         if not missing:
-            self._warnings.pop(instance.data_start, None)
+            self._warnings.pop(window_start, None)
             return None
-        if now >= instance.data_end + timedelta(seconds=self.wait_warning_seconds):
-            previous = self._warnings.get(instance.data_start)
+        if now >= instance.data_end.astimezone(timezone.utc) + timedelta(seconds=self.wait_warning_seconds):
+            previous = self._warnings.get(window_start)
             if previous is None or now >= previous + timedelta(seconds=self.wait_warning_seconds):
                 logger.warning('DWD_WAIT_TIMEOUT: window=%s missing=%s; execution remains blocked',
                                instance.data_start.isoformat(), ','.join(missing))
-                self._warnings[instance.data_start] = now
-                self._warnings.move_to_end(instance.data_start)
+                self._warnings[window_start] = now
+                self._warnings.move_to_end(window_start)
                 if len(self._warnings) > 1024:
                     self._warnings.popitem(last=False)
         return 'DWD_NOT_READY:' + ','.join(missing)

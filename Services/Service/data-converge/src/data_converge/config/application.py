@@ -21,6 +21,7 @@ from data_converge.archives.settings import ArchiveSettings
 from .loader import ConfigLoader
 from .cron import compile_cron_groups
 from .leadership import LeadershipSettings
+from data_converge.time_policy import system_timezone_name
 
 RESOURCES = Path(__file__).resolve().parents[3] / 'resources'
 DEFAULT_APP_CONFIG_PATH = RESOURCES / 'config/app_config.yaml'
@@ -34,7 +35,7 @@ class StartupError(ValueError):
 class SchedulerSettings:
     """Validated scheduling policy; YAML dictionaries stop at this boundary."""
 
-    timezone: str = 'Asia/Shanghai'
+    timezone: str = field(default_factory=system_timezone_name, init=False)
     default_timeout_seconds: int = 300
     max_concurrent_tasks: int = 4
     poll_interval_seconds: int = 5
@@ -43,8 +44,6 @@ class SchedulerSettings:
     retry_delay_seconds: int = 30
 
     def __post_init__(self) -> None:
-        if self.timezone != 'Asia/Shanghai':
-            raise StartupError('TIMEZONE_MUST_BE_ASIA_SHANGHAI')
         for option in fields(self):
             if option.name == 'timezone':
                 continue
@@ -108,7 +107,7 @@ def settings(config: dict[str, Any]) -> SchedulerSettings:
         raise StartupError('SCHEDULER_SETTING_INVALID')
     return SchedulerSettings(**{
         option.name: values[option.name]
-        for option in fields(SchedulerSettings) if option.name in values
+        for option in fields(SchedulerSettings) if option.init and option.name in values
     })
 
 

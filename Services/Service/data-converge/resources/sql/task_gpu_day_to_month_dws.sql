@@ -73,7 +73,7 @@ INSERT INTO modelmate_metric.t_mops_gpu_month_dws (
 )
 SELECT
     -- 1. 时间维度：取当月 1 号 00:00:00 作为月窗口起点
-    toStartOfMonth(d.window_time)                                            AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                                            AS window_time,
 
     -- 2. 核心维度键 (GROUP BY)
     d.ai_card_type,
@@ -174,11 +174,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_gpu_day_dws AS d
 /* 按月调度：通常在每月 1 号凌晨运行，处理上一个自然月全天的数据 */
-WHERE d.window_time >= {start_time:DateTime}
-  AND d.window_time <  {end_time:DateTime}
+WHERE d.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND d.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND d.sync_flag = 0
 GROUP BY
-    toStartOfMonth(d.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     d.ai_card_type,
     d.ai_card_id,
     d.chip_id;

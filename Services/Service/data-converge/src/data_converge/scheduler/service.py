@@ -18,6 +18,9 @@ from data_converge.dag import (
     DAGExecutor,
     ExecutionReport,
 )
+from data_converge.dag.builder import shift_elapsed, timeline_time
+from data_converge.time_policy import system_timezone
+from .cron import next_fire_time
 
 
 logger = logging.getLogger(__name__)
@@ -41,7 +44,7 @@ class TaskScheduler:
         dag: DAG,
         dag_builder: DAGBuilder,
         dag_executor: DAGExecutor,
-        timezone: str = "Asia/Shanghai",
+        timezone: str | None = None,
         misfire_grace_time: int = 120,
         *,
         state_store: StateStore | None = None,
@@ -53,7 +56,7 @@ class TaskScheduler:
         self.dag = dag
         self.dag_builder = dag_builder
         self.dag_executor = dag_executor
-        self.timezone = ZoneInfo(timezone)
+        self.timezone = ZoneInfo(timezone) if timezone is not None else system_timezone()
         self.misfire_grace_time = misfire_grace_time
         self.state_store = state_store or dag_executor.state_store
         if self.state_store is not dag_executor.state_store:
@@ -73,6 +76,7 @@ class TaskScheduler:
         self._stop_requested = False
         self.stop_check: Callable[[], bool] | None = None
         self._triggers: dict[str, CronTrigger] = {}
+        self._wall_triggers: dict[str, CronTrigger] = {}
         self._jobs: tuple[CronGroup, ...] = ()
         self._registered = False
 
@@ -85,6 +89,10 @@ class TaskScheduler:
             for taskname in job.tasknames
         }
         self._jobs = jobs
+        self._wall_triggers = {
+            taskname: CronTrigger.from_crontab(self.dag.get_task(taskname).cron, timezone="UTC")
+            for taskname in self._triggers
+        }
         for job in jobs:
             logger.info(
                 "已注册Cron任务组：job_id=%s, name=%s, "
@@ -134,13 +142,14 @@ class TaskScheduler:
         task_start = self.task_starts.get(taskname)
         if self.start_time is None:
             return task_start
-        return max(self.start_time, task_start) if task_start is not None else self.start_time
+        return (max(self.start_time, task_start, key=timeline_time)
+                if task_start is not None else self.start_time)
 
     def _validate_window_start(self, instance: TaskInstance) -> None:
-        if self.start_time and instance.data_start < self.start_time:
+        if self.start_time and timeline_time(instance.data_start) < timeline_time(self.start_time):
             raise ValueError("Requested window begins before the initialized coverage_start")
         task_start = self.task_starts.get(instance.taskname)
-        if task_start and instance.data_start < task_start:
+        if task_start and timeline_time(instance.data_start) < timeline_time(task_start):
             raise ValueError("TASK_WINDOW_BEFORE_EFFECTIVE_START")
 
     def _log_group_result(self, scheduled_time: datetime, report: ExecutionReport) -> None:
@@ -239,19 +248,27 @@ class TaskScheduler:
         next_cursors = {}
         for taskname in self.dag.topological_order:
             trigger = self._triggers[taskname]
+            wall_trigger = self._wall_triggers[taskname]
+            calendar = self.dag.get_task(taskname).aggregation_interval in ("P1D", "P1M")
             effective_start = self._effective_start(taskname)
             cursor = cursors.get(taskname)
-            if cursor is None or cursor < effective_start:
-                cursor = trigger.get_next_fire_time(None, effective_start)
+            if cursor is not None:
+                cursor = cursor.astimezone(self.timezone)
+            if cursor is None or timeline_time(cursor) < timeline_time(effective_start):
+                cursor = next_fire_time(
+                    trigger, wall_trigger, effective_start, move_missing=calendar)
             count = 0
-            while cursor is not None and cursor <= now and count < self.catchup_limit:
+            while (cursor is not None and timeline_time(cursor) <= timeline_time(now)
+                   and count < self.catchup_limit):
                 instance = self.dag_builder.create_instance(self.dag, taskname, cursor.astimezone(self.timezone))
                 # First deployment starts only with whole new windows. It never
                 # silently replays the partial hour/day/month before the cutover.
-                if instance.data_start >= effective_start:
+                if timeline_time(instance.data_start) >= timeline_time(effective_start):
                     instances.append(instance)
                 count += 1
-                cursor = trigger.get_next_fire_time(cursor, cursor)
+                cursor = next_fire_time(
+                    trigger, wall_trigger, shift_elapsed(cursor, timedelta(microseconds=1)),
+                    previous=cursor, move_missing=calendar)
             if cursor is not None:
                 next_cursors[taskname] = cursor
         return SchedulePlan(tuple(instances), next_cursors)
@@ -262,7 +279,7 @@ class TaskScheduler:
             windows = list(self.ready_poller(now))
             # Blocking Redis reads may cross a window boundary. Advance the
             # supplied clock, including an explicit --now, by elapsed time.
-            now += timedelta(seconds=max(0.0, time.monotonic() - started))
+            now = shift_elapsed(now, timedelta(seconds=max(0.0, time.monotonic() - started)))
             self.enqueue_ready_windows(windows, now=now)
         return now
 
@@ -278,12 +295,13 @@ class TaskScheduler:
             start = start.astimezone(self.timezone)
             if start.minute % 5 or start.second or start.microsecond:
                 raise ValueError("DWD window_start must align to a five-minute boundary")
-            end = start + timedelta(minutes=5)
-            if start < self.start_time or end > now:
+            end = shift_elapsed(start, timedelta(minutes=5))
+            if (timeline_time(start) < timeline_time(self.start_time)
+                    or timeline_time(end) > timeline_time(now)):
                 continue
             for taskname in self.dag.topological_order:
                 if (self.dag.tasks[taskname].aggregation_interval == "PT5M"
-                        and start >= self._effective_start(taskname)):
+                        and timeline_time(start) >= timeline_time(self._effective_start(taskname))):
                     instances.append(self.dag_builder.create_instance(self.dag, taskname, end))
         # Events may precede cron by a minute, but share the same window identity.
         # Never advance cron cursors here: they still enumerate missing windows.
@@ -298,8 +316,10 @@ class TaskScheduler:
             scheduled = self._normalize_time(datetime.fromisoformat(record["scheduled_time"]))
             instance = self.dag_builder.create_instance(self.dag, record["taskname"], scheduled)
             if (instance.instance_id != record["instance_id"]
-                    or instance.data_start != datetime.fromisoformat(record["data_start"])
-                    or instance.data_end != datetime.fromisoformat(record["data_end"])):
+                    or timeline_time(instance.data_start)
+                    != timeline_time(datetime.fromisoformat(record["data_start"]))
+                    or timeline_time(instance.data_end)
+                    != timeline_time(datetime.fromisoformat(record["data_end"]))):
                 raise ValueError(f"Persisted window no longer matches task definition: {record['instance_id']}")
             self._validate_window_start(instance)
             instances.append(instance)

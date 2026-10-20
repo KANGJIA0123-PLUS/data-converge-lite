@@ -5,7 +5,7 @@ SELECT
     -- ============================================================================
     -- 1. 时间粒度与维度分组 (Group By Keys)
     -- ============================================================================
-    toStartOfFiveMinutes(r.metric_datetime)              AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})              AS window_time,
     r.server_name,
     r.modelinstance_id,
     r.container_id,
@@ -38,7 +38,7 @@ SELECT
     argMax(r.request_received_total, r.metric_datetime)     AS request_received_total_argMax,
     sum(r.request_received_total_delta)                  AS request_received_total_delta,
     -- 【动态化】：QPM 改为通过动态分钟数计算 (区间秒数 / 60.0)
-    cast(sum(r.request_received_total_delta) / (dateDiff('second', {start_time:DateTime}, {end_time:DateTime}) / 60.0) AS Float32) AS request_received_total_qpm_avg,
+    cast(sum(r.request_received_total_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0) AS Float32) AS request_received_total_qpm_avg,
 
     argMax(r.request_failed_total, r.metric_datetime)       AS request_failed_total_argMax,
     sum(r.request_failed_total_delta)                    AS request_failed_total_delta,
@@ -87,9 +87,9 @@ SELECT
     sum(r.generation_tokens_total_delta)                 AS generation_tokens_total_delta,
 
     -- 【动态化】：Token 速率分母改为动态秒数 (dateDiff)
-    cast(sum(r.prompt_tokens_total_delta) / toFloat32(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32)     AS prompt_tokens_total_delta_rate_avg,
-    cast(sum(r.generation_tokens_total_delta) / toFloat32(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32) AS generation_tokens_total_delta_rate_avg,
-    cast((sum(r.prompt_tokens_total_delta) + sum(r.generation_tokens_total_delta)) / toFloat32(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32) AS total_throughput_rate,
+    cast(sum(r.prompt_tokens_total_delta) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32)     AS prompt_tokens_total_delta_rate_avg,
+    cast(sum(r.generation_tokens_total_delta) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS generation_tokens_total_delta_rate_avg,
+    cast((sum(r.prompt_tokens_total_delta) + sum(r.generation_tokens_total_delta)) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS total_throughput_rate,
 
     -- 引擎报出的参考吞吐率与增量
     avg(r.avg_prompt_throughput_toks_per_s)              AS avg_prompt_throughput_toks_per_s_avg,
@@ -258,11 +258,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_modelmetric_realtime_dwd AS r
 -- 建议按具体调度批次传入时间过滤条件，例如汇聚上个5分钟窗口的数据：
-WHERE r.metric_datetime >= {start_time:DateTime}
-  AND r.metric_datetime <  {end_time:DateTime}
+WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, 'UTC')
+  AND r.metric_datetime <  toDateTime({end_time:UInt32}, 'UTC')
   AND r.sync_flag = 0 -- 只针对探针实时上报的数据做 5 分钟汇聚
 GROUP BY
-    window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     r.server_name,
     r.modelinstance_id,
     r.container_id;

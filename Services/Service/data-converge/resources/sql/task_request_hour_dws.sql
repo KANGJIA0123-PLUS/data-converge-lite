@@ -31,7 +31,7 @@ INSERT INTO modelmate_metric.t_mops_request_hour_dws (
 )
 SELECT
     -- 1. 时间维度：将 5 分钟窗口起始时间向下取整对齐到小时
-    toStartOfHour(f.window_time) AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
 
     -- 2. 维度键
     f.agent_id,
@@ -100,10 +100,10 @@ SELECT
     any(f.sync_flag)                                    AS sync_flag
 
 FROM modelmate_metric.t_mops_request_5min_dws AS f
-WHERE f.window_time >= {start_time:DateTime}  -- 调度时传入的小时/天级时间范围（左闭右开）
-  AND f.window_time <  {end_time:DateTime}
+WHERE f.window_time >= toDateTime({start_time:UInt32}, 'UTC')  -- 调度时传入的小时/天级时间范围（左闭右开）
+  AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND f.sync_flag = 0
 GROUP BY
-    window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     f.agent_id,
     f.server_name;

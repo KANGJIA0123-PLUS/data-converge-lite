@@ -1,15 +1,15 @@
 -- 5.2.2 模型实例汇聚 由t_mops__modelmetric_instance__5min_dws -> t_mops__modelmetric_instance__hour_dws
 -- 为了在汇聚到小时表时消除TP组内多容器重复计算，在ETL中先将5min数据按group_id提取主节点/平均值，再按小时汇总
 -- 物理去重在底层（Group层），逻辑隔离在中层（Role层），大盘汇总在顶层（Instance/ADS层）
--- [ADS层：实例与服务级] ── GROUP BY window_time, server_name, modelinstance_id
+-- [ADS层：实例与服务级] ── GROUP BY toDateTime({start_time:UInt32}, {system_timezone:String}), server_name, modelinstance_id
 --      ▲
 --      │ (合并 P/D 角色：算实例总吞吐、总并发、实例级 KV Cache 平均)
 --      │
--- [DWS最外层：角色级 (P/D)(DWS层做到这里)] ── GROUP BY window_time, server_name, modelinstance_id, process_role
+-- [DWS最外层：角色级 (P/D)(DWS层做到这里)] ── GROUP BY toDateTime({start_time:UInt32}, {system_timezone:String}), server_name, modelinstance_id, process_role
 --      ▲
 --      │ (跨组累加：把 P1_Group + P2_Group 物理累加，隔离 TTFT/TPOT 时延)
 --      │
--- [DWS最内层：逻辑组级 (Group)] ── GROUP BY window_time, server_name, modelinstance_id, process_role, group_id
+-- [DWS最内层：逻辑组级 (Group)] ── GROUP BY toDateTime({start_time:UInt32}, {system_timezone:String}), server_name, modelinstance_id, process_role, group_id
 --      ▲
 --      │ (组内 MAX 去重：抹除 TP/PP 8卡重复上报，锁住 Rank 0)
 --      │
@@ -173,7 +173,7 @@ SELECT
     -- ============================================================================
     -- 1. 时间粒度与逻辑维度分组（彻底抹除 container_id 和 group_id）
     -- ============================================================================
-    toStartOfHour(e.window_time)                          AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                          AS window_time,
     e.server_name,                                        -- 推理服务名称
     e.modelinstance_id,                                   -- 实例 ID
     e.process_role,                                       -- 必须保留：区分 P/D/Coordinator
@@ -201,7 +201,7 @@ SELECT
     -- ============================================================================
     argMax(e.request_received_total_argMax, e.window_time)          AS request_received_total_argMax,
     sum(e.group_request_received_delta)                           AS request_received_total_delta,
-    cast(sum(e.group_request_received_delta) / (dateDiff('second', {start_time:DateTime}, {end_time:DateTime}) / 60.0) AS Float32)   AS request_received_total_qpm_avg,
+    cast(sum(e.group_request_received_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0) AS Float32)   AS request_received_total_qpm_avg,
 
     argMax(e.request_failed_total_argMax, e.window_time)            AS request_failed_total_argMax,
     sum(e.group_request_failed_delta)                             AS request_failed_total_delta,
@@ -234,9 +234,9 @@ SELECT
     argMax(e.generation_tokens_total_argMax, e.window_time)          AS generation_tokens_total_argMax,
     sum(e.group_generation_tokens_delta)                          AS generation_tokens_total_delta,
 
-    cast(sum(e.group_prompt_tokens_delta) / (dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32)    AS prompt_tokens_total_delta_rate_avg,
-    cast(sum(e.group_generation_tokens_delta) / (dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32) AS generation_tokens_total_delta_rate_avg,
-    cast((sum(e.group_prompt_tokens_delta) + sum(e.group_generation_tokens_delta)) / (dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32) AS total_throughput_rate,
+    cast(sum(e.group_prompt_tokens_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32)    AS prompt_tokens_total_delta_rate_avg,
+    cast(sum(e.group_generation_tokens_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS generation_tokens_total_delta_rate_avg,
+    cast((sum(e.group_prompt_tokens_delta) + sum(e.group_generation_tokens_delta)) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS total_throughput_rate,
 
     sum(e.avg_prompt_throughput_toks_per_s_avg)           AS avg_prompt_throughput_toks_per_s_avg,
     sum(e.group_avg_prompt_throughput_delta)              AS avg_prompt_throughput_toks_per_s_delta,
@@ -469,8 +469,8 @@ FROM
         any(f.sync_flag)                                  AS sync_flag
 
     FROM modelmate_metric.t_mops__modelmetric_instance__5min_dws AS f
-    WHERE f.window_time >= {start_time:DateTime}
-      AND f.window_time <  {end_time:DateTime}
+    WHERE f.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+      AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
       AND f.sync_flag = 0
     -- 子查询按 group_id 聚集（组内去重）
     GROUP BY
@@ -482,7 +482,7 @@ FROM
 ) AS e
 -- 【DWS 最外层】：按 1 小时 + process_role 向上聚合（抹除 group_id，跨组物理累加）
 GROUP BY
-    toStartOfHour(e.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     e.server_name,
     e.modelinstance_id,
     e.process_role;

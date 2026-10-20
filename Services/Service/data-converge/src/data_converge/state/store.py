@@ -168,7 +168,8 @@ class StateStore:
     def list_instances(self, limit: int = 20) -> list[dict]:
         if limit < 1:
             raise ValueError("limit must be positive")
-        rows = self._connection().execute("SELECT * FROM task_instances ORDER BY data_end DESC, taskname LIMIT ?", (limit,)).fetchall()
+        rows = self._connection().execute(
+            "SELECT * FROM task_instances ORDER BY julianday(data_end) DESC, taskname LIMIT ?", (limit,)).fetchall()
         return [dict(row) for row in rows]
 
     def history_available(self) -> bool:

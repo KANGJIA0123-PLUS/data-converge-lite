@@ -5,6 +5,7 @@ from datetime import datetime
 from data_converge.config.application import load_app_config, state_directory
 from data_converge.dwd_ready.config import load_ready_config
 from data_converge.health import heartbeat_directory
+from data_converge.time_policy import system_timezone_name
 from .archives import archive_check
 from .checks import (credential_files, definition_check, failure, heartbeat_check,
                      log_check, logging_settings_check, module_check, protected_check,
@@ -98,7 +99,7 @@ def dwd_status(path, *, limit=20, window=None):
         with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
             rows = list_windows(store, ready, limit=limit, selected=parse_window(window) if window else None)
         late = sum(row['warning_due'] for row in rows)
-        result = check('dwd', 'WARN' if late else 'PASS', '窗口信号状态（北京时间）',
+        result = check('dwd', 'WARN' if late else 'PASS', f'窗口信号状态（{system_timezone_name()}）',
                        dict(windows=len(rows), late_windows=late, wait_warning_seconds=ready['wait_warning_seconds']),
                        '当前 WAITING 窗口等待上游补齐；historical=true 仅展示历史信号，不属于当前就绪告警；'
                        'BEFORE_COVERAGE/WINDOW_OPEN 不属于当前完整覆盖窗口。')

@@ -31,7 +31,7 @@ INSERT INTO modelmate_metric.t_mops_request_5min_dws (
 )
 SELECT
     -- 1. 时间维度：将 1 分钟级 metric_datetime 向下取整对齐到 5 分钟窗口
-    toStartOfInterval(r.metric_datetime, INTERVAL 5 MINUTE) AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
 
     -- 2. 维度键
     r.agent_id,
@@ -80,10 +80,10 @@ SELECT
     any(r.sync_flag)                                      AS sync_flag
 
 FROM modelmate_metric.t_mops_request_realtime_dwd AS r
-WHERE r.metric_datetime >= {start_time:DateTime}  -- 调度时传入的时间范围（左闭右开）
-  AND r.metric_datetime <  {end_time:DateTime}
+WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, 'UTC')  -- 调度时传入的时间范围（左闭右开）
+  AND r.metric_datetime <  toDateTime({end_time:UInt32}, 'UTC')
   AND r.sync_flag = 0
 GROUP BY
-    window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     r.agent_id,
     r.server_name;

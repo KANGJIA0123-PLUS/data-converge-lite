@@ -9,6 +9,7 @@ from data_converge.application import next_boundary, parse_time
 from data_converge.config.application import StartupError
 from data_converge.config.evolution import compare_manifests, manifest_digest
 from data_converge.config.state_binding import ledger_binding
+from data_converge.dag.builder import timeline_time
 
 from .baseline import load_baseline
 
@@ -53,14 +54,15 @@ def _task_blockers(constraints, changes, effective, coverage):
     blockers = []
     if constraints['running']:
         blockers.append({'code': 'CONFIG_RUNNING_INSTANCES', 'count': constraints['running']})
-    if effective is not None and effective < coverage:
+    if effective is not None and timeline_time(effective) < timeline_time(coverage):
         blockers.append({'code': 'CONFIG_EFFECTIVE_BEFORE_COVERAGE'})
     for name, values in constraints['tasks'].items():
         if values['unresolved']:
             blockers.append({'code': 'CONFIG_TASKS_UNRESOLVED', 'task': name,
                              'count': values['unresolved']})
         if name not in changes['removed'] and effective is not None:
-            if values['latest_end'] is not None and effective < values['latest_end']:
+            if (values['latest_end'] is not None and
+                    timeline_time(effective) < timeline_time(values['latest_end'])):
                 blockers.append({'code': 'CONFIG_TASK_WINDOW_OVERLAP', 'task': name})
     return blockers
 
@@ -93,7 +95,8 @@ def build_plan(application, store, *, previous_config=None, effective_from=None,
               for name in current['tasks']}
     required, blockers = _requirements(previous, current, changes, previous_revision is None)
     recovery = store.legacy_recovery()
-    lower_bound = max(coverage, parse_time(recovery['cutover'])) if recovery is not None else coverage
+    lower_bound = (max(coverage, parse_time(recovery['cutover']), key=timeline_time)
+                   if recovery is not None else coverage)
     blockers += _task_blockers(constraints, changes, effective, lower_bound)
     public = {'legacy': previous_revision is None, 'previous_revision': previous_revision,
               'revision': manifest_digest(current), 'coverage_start': coverage.isoformat(),

@@ -60,7 +60,7 @@ INSERT INTO modelmate_metric.t_mops_node_day_dws (
 )
 SELECT
     -- 1. 时间窗口切分 (按天截断，如 2026-08-04 00:00:00)
-    toStartOfDay(h.window_time)                          AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                          AS window_time,
 
     -- 2. 维度字段
     coalesce(h.node_type, 'UNKNOWN')                     AS node_type,
@@ -148,11 +148,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_node_hour_dws AS h
 -- 【动态化优化】使用外部传入的起止时间范围替代固定死的时间计算
-WHERE h.window_time >= {start_time:DateTime}
-  AND h.window_time <  {end_time:DateTime}
+WHERE h.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND h.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND h.sync_flag = 0
 GROUP BY
-    toStartOfDay(h.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     coalesce(h.node_type, 'UNKNOWN'),
     h.node_id,
     h.node_ip;

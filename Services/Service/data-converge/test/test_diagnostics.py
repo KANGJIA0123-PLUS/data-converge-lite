@@ -11,6 +11,7 @@ from data_converge.dag import TaskStatus
 from data_converge.dwd_ready.message import DWD_TYPES
 from data_converge.state import StateStore
 from .test_main import app
+from .timezone_fixtures import deployment_zone
 
 
 def run_json(app, capsys, *args):
@@ -192,7 +193,8 @@ def test_inspect_text_exposes_evidence_without_a_large_json_blob(app, capsys):
     assert '错误证据: 未记录' in text
 
 
-def test_window_times_normalize_utc_and_wait_stops_after_ready(app):
+def test_window_times_normalize_utc_and_wait_stops_after_ready(app, deployment_zone):
+    deployment_zone('Asia/Shanghai')
     from data_converge.diagnostics.ledger import DiagnosticLedger
     from data_converge.diagnostics.windows import list_windows, parse_window
 

@@ -291,8 +291,8 @@ SELECT
 FROM modelmate_metric.t_mops_node_month_ads n
 INNER JOIN modelmate_metric.t_mops_org_resource_flat_local r
     ON n.node_ip = r.node_ip
-WHERE n.window_time >= {start_time:DateTime}
-  AND n.window_time <  {end_time:DateTime}
+WHERE n.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND n.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND r.is_deleted = 0
   AND n.sync_flag = 0
 GROUP BY

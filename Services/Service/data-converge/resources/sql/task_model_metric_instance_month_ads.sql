@@ -1,8 +1,6 @@
 -- 6.1.4 由 t_mops__modelmetric_instance__month_dws -> t_mops__modelmetric_instance__month_ads
--- 修复点说明：
--- 1. GROUP BY 中的 window_time 必须使用 toStartOfMonth(window_time)，否则如果底层的 window_time 是具体时间戳或日粒度，会导致按月 ADS 汇聚时无法正确聚合成整月。
--- 2. QPM 计算修复：原来写的 `toDaysInMonth(window_time) * 1440.0` 在某些 ClickHouse 版本或入参类型下可能存在兼容性问题，且月度平均 QPM 的分母应该为该月总分钟数（即当月天数 * 1440 分钟）。标准写法是用 `dateDiff('minute', toStartOfMonth(window_time), toStartOfMonth(window_time) + INTERVAL 1 MONTH)`。
--- 3. Token 速率分母修复：原代码在计算 prompt/generation 速率时使用的 `dateDiff('second', toStartOfMonth(window_time), toStartOfMonth(window_time) + INTERVAL 1 MONTH) / 60.0` 实际上算的是"分钟数"，但字段名带了 `_rate_avg`（通常秒级或分级需要明确分母单位）。若原设计要求秒级速率，分母应为整月总秒数；若为分钟级速率，则应除以总分钟数。此处统一修正为整月总秒数作为秒级吞吐率的分母。
+-- 月窗口由调度器按系统本地日历计算，SQL 使用同一绝对起点分组。
+-- QPM 和秒级吞吐率分别使用窗口实际分钟数、秒数，包含夏令时变化。
 
 INSERT INTO modelmate_metric.t_mops__modelmetric_instance__month_ads
 (
@@ -115,7 +113,7 @@ SELECT
     -- ============================================================================
     -- 1. 时间粒度与核心维度（抹除 process_role，向上汇聚到实例级）
     -- ============================================================================
-    toStartOfMonth(dws.window_time)                          AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                          AS window_time,
     dws.server_name,
     dws.modelinstance_id,
 
@@ -145,7 +143,7 @@ SELECT
     -- 动态时间范围 QPM：使用外部传入的具体时间总分钟数作为分母
     CAST(coalesce(
         sumIf(dws.request_received_total_delta, dws.process_role IN ('coordinator', 'single'))
-        / nullIf(dateDiff('second', {start_time:DateTime}, {end_time:DateTime}) / 60.0, 0.0),
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0, 0.0),
         0.0
     ) AS Float32) AS coord_request_received_total_qpm_avg,
 
@@ -232,17 +230,17 @@ SELECT
 
     CAST(coalesce(
         sumIf(dws.prompt_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_prompt_tokens_total_delta_rate_avg,
     CAST(coalesce(
         sumIf(dws.generation_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_generation_tokens_total_delta_rate_avg,
     CAST(coalesce(
         (sumIf(dws.prompt_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')) + sumIf(dws.generation_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_total_throughput_rate,
 
@@ -384,10 +382,10 @@ SELECT
     any(dws.sync_flag)                                                                                              AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__month_dws AS dws
-WHERE dws.window_time >= {start_time:DateTime}
-  AND dws.window_time <  {end_time:DateTime}
+WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND dws.process_role != 'worker' -- 【关键过滤】：彻底丢弃 worker 数据
 GROUP BY
-    toStartOfMonth(dws.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     dws.server_name,
     dws.modelinstance_id

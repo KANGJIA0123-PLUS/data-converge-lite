@@ -7,11 +7,10 @@ import logging
 import uuid
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import cached_property
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from data_converge.config.application import (
     ApplicationDefinition,
@@ -26,11 +25,13 @@ from data_converge.config.evolution import (
 )
 from data_converge.config.state_binding import ledger_binding
 from data_converge.dag import ExecutionReport, TaskStatus
+from data_converge.dag.builder import timeline_time
 from data_converge.health import healthcheck, heartbeat_directory
 from data_converge.observability.state import binding_details
 from data_converge.runtime import RuntimeDependencies, open_runtime, service_heartbeat
 from data_converge.state import StateStore
 from data_converge.coordination import admit_writer, acquire_state
+from data_converge.time_policy import system_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +49,14 @@ def parse_time(value: str) -> datetime:
         instant = datetime.fromisoformat(value)
         if instant.tzinfo is None or instant.utcoffset() is None:
             raise ValueError
-        return instant.astimezone(ZoneInfo('Asia/Shanghai'))
     except (ValueError, TypeError):
         raise StartupError('TIME_REQUIRES_ISO8601_WITH_TIMEZONE') from None
+    return instant.astimezone(system_timezone())
 
 
 def next_boundary(value: datetime) -> datetime:
     floor = value.replace(minute=value.minute - value.minute % 5, second=0, microsecond=0)
-    return floor if floor == value else floor + timedelta(minutes=5)
+    return floor if floor == value else datetime.fromtimestamp(floor.timestamp() + 300, value.tzinfo)
 
 
 def initialize_state(store: StateStore, fingerprint: str, start_time: datetime | None) -> None:
@@ -67,7 +68,7 @@ def initialize_state(store: StateStore, fingerprint: str, start_time: datetime |
         if start_time and start_time.isoformat() != previous:
             raise StartupError('STATE_START_CANNOT_BE_CHANGED')
     else:
-        start_time = start_time or next_boundary(datetime.now(ZoneInfo('Asia/Shanghai')))
+        start_time = start_time or next_boundary(datetime.now(system_timezone()))
         store.set_meta('coverage_start', start_time.isoformat())
     store.set_meta('binding', fingerprint)
 
@@ -157,7 +158,7 @@ class Application:
             revision=manifest_digest(self.manifest),
             task_starts={name: coverage for name in self.definition.dag.tasks},
             binding=fingerprint, migration_id=uuid.uuid4().hex,
-            applied_at=datetime.now(ZoneInfo('Asia/Shanghai')),
+            applied_at=datetime.now(system_timezone()),
         )
 
     def _validate_configuration(self, store: StateStore) -> None:
@@ -251,10 +252,10 @@ class Application:
         with self._active_state() as (store, lease):
             scheduled = parse_time(scheduled_time)
             candidate = self.definition.builder.create_instance(self.definition.dag, taskname, scheduled)
-            if candidate.data_start < parse_time(store.get_meta('coverage_start')):
+            if timeline_time(candidate.data_start) < timeline_time(parse_time(store.get_meta('coverage_start'))):
                 raise StartupError('WINDOW_PRECEDES_COVERAGE_START')
             task_start = store.get_task_effective_starts().get(taskname)
-            if task_start is not None and candidate.data_start < task_start:
+            if task_start is not None and timeline_time(candidate.data_start) < timeline_time(task_start):
                 raise StartupError('TASK_WINDOW_BEFORE_EFFECTIVE_START')
             with self._runtime(store, lease) as runtime:
                 return report_result(runtime.run_task(taskname, scheduled))
@@ -264,6 +265,7 @@ class Application:
             return report_result(runtime.run_once(parse_time(now) if now else None))
 
     def serve(self) -> CommandResult:
+        logger.info('SYSTEM_TIMEZONE_SELECTED: timezone=%s source=system', self.definition.options.timezone)
         dependencies = self.dependencies or RuntimeDependencies()
         with (
             service_heartbeat(self.definition, self.directory, dependencies) as heartbeat,

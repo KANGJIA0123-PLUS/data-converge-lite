@@ -19,16 +19,16 @@ INSERT INTO modelmate_metric.t_mops__modelmetric_node__day_ads
     sync_flag
 )
 SELECT
-    toStartOfDay(window_time) AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
     node_id,
 
-    argMax(node_name, window_time) AS node_name,
+    argMax(node_name, source.window_time) AS node_name,
     node_ip,
     any(node_type) AS node_type,
-    argMax(dev_mfr, window_time) AS dev_mfr,
-    argMax(dev_model, window_time) AS dev_model,
-    argMax(dev_status_code, window_time) AS dev_status_code,
-    argMax(dev_status_name, window_time) AS dev_status_name,
+    argMax(dev_mfr, source.window_time) AS dev_mfr,
+    argMax(dev_model, source.window_time) AS dev_model,
+    argMax(dev_status_code, source.window_time) AS dev_status_code,
+    argMax(dev_status_name, source.window_time) AS dev_status_name,
 
     sum(request_received_total_delta) AS request_received_total_delta,
     sum(request_failed_total_delta) AS request_failed_total_delta,
@@ -38,10 +38,10 @@ SELECT
 
     any(sync_flag) AS sync_flag
 
-FROM modelmate_metric.t_mops__modelmetric_node__hour_ads
-WHERE window_time >= {start_time:DateTime}
-  AND window_time < {end_time:DateTime}
+FROM modelmate_metric.t_mops__modelmetric_node__hour_ads AS source
+WHERE source.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND source.window_time < toDateTime({end_time:UInt32}, 'UTC')
 GROUP BY
-    window_time, -- 规整为天起始时间
+    toDateTime({start_time:UInt32}, {system_timezone:String}), -- 使用本次调度窗口的起点
     node_id,
     node_ip;

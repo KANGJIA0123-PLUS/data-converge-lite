@@ -7,7 +7,9 @@ from graphlib import CycleError, TopologicalSorter
 import hashlib
 import json
 import re
-from zoneinfo import ZoneInfo
+
+from data_converge.dag.builder import timeline_time
+from data_converge.time_policy import system_timezone
 
 from data_converge.sql_execution.client import load_sql
 from data_converge.sql_execution.config import connection_origin
@@ -196,7 +198,7 @@ def _snapshot_start(value: str) -> datetime:
     instant = datetime.fromisoformat(value)
     if instant.tzinfo is None or instant.utcoffset() is None:
         raise ValueError
-    return instant.astimezone(ZoneInfo('Asia/Shanghai'))
+    return instant.astimezone(system_timezone())
 
 
 def validate_configuration_snapshot(snapshot: dict, coverage: datetime | None = None) -> tuple:
@@ -212,7 +214,8 @@ def validate_configuration_snapshot(snapshot: dict, coverage: datetime | None = 
         if coverage is not None and (not isinstance(coverage, datetime) or coverage.utcoffset() is None):
             raise ValueError
         starts = {name: _snapshot_start(value) for name, value in values.items()}
-        if coverage is not None and any(value < coverage for value in starts.values()):
+        if coverage is not None and any(timeline_time(value) < timeline_time(coverage)
+                                        for value in starts.values()):
             raise ValueError
     except (KeyError, TypeError, ValueError):
         raise StartupError('CONFIG_STATE_INVALID') from None

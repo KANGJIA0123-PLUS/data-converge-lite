@@ -1,8 +1,6 @@
 -- 5.2.4 模型实例汇聚 由t_mops__modelmetric_instance__day_dws -> t_mops__modelmetric_instance__month_dws
--- 修复点说明：
--- 1. WHERE 条件中的增量时间写死了 `now() - INTERVAL 1 MONTH`，作为定时调度或清洗脚本通常应该使用传参变量（如 `{start_time:DateTime}` 和 `{end_time:DateTime}`），否则在非固定时间运行或历史回刷时会导致数据范围错乱。
--- 2. 时间粒度与分组：`GROUP BY` 中的 `window_time` 已使用 `toStartOfMonth(window_time)`，保持了按月汇聚。
--- 3. 其余指标采用 `sum` 累加 delta、`avg` 计算均值、`argMax(col, window_time)` 抓取快照的逻辑符合 ClickHouse 聚合规范。
+-- 按调度器给出的月窗口过滤，分组时间直接使用窗口起点。
+-- 速率使用窗口实际经过时间；快照仍按源记录时间取最新值。
 
 INSERT INTO modelmate_metric.t_mops__modelmetric_instance__month_dws (
     -- 1. 时间粒度与维度分组
@@ -123,7 +121,7 @@ SELECT
     -- ============================================================================
     -- 1. 时间粒度与维度分组 (按月截断，保持实例与角色隔离)
     -- ============================================================================
-    toStartOfMonth(d.window_time)                         AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                         AS window_time,
     d.server_name,
     d.modelinstance_id,
     d.process_role,
@@ -153,7 +151,7 @@ SELECT
     sum(d.request_received_total_delta)                   AS request_received_total_delta,
     -- 动态范围 QPM：使用外部传入的 {start_time} 与 {end_time} 总分钟数作为分母
     cast(sum(d.request_received_total_delta)
-        / nullIf(dateDiff('minute', {start_time:DateTime}, {end_time:DateTime}), 0) AS Float32) AS request_received_total_qpm_avg,
+        / nullIf(dateDiff('minute', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Float32) AS request_received_total_qpm_avg,
 
     argMax(d.request_failed_total_argMax, d.window_time)   AS request_failed_total_argMax,
     sum(d.request_failed_total_delta)                     AS request_failed_total_delta,
@@ -189,11 +187,11 @@ SELECT
 
     -- 动态范围物理吞吐率：使用外部传入的 {start_time} 与 {end_time} 总秒数作为分母
     cast(sum(d.prompt_tokens_total_delta)
-        / nullIf(dateDiff('second', {start_time:DateTime}, {end_time:DateTime}), 0) AS Float32) AS prompt_tokens_total_delta_rate_avg,
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Float32) AS prompt_tokens_total_delta_rate_avg,
     cast(sum(d.generation_tokens_total_delta)
-        / nullIf(dateDiff('second', {start_time:DateTime}, {end_time:DateTime}), 0) AS Float32) AS generation_tokens_total_delta_rate_avg,
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Float32) AS generation_tokens_total_delta_rate_avg,
     cast((sum(d.prompt_tokens_total_delta) + sum(d.generation_tokens_total_delta))
-        / nullIf(dateDiff('second', {start_time:DateTime}, {end_time:DateTime}), 0) AS Float32) AS total_throughput_rate,
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Float32) AS total_throughput_rate,
 
     avg(d.avg_prompt_throughput_toks_per_s_avg)           AS avg_prompt_throughput_toks_per_s_avg,
     sum(d.avg_prompt_throughput_toks_per_s_delta)         AS avg_prompt_throughput_toks_per_s_delta,
@@ -326,11 +324,11 @@ SELECT
     any(d.sync_flag)                                      AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__day_dws AS d
-WHERE d.window_time >= {start_time:DateTime}
-  AND d.window_time <  {end_time:DateTime}
+WHERE d.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND d.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND d.sync_flag = 0
 GROUP BY
-    toStartOfMonth(d.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     d.server_name,
     d.modelinstance_id,
     d.process_role;

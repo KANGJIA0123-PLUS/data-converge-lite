@@ -103,7 +103,7 @@ SELECT
     -- ============================================================================
     -- 1. 时间粒度与核心维度（抹除 process_role，向上汇聚到服务级）
     -- ============================================================================
-    toStartOfMonth(ins.window_time)                          AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                          AS window_time,
     ins.server_name,
 
     -- ============================================================================
@@ -132,7 +132,7 @@ SELECT
     -- 【动态化优化】使用具体时间范围总分钟数作为 QPM 分母
     CAST(coalesce(
         sum(ins.coord_request_received_total_delta)
-        / nullIf(dateDiff('second', {start_time:DateTime}, {end_time:DateTime}) / 60.0, 0.0),
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0, 0.0),
         0.0
     ) AS Float32) AS coord_request_received_total_qpm_avg,
 
@@ -217,17 +217,17 @@ SELECT
     -- 【动态化优化】使用具体时间范围总秒数作为速率分母
     CAST(coalesce(
         sum(ins.engine_prompt_tokens_total_delta)
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_prompt_tokens_total_delta_rate_avg,
     CAST(coalesce(
         sum(ins.engine_generation_tokens_total_delta)
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_generation_tokens_total_delta_rate_avg,
     CAST(coalesce(
         (sum(ins.engine_prompt_tokens_total_delta) + sum(ins.engine_generation_tokens_total_delta))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_total_throughput_rate,
 
@@ -354,9 +354,9 @@ SELECT
     0 AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__month_ads AS ins
-WHERE ins.window_time >= {start_time:DateTime}
-  AND ins.window_time <  {end_time:DateTime}
+WHERE ins.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND ins.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND ins.sync_flag = 0
 GROUP BY
-    toStartOfMonth(ins.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     ins.server_name

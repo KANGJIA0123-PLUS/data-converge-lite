@@ -60,7 +60,7 @@ INSERT INTO modelmate_metric.t_mops_node_month_dws (
 )
 SELECT
     -- 1. 时间窗口切分 (按月截断，如 2026-08-01 00:00:00)
-    toStartOfMonth(d.window_time)                        AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                        AS window_time,
 
     -- 2. 维度字段
     coalesce(d.node_type, 'UNKNOWN')                     AS node_type,
@@ -148,11 +148,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_node_day_dws AS d
 -- 【动态化优化】使用外部传入的起止时间范围替代固定死的时间计算
-WHERE d.window_time >= {start_time:DateTime}
-  AND d.window_time <  {end_time:DateTime}
+WHERE d.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND d.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND d.sync_flag = 0
 GROUP BY
-    toStartOfMonth(d.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     coalesce(d.node_type, 'UNKNOWN'),
     d.node_id,
     d.node_ip;

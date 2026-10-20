@@ -15,7 +15,9 @@ from data_converge.health import Heartbeat
 def app(tmp_path):
     sql = tmp_path / "sql"
     sql.mkdir()
-    (sql / "simple.sql").write_text("INSERT INTO target SELECT {start_time:DateTime}, {end_time:DateTime}")
+    (sql / "simple.sql").write_text(
+        "INSERT INTO target SELECT toDateTime({start_time:UInt32}, 'UTC'), "
+        "toDateTime({end_time:UInt32}, 'UTC')")
     rules = tmp_path / "rules.yaml"
     rules.write_text(yaml.safe_dump({"convergence_rules": [{
         "taskname": "simple", "source_tables": ["source"], "target_table": "target",
@@ -27,7 +29,7 @@ def app(tmp_path):
                        "username": "example", "password_file": "absent-secret"},
         "state": {"directory": str(tmp_path / "state")},
         "config": {"convergence_rules_path": str(rules), "sql_directory": str(sql)},
-        "scheduler": {"timezone": "Asia/Shanghai"}}))
+        "scheduler": {}}))
     return path
 
 
@@ -188,8 +190,8 @@ def test_cli_http_window_runs_once_across_restart(local_http_app, capsys):
     assert len(seen) == 1
     params = parse_qs(urlsplit(seen[0][0]).query)
     assert params['query_id'] == [result['instances'][0]['query_id']]
-    assert params['param_start_time'] == ['2026-10-12 10:00:00']
-    assert params['param_end_time'] == ['2026-10-12 10:05:00']
+    assert params['param_start_time'] == ['1791770400']
+    assert params['param_end_time'] == ['1791770700']
     assert entry.main(base + ['--run-task', 'simple', '--scheduled-time', '2026-10-12T10:01:00+08:00']) == 1
     assert len(seen) == 1
 

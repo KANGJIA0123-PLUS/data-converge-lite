@@ -66,7 +66,7 @@ INSERT INTO modelmate_metric.t_mops_gpu_day_dws (
 )
 SELECT
     -- 1. 时间维度：对齐到天起点 (00:00:00)
-    toStartOfDay(h.window_time)                                              AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                                              AS window_time,
 
     -- 2. 核心维度键 (GROUP BY)
     h.ai_card_type,
@@ -144,21 +144,21 @@ SELECT
     sum(h.ai_card_unused_computing_power_counter)                            AS ai_card_unused_computing_power_counter,
 
     --  忙时指标 (09:00 <= hour < 18:00)
-    avgIf(h.ai_core_util_avg, toHour(h.window_time) >= 9 AND toHour(h.window_time) < 18) AS work_time_ai_core_util_avg,
-    maxIf(h.ai_core_util_max, toHour(h.window_time) >= 9 AND toHour(h.window_time) < 18) AS work_time_ai_core_util_max,
-    minIf(h.ai_core_util_min, toHour(h.window_time) >= 9 AND toHour(h.window_time) < 18) AS work_time_ai_core_util_min,
+    avgIf(h.ai_core_util_avg, toHour(h.window_time, {system_timezone:String}) >= 9 AND toHour(h.window_time, {system_timezone:String}) < 18) AS work_time_ai_core_util_avg,
+    maxIf(h.ai_core_util_max, toHour(h.window_time, {system_timezone:String}) >= 9 AND toHour(h.window_time, {system_timezone:String}) < 18) AS work_time_ai_core_util_max,
+    minIf(h.ai_core_util_min, toHour(h.window_time, {system_timezone:String}) >= 9 AND toHour(h.window_time, {system_timezone:String}) < 18) AS work_time_ai_core_util_min,
 
     --  闲时指标 (hour < 9 OR hour >= 18)
-    avgIf(h.ai_core_util_avg, toHour(h.window_time) < 9 OR toHour(h.window_time) >= 18) AS idle_time_ai_core_util_avg,
-    maxIf(h.ai_core_util_max, toHour(h.window_time) < 9 OR toHour(h.window_time) >= 18) AS idle_time_ai_core_util_max,
-    minIf(h.ai_core_util_min, toHour(h.window_time) < 9 OR toHour(h.window_time) >= 18) AS idle_time_ai_core_util_min,
+    avgIf(h.ai_core_util_avg, toHour(h.window_time, {system_timezone:String}) < 9 OR toHour(h.window_time, {system_timezone:String}) >= 18) AS idle_time_ai_core_util_avg,
+    maxIf(h.ai_core_util_max, toHour(h.window_time, {system_timezone:String}) < 9 OR toHour(h.window_time, {system_timezone:String}) >= 18) AS idle_time_ai_core_util_max,
+    minIf(h.ai_core_util_min, toHour(h.window_time, {system_timezone:String}) < 9 OR toHour(h.window_time, {system_timezone:String}) >= 18) AS idle_time_ai_core_util_min,
 
         -- 3. 天忙时状态打标 (基于当天忙时整体平均利用率)
     multiIf(
-        avgIf(h.ai_core_util_avg, toHour(h.window_time) >= 9 AND toHour(h.window_time) < 18) IS NULL, NULL,
-        avgIf(h.ai_core_util_avg, toHour(h.window_time) >= 9 AND toHour(h.window_time) < 18) > 80,   'overuse',
-        avgIf(h.ai_core_util_avg, toHour(h.window_time) >= 9 AND toHour(h.window_time) < 18) >= 15,  'normal_use',
-        avgIf(h.ai_core_util_avg, toHour(h.window_time) >= 9 AND toHour(h.window_time) < 18) >= 0,   'inefficient_use',
+        avgIf(h.ai_core_util_avg, toHour(h.window_time, {system_timezone:String}) >= 9 AND toHour(h.window_time, {system_timezone:String}) < 18) IS NULL, NULL,
+        avgIf(h.ai_core_util_avg, toHour(h.window_time, {system_timezone:String}) >= 9 AND toHour(h.window_time, {system_timezone:String}) < 18) > 80,   'overuse',
+        avgIf(h.ai_core_util_avg, toHour(h.window_time, {system_timezone:String}) >= 9 AND toHour(h.window_time, {system_timezone:String}) < 18) >= 15,  'normal_use',
+        avgIf(h.ai_core_util_avg, toHour(h.window_time, {system_timezone:String}) >= 9 AND toHour(h.window_time, {system_timezone:String}) < 18) >= 0,   'inefficient_use',
         NULL
     ) AS work_time_ai_core_util_status,
 
@@ -168,11 +168,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_gpu_hour_dws AS h
 /* 调度时按天传入时间约束区间，例如每日凌晨运行前一天的数据计算 */
-WHERE h.window_time >= {start_time:DateTime}
-  AND h.window_time <  {end_time:DateTime}
+WHERE h.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND h.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND h.sync_flag = 0
 GROUP BY
-    toStartOfDay(h.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     h.ai_card_type,
     h.ai_card_id,
     h.chip_id;

@@ -3,11 +3,10 @@ from collections import Counter
 from datetime import datetime
 import json
 import re
-from zoneinfo import ZoneInfo
 
 from data_converge.errors import safe_diagnostic_details
+from data_converge.time_policy import system_timezone, system_timezone_name
 
-TZ = ZoneInfo('Asia/Shanghai')
 LAUNCHER = 'bash /opt/its/data-converge/bin/start_data_converge.sh'
 
 
@@ -22,7 +21,8 @@ def report(command, checks, data=None):
     if counts and set(counts) == {'SKIP'}:
         status = 'SKIP'
     return dict(schema_version=1, command=command, status=status,
-                checked_at=datetime.now(TZ).isoformat(), summary=dict(counts),
+                checked_at=datetime.now(system_timezone()).isoformat(),
+                timezone=system_timezone_name(), summary=dict(counts),
                 checks=checks, data=data or {})
 
 
@@ -77,7 +77,7 @@ def legacy_resolution_record(row):
 
 
 def render_text(value):
-    lines = [f"{value['command']}  {value['status']}  {value['checked_at']}"]
+    lines = [f"{value['command']}  {value['status']}  {value['checked_at']}  ({value['timezone']})"]
     for item in value['checks']:
         lines.append(f"[{item['status']}] {item['id']}: {item['summary']}")
         if item['evidence']:

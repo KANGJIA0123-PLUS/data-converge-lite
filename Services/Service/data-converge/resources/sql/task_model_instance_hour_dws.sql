@@ -77,7 +77,7 @@ INSERT INTO modelmate_metric.t_mops_modelinstance_hour_dws(
 )
 SELECT
     -- 1. 时间维度：对齐到 小时窗口起点
-    toStartOfHour(f.window_time)                          AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                          AS window_time,
 
     -- 2. 核心维度键 (GROUP BY)
     f.server_name,
@@ -160,11 +160,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_modelinstance_5min_dws AS f
 /* 增量计算时可解除注释添加时间范围约束*/
-WHERE f.window_time >= {start_time:DateTime}
-  AND f.window_time <  {end_time:DateTime}
+WHERE f.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND f.sync_flag = 0 -- 只针对探针实时上报的数据做小时汇聚
 GROUP BY
-    toStartOfHour(f.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     f.server_name,
     f.modelinstance_id,
     f.group_id,

@@ -77,7 +77,7 @@ INSERT INTO modelmate_metric.t_mops_modelinstance_5min_dws(
 )
 SELECT
     -- 1. 时间维度：对齐到 5 分钟窗口起点
-    toStartOfFiveMinute(r.metric_datetime)                 AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                 AS window_time,
 
     -- 2. 核心维度键 (GROUP BY)
     r.server_name,
@@ -160,11 +160,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_modelinstance_realtime_dwd AS r
 /* 增量计算时可解除注释添加时间范围约束*/
-WHERE r.metric_datetime >= {start_time:DateTime}
-  AND r.metric_datetime <  {end_time:DateTime}
+WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, 'UTC')
+  AND r.metric_datetime <  toDateTime({end_time:UInt32}, 'UTC')
   AND r.sync_flag = 0 -- 只针对探针实时上报的数据做 5 分钟汇聚
 GROUP BY
-    window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     r.server_name,
     r.modelinstance_id,
     r.group_id,

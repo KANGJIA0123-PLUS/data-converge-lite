@@ -29,7 +29,7 @@
 )
 SELECT
     -- 1. 时间维度：对齐到月份
-    toStartOfMonth(dws.window_time) AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
 
     -- 2. 维度与属性
     dws.server_name,
@@ -85,9 +85,9 @@ SELECT
     any(dws.sync_flag) AS sync_flag
 
 FROM modelmate_metric.t_mops_request_month_dws AS dws
-WHERE dws.window_time >= {start_time:DateTime}
-  AND dws.window_time <  {end_time:DateTime}
+WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND dws.sync_flag = 0 -- 只针对探针实时上报的数据做汇聚
 GROUP BY
-    toStartOfMonth(dws.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     dws.server_name;

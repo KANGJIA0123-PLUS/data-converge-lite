@@ -112,7 +112,7 @@ bash /opt/its/data-converge/bin/start_data_converge.sh --dwd-status --window '20
 bash /opt/its/data-converge/bin/start_data_converge.sh --diagnose --online --format json
 ```
 
-`--limit` 范围为 1–100，默认 20；`--offset` 从 0 开始，供 `--failures`、`--history` 及 `--inspect-instance` 的历史分页使用。`--window` 必须为带时区、对齐五分钟的窗口**开始时间**，也接受 UTC 输入，展示时转换为北京时间。`--online` 仅用于 `--diagnose`；错误组合及空实例 ID 会拒绝执行，不会启动服务。
+`--limit` 范围为 1–100，默认 20；`--offset` 从 0 开始，供 `--failures`、`--history` 及 `--inspect-instance` 的历史分页使用。`--window` 必须为带时区、对齐五分钟的窗口**开始时间**，也接受 UTC 输入，展示时转换为进程有效系统时区；DWD 消息的原有编码及时间语义不变。夏令时重复小时通过输出中的 UTC 偏移区分，等待时长、收齐延迟和最近窗口顺序按实际时刻计算。`--online` 仅用于 `--diagnose`；错误组合及空实例 ID 会拒绝执行，不会启动服务。
 
 ## 每个入口能回答什么
 
@@ -184,7 +184,7 @@ DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号�
 
 ## 输出与退出码
 
-每项检查固定包含 `id`、`status`、`summary`、`evidence`、`action`。JSON顶层包含 `schema_version=1`、命令、检查时间、汇总状态和数据。
+每项检查固定包含 `id`、`status`、`summary`、`evidence`、`action`。JSON 顶层包含 `schema_version=1`、命令、检查时间、有效系统时区 `timezone`、汇总状态和数据。检查时间使用该时区及当前 UTC 偏移；容器可通过 `TZ` 指定 IANA 时区，改变时区需重启进程。
 
 - `PASS`：该项检查通过，仅代表其声明的检查范围。
 - `WARN`：存在需要关注的阻断/信号等待/配置提示。
@@ -218,7 +218,7 @@ bash /opt/its/data-converge/bin/start_data_converge.sh --events --after-event 0 
 
 状态和事件同事务提交；事件落盘失败会使对应状态转换回滚。磁盘不可用时宁可停止派发，不把未保存的动作伪装成已完成。文件日志依旧由原日志组件轮转，事务事件和尝试历史暂不自动清理，应监控状态卷容量。
 
-本地心跳通过只代表进程心跳与启动就绪，不能证明调度线程持续推进；诊断同时展示最近完成时间、最新窗口与最早活动窗口供判断。当前不新增调度线程探针、不改公司现有探针脚本。成功执行或`SELECT 1`通过不证明汇聚结果行数正确，也不验证所有现场表结构。原有资源汇聚SQL保持不变。
+本地心跳通过只代表进程心跳与启动就绪，不能证明调度线程持续推进；诊断同时展示最近完成时间、最新窗口与最早活动窗口供判断。当前不新增调度线程探针、不改公司现有探针脚本。成功执行或`SELECT 1`通过不证明汇聚结果行数正确，也不验证所有现场表结构。资源汇聚的业务口径保持不变，SQL 时间桶按应用有效系统时区计算。
 
 ## 设计依据与实现分工
 

@@ -66,7 +66,7 @@ INSERT INTO modelmate_metric.t_mops_modelinstance_month_dws(
 )
 SELECT
     -- 1. 时间窗口切分 (按月截断，如 2026-08-01 00:00:00)
-    toStartOfMonth(d.window_time)                          AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                          AS window_time,
 
     -- 2. 核心维度键 (GROUP BY)
     d.server_name,
@@ -149,11 +149,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_modelinstance_day_dws AS d
 /* 增量计算时可解除注释添加时间范围约束*/
-WHERE d.window_time >= {start_time:DateTime}
-  AND d.window_time <  {end_time:DateTime}
+WHERE d.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND d.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND d.sync_flag = 0 -- 只针对探针实时上报的数据做 5 分钟汇聚
 GROUP BY
-    toStartOfMonth(d.window_time) ,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) ,
     d.server_name,
     d.modelinstance_id,
     d.group_id,

@@ -6,18 +6,17 @@ import json
 import os
 from pathlib import Path
 import stat
-from zoneinfo import ZoneInfo
 
 from data_converge.archives.maintenance import (
     archive_directory, backup_availability, daily_archives, migration_references,
 )
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.errors import safe_diagnostic_details, safe_error_details
+from data_converge.time_policy import system_timezone, system_timezone_name
 
 from .ledger import DiagnosticLedger
 from .report import check
 
-TZ = ZoneInfo('Asia/Shanghai')
 ACTION = ('正常服务启动后后台维护归档；检查目录权限、剩余空间和归档维护日志。'
           '本检查只确认文件可用性，不重新解压校验，不会创建备份或清理文件。')
 STAGES = {'create_daily', 'verify_daily', 'prune_daily', 'read_migration_audit', 'migration_backup'}
@@ -86,23 +85,25 @@ def _stage_errors(errors):
 
 
 def _daily_evidence(database, evidence, now):
+    zone = system_timezone()
     archives = daily_archives(database)
     latest = max(archives, key=lambda row: row['created_at']) if archives else None
     evidence.update(daily_archive_count=len(archives), latest_archive=None, latest_snapshot_at=None)
     if latest is not None:
         evidence.update(latest_archive=str(latest['path']), latest_snapshot_at=latest['created_at'].isoformat())
     return (latest is not None and latest['created_at'] <= now and
-            latest['created_at'].astimezone(TZ).date() == now.astimezone(TZ).date())
+            latest['created_at'].astimezone(zone).date() == now.astimezone(zone).date())
 
 
 def _maintenance_evidence(directory, evidence, now):
+    zone = system_timezone()
     status = _read_status(directory / 'maintenance.json')
     evidence['maintenance'] = status
     if status is None:
         evidence['maintenance_stale'] = True
         return False
     checked = _instant(status['checked_at'])
-    evidence['maintenance_stale'] = checked > now or checked.astimezone(TZ).date() != now.astimezone(TZ).date()
+    evidence['maintenance_stale'] = checked > now or checked.astimezone(zone).date() != now.astimezone(zone).date()
     return status['status'] == 'PASS' and not evidence['maintenance_stale']
 
 
@@ -154,7 +155,7 @@ def archive_check(raw, directory, *, now=None):
     database = Path(directory) / 'state.sqlite3'
     archive_dir = archive_directory(database)
     evidence = dict(enabled=settings.enabled, retention_days=settings.retention_days,
-                    directory=str(archive_dir), timezone='Asia/Shanghai',
+                    directory=str(archive_dir), timezone=system_timezone_name(),
                     availability_check='regular_file_only')
     if not settings.enabled:
         return check('state.archives', 'SKIP', '状态库归档维护已关闭', evidence)

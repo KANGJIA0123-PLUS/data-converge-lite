@@ -141,7 +141,7 @@ SELECT
     -- 【动态化】：天表 QPM 分母由固定 1440.0 改为根据传入的动态天区间总分钟数计算 (秒数 / 60.0)
     CAST(coalesce(
         sumIf(dws.request_received_total_delta, dws.process_role IN ('coordinator', 'single'))
-        / nullIf(dateDiff('second', {start_time:DateTime}, {end_time:DateTime}) / 60.0, 0.0),
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0, 0.0),
         0.0
     ) AS Float32) AS coord_request_received_total_qpm_avg,
 
@@ -231,17 +231,17 @@ SELECT
     -- 【动态化】：Token 速率分母由硬编码改为了动态时间差计算 (dateDiff)
     CAST(coalesce(
         sumIf(dws.prompt_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_prompt_tokens_total_delta_rate_avg,
     CAST(coalesce(
         sumIf(dws.generation_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_generation_tokens_total_delta_rate_avg,
     CAST(coalesce(
         (sumIf(dws.prompt_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')) + sumIf(dws.generation_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')))
-        / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Float32) AS engine_total_throughput_rate,
 
@@ -383,8 +383,8 @@ SELECT
     any(dws.sync_flag)                                                                                              AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__day_dws AS dws
-WHERE dws.window_time >= {start_time:DateTime}
-  AND dws.window_time <  {end_time:DateTime}
+WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND dws.process_role != 'worker' -- 【关键过滤】：彻底丢弃 worker 数据
 GROUP BY
     dws.window_time,

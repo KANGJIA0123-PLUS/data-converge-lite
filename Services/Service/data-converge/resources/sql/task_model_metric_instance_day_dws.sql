@@ -118,7 +118,7 @@ SELECT
     -- ============================================================================
     -- 1. 时间粒度与维度分组 (按天截断，保持实例与角色隔离)
     -- ============================================================================
-    toStartOfDay(h.window_time)                           AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                           AS window_time,
     h.server_name,
     h.modelinstance_id,
     h.process_role,
@@ -147,7 +147,7 @@ SELECT
     argMax(h.request_received_total_argMax, h.window_time)  AS request_received_total_argMax,
     sum(h.request_received_total_delta)                   AS request_received_total_delta,
     -- 【动态化】：QPM 分母改为由动态时间差计算 (秒数 / 60.0)
-    cast(sum(h.request_received_total_delta) / (dateDiff('second', {start_time:DateTime}, {end_time:DateTime}) / 60.0) AS Float32) AS request_received_total_qpm_avg,
+    cast(sum(h.request_received_total_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0) AS Float32) AS request_received_total_qpm_avg,
 
     argMax(h.request_failed_total_argMax, h.window_time)    AS request_failed_total_argMax,
     sum(h.request_failed_total_delta)                     AS request_failed_total_delta,
@@ -180,9 +180,9 @@ SELECT
     sum(h.generation_tokens_total_delta)                  AS generation_tokens_total_delta,
 
     -- 【动态化】：Token 速率分母改为使用动态时间差 (dateDiff)
-    cast(sum(h.prompt_tokens_total_delta) / toFloat32(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32) AS prompt_tokens_total_delta_rate_avg,
-    cast(sum(h.generation_tokens_total_delta) / toFloat32(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32) AS generation_tokens_total_delta_rate_avg,
-    cast((sum(h.prompt_tokens_total_delta) + sum(h.generation_tokens_total_delta)) / toFloat32(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})) AS Float32) AS total_throughput_rate,
+    cast(sum(h.prompt_tokens_total_delta) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS prompt_tokens_total_delta_rate_avg,
+    cast(sum(h.generation_tokens_total_delta) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS generation_tokens_total_delta_rate_avg,
+    cast((sum(h.prompt_tokens_total_delta) + sum(h.generation_tokens_total_delta)) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS total_throughput_rate,
 
     avg(h.avg_prompt_throughput_toks_per_s_avg)           AS avg_prompt_throughput_toks_per_s_avg,
     sum(h.avg_prompt_throughput_toks_per_s_delta)         AS avg_prompt_throughput_toks_per_s_delta,
@@ -317,11 +317,11 @@ SELECT
     any(h.sync_flag)                                      AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__hour_dws AS h
-WHERE h.window_time >= {start_time:DateTime}
-  AND h.window_time <  {end_time:DateTime}
+WHERE h.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND h.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND h.sync_flag = 0
 GROUP BY
-    toStartOfDay(h.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     h.server_name,
     h.modelinstance_id,
     h.process_role;

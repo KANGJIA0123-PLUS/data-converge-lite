@@ -60,7 +60,7 @@ INSERT INTO modelmate_metric.t_mops_node_5min_dws (
 )
 SELECT
     -- 1. 时间窗口切分 (取5分钟窗口起始时间)
-    toStartOfInterval(r.metric_datetime, INTERVAL 5 MINUTE) AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
 
     -- 2. 维度字段 (按分组维度聚合)
     -- 注意：如果 node_type 在 DWD 中有 NULL 值，可配合 coalesce 处理或直接回填
@@ -149,11 +149,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_node_realtime_dwd AS r
 -- 【动态化优化】使用外部传入的起止时间范围替代写死的 now()
-WHERE r.metric_datetime >= {start_time:DateTime}
-  AND r.metric_datetime <  {end_time:DateTime}
+WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, 'UTC')
+  AND r.metric_datetime <  toDateTime({end_time:UInt32}, 'UTC')
   AND r.sync_flag = 0
 GROUP BY
-    window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     coalesce(r.node_type, 'UNKNOWN'),
     r.node_id,
     r.node_ip;

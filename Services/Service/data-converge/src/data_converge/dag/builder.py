@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Tuple
 
 from .models import DAG, TaskDefinition, TaskInstance, make_instance_id
@@ -98,6 +98,58 @@ def make_batch_id(data_end: datetime) -> str:
     return data_end.isoformat(timespec="seconds")
 
 
+def timeline_time(value: datetime) -> datetime:
+    """Compare aware timestamps by instant, preserving naive API compatibility."""
+    return value.astimezone(timezone.utc) if value.utcoffset() is not None else value
+
+
+def shift_elapsed(value: datetime, duration: timedelta) -> datetime:
+    """Shift elapsed time without adding or removing a repeated local hour."""
+    result = timeline_time(value) + duration
+    return result.astimezone(value.tzinfo) if value.utcoffset() is not None else result
+
+
+def valid_wall_times(value: datetime) -> Tuple[datetime, ...]:
+    """Return both real occurrences of a wall time, or none inside a clock gap."""
+    if value.utcoffset() is None:
+        return (value,)
+    wall = value.replace(tzinfo=None)
+    candidates = {}
+    for fold in (0, 1):
+        actual = timeline_time(value.replace(fold=fold)).astimezone(value.tzinfo)
+        if actual.replace(tzinfo=None) == wall:
+            candidates[timeline_time(actual)] = actual
+    return tuple(candidates[key] for key in sorted(candidates))
+
+
+def first_valid_time(value: datetime) -> datetime:
+    """Resolve a missing calendar boundary to the first instant after its gap."""
+    candidates = valid_wall_times(value)
+    if candidates:
+        return candidates[0]
+    lower, upper = sorted(int(value.replace(fold=fold).timestamp()) for fold in (0, 1))
+    wall = value.replace(tzinfo=None)
+    while upper - lower > 1:
+        midpoint = (lower + upper) // 2
+        actual = datetime.fromtimestamp(midpoint, value.tzinfo)
+        if actual.replace(tzinfo=None) < wall:
+            lower = midpoint
+        else:
+            upper = midpoint
+    return datetime.fromtimestamp(upper, value.tzinfo)
+
+
+def hour_boundary(value: datetime, *, inclusive: bool) -> datetime:
+    """Find the preceding real local hour, including both repeated whole hours."""
+    current = value if inclusive else shift_elapsed(value, -timedelta(microseconds=1))
+    while True:
+        elapsed = timedelta(minutes=current.minute, seconds=current.second,
+                            microseconds=current.microsecond)
+        if not elapsed:
+            return current
+        current = shift_elapsed(current, -elapsed)
+
+
 def required_upstream_ids(dag: DAG, task: TaskDefinition,
                           data_start: datetime, data_end: datetime) -> Tuple[str, ...]:
     """Require every complete parent window covering the child's [start, end)."""
@@ -105,14 +157,15 @@ def required_upstream_ids(dag: DAG, task: TaskDefinition,
     for parent_name in task.depends_on:
         parent = dag.get_task(parent_name)
         interval = parent.aggregation_interval
-        if align_data_end(data_start, interval) != data_start or align_data_end(data_end, interval) != data_end:
+        if any(timeline_time(align_data_end(boundary, interval)) != timeline_time(boundary)
+               for boundary in (data_start, data_end)):
             raise ValueError(f"Incompatible aggregation windows: {parent_name} -> {task.taskname}")
         cursor = data_end
         ends = []
-        while cursor > data_start:
+        while timeline_time(cursor) > timeline_time(data_start):
             ends.append(cursor)
             cursor = subtract_interval(cursor, interval)
-        if cursor != data_start:
+        if timeline_time(cursor) != timeline_time(data_start):
             raise ValueError(f"Parent windows do not cover {task.taskname}: {parent_name}")
         result.extend(make_instance_id(parent_name, make_batch_id(end)) for end in reversed(ends))
     return tuple(result)
@@ -133,28 +186,38 @@ def align_data_end(scheduled_time: datetime, interval: str) -> datetime:
             minute=floored_minute, second=0, microsecond=0
         )
     if interval == "PT1H":
-        return scheduled_time.replace(minute=0, second=0, microsecond=0)
+        return hour_boundary(scheduled_time, inclusive=True)
     if interval == "P1D":
-        return scheduled_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        return first_valid_time(scheduled_time.replace(
+            hour=0, minute=0, second=0, microsecond=0, fold=0))
     if interval == "P1M":
-        return scheduled_time.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
+        return first_valid_time(scheduled_time.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0, fold=0))
     raise ValueError(f"Unsupported aggregation_interval: {interval}")
 
 
 def subtract_interval(data_end: datetime, interval: str) -> datetime:
     if interval == "PT5M":
-        return data_end - timedelta(minutes=5)
+        return shift_elapsed(data_end, -timedelta(minutes=5))
+    aligned = timeline_time(align_data_end(data_end, interval)) == timeline_time(data_end)
     if interval == "PT1H":
-        return data_end - timedelta(hours=1)
+        return (hour_boundary(data_end, inclusive=False) if aligned
+                else shift_elapsed(data_end, -timedelta(hours=1)))
     if interval == "P1D":
-        return data_end - timedelta(days=1)
+        previous = data_end - timedelta(days=1)
+        if not aligned:
+            return previous
+        boundary = align_data_end(previous, interval)
+        while timeline_time(boundary) >= timeline_time(data_end):
+            previous -= timedelta(days=1)
+            boundary = align_data_end(previous, interval)
+        return boundary
     if interval == "P1M":
         year, month = data_end.year, data_end.month - 1
         if month == 0:
             year, month = year - 1, 12
-        return data_end.replace(year=year, month=month, day=1)
+        previous = data_end.replace(year=year, month=month, day=1)
+        return align_data_end(previous, interval) if aligned else previous
     raise ValueError(f"Unsupported aggregation_interval: {interval}")
 
 

@@ -15,6 +15,7 @@ from data_converge.errors import safe_error_details
 from data_converge.state import StateStore
 
 from .test_main import app
+from .timezone_fixtures import deployment_zone
 
 NOW = datetime(2026, 10, 19, 4, 0, tzinfo=timezone.utc)
 
@@ -86,7 +87,8 @@ def test_stale_worker_status_warns_even_with_today_archive(tmp_path):
     assert result['evidence']['maintenance_stale'] is True
 
 
-def test_daily_status_remains_current_without_minute_heartbeats(tmp_path):
+def test_daily_status_remains_current_without_minute_heartbeats(tmp_path, deployment_zone):
+    deployment_zone('Asia/Shanghai')
     path = make_archive(tmp_path / 'state')
     write_status(path, checked_at=NOW - timedelta(hours=6))
     result = archive_check({}, tmp_path / 'state', now=NOW)

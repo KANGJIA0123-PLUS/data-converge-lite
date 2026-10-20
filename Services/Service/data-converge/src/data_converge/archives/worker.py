@@ -8,19 +8,18 @@ from pathlib import Path
 import tempfile
 import threading
 import time
-from zoneinfo import ZoneInfo
 
 from data_converge.errors import safe_error_details
 from data_converge.leader_election import LeadershipError
+from data_converge.time_policy import system_timezone
 
 from .maintenance import archive_directory, run_maintenance
 
 logger = logging.getLogger(__name__)
-TZ = ZoneInfo('Asia/Shanghai')
 
 
 def _next_day(now):
-    local = now.astimezone(TZ)
+    local = now.astimezone(system_timezone())
     return (local.replace(hour=0, minute=0, second=0, microsecond=0)
             + timedelta(days=1)).astimezone(timezone.utc)
 

@@ -232,8 +232,8 @@ FROM
             *,
             arrayJoin(arrayDistinct(node_ips)) AS join_node_ip
         FROM modelmate_metric.t_mops__modelmetric_server__5min_ads
-        WHERE window_time >= {start_time:DateTime}
-          AND window_time <  {end_time:DateTime}
+        WHERE window_time >= toDateTime({start_time:UInt32}, 'UTC')
+          AND window_time <  toDateTime({end_time:UInt32}, 'UTC')
     ) AS s
     INNER JOIN
     (

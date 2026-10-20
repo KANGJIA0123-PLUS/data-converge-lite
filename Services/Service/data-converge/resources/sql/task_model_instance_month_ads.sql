@@ -100,7 +100,7 @@ WITH
     -- 1. 容器/实例指标汇总（抹平 container_id / group_id / card_id，收拢至月+实例粒度）
     instance_base AS (
         SELECT
-            toStartOfMonth(dws.window_time)                  AS window_time,
+            toDateTime({start_time:UInt32}, {system_timezone:String})                  AS window_time,
             dws.server_name,
             dws.modelinstance_id,
 
@@ -174,11 +174,11 @@ WITH
 
             argMax(dws.sync_flag, dws.window_time)          AS sync_flag
         FROM modelmate_metric.t_mops_modelinstance_month_dws AS dws
-        WHERE dws.window_time >= {start_time:DateTime}
-          AND dws.window_time <  {end_time:DateTime}
+        WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+          AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
           AND dws.sync_flag = 0
         GROUP BY
-            toStartOfMonth(dws.window_time),
+            toDateTime({start_time:UInt32}, {system_timezone:String}),
             dws.server_name,
             dws.modelinstance_id
     ),
@@ -186,15 +186,15 @@ WITH
     -- 2. 抽取月级的"实例-物理卡"去重映射，解决单卡多容器 JOIN 数据翻倍问题
     instance_card_rel AS (
         SELECT DISTINCT
-            toStartOfMonth(dws.window_time)                  AS window_time,
+            toDateTime({start_time:UInt32}, {system_timezone:String})                  AS window_time,
             dws.server_name,
             dws.modelinstance_id,
             dws.node_ip,
             dws.ai_card_id,
             dws.chip_id
         FROM modelmate_metric.t_mops_modelinstance_month_dws AS dws
-        WHERE dws.window_time >= {start_time:DateTime}
-          AND dws.window_time <  {end_time:DateTime}
+        WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+          AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
           AND dws.sync_flag = 0
     ),
 
@@ -257,8 +257,8 @@ WITH
             AND r.node_ip     = c.node_ip
             AND r.ai_card_id = c.ai_card_index
             AND r.chip_id     = c.chip_id
-        WHERE c.window_time >= {start_time:DateTime}
-          AND c.window_time <  {end_time:DateTime}
+        WHERE c.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+          AND c.window_time <  toDateTime({end_time:UInt32}, 'UTC')
           AND c.sync_flag = 0
         GROUP BY
             r.window_time,

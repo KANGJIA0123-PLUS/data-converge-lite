@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 import subprocess
 import sys
 
@@ -196,3 +197,29 @@ def test_source_port_failure_preserves_commit_before_ack(store, caplog, operatio
     assert len(store.get_dwd_types(START)) == (1 if operation == 'ack' else 0)
     assert source.acknowledged == []
     assert 'private' not in caplog.text
+
+
+def test_system_clock_in_repeated_hour_preserves_signal_arrival_instant(store, monkeypatch):
+    import data_converge.dwd_ready.coordinator as module
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 0.0)
+    start = datetime.fromisoformat('2026-11-01T14:20:00+08:00')
+    now = datetime(2026, 11, 1, 1, 30, tzinfo=ZoneInfo('America/New_York'), fold=1)
+    source = Source(signals(start))
+    ready = ReadyCoordinator(store, source, start, wait_warning_seconds=60)
+    assert ready.poll(now) == [start]
+    assert store.get_dwd_types(start) == set(DWD_TYPES)
+    assert len(source.acknowledged) == 5
+
+
+def test_wait_warning_uses_elapsed_seconds_across_repeated_hour(store, caplog):
+    zone = ZoneInfo('America/New_York')
+    start = datetime(2026, 11, 1, 1, 55, tzinfo=zone)
+    end = datetime(2026, 11, 1, 1, 0, tzinfo=zone, fold=1)
+    window = SimpleNamespace(task=SimpleNamespace(aggregation_interval='PT5M'),
+                             data_start=start, data_end=end)
+    ready = ReadyCoordinator(store, Source(), start, wait_warning_seconds=60)
+    before = datetime(2026, 11, 1, 1, 59, 59, tzinfo=zone)
+    assert ready.reason(window, before)
+    assert 'DWD_WAIT_TIMEOUT' not in caplog.text
+    assert ready.reason(window, before.replace(minute=1, second=0, fold=1))
+    assert 'DWD_WAIT_TIMEOUT' in caplog.text

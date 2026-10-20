@@ -32,7 +32,7 @@ class DiagnosticLedger(StateStore):
                                    'GROUP BY status', parameters).fetchall())
         rows = conn.execute(f'SELECT * FROM task_instances WHERE {clause} ORDER BY '
                             "CASE status WHEN 'UNKNOWN' THEN 0 WHEN 'FAILED' THEN 1 ELSE 2 END, "
-                            'data_end DESC, taskname LIMIT ? OFFSET ?',
+                            'julianday(data_end) DESC, taskname LIMIT ? OFFSET ?',
                             [*parameters, limit, offset]).fetchall()
         return counts, [dict(row) for row in rows]
 
@@ -54,8 +54,15 @@ class DiagnosticLedger(StateStore):
         return [dict(row) for row in rows]
 
     def progress(self):
-        row = self._connection().execute('SELECT MAX(data_end) AS newest_window_end, '
-            'MAX(finished_at) AS latest_finished_at, MIN(CASE WHEN status IN '
-            "('PENDING','RUNNING','BLOCKED') THEN data_start END) AS oldest_active_window "
-            'FROM task_instances WHERE ' + self._active_clause()).fetchone()
+        active = self._active_clause()
+        row = self._connection().execute(f"""
+            SELECT
+              (SELECT data_end FROM task_instances WHERE {active}
+               ORDER BY julianday(data_end) DESC LIMIT 1) AS newest_window_end,
+              (SELECT finished_at FROM task_instances WHERE {active}
+               ORDER BY julianday(finished_at) DESC LIMIT 1) AS latest_finished_at,
+              (SELECT data_start FROM task_instances WHERE {active}
+               AND status IN ('PENDING','RUNNING','BLOCKED')
+               ORDER BY julianday(data_start) ASC LIMIT 1) AS oldest_active_window
+        """).fetchone()
         return dict(row)

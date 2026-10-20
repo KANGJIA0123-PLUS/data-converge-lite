@@ -50,8 +50,8 @@ SELECT
     any(sync_flag) AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__5min_dws
-WHERE window_time >= {start_time:DateTime}
-  AND window_time < {end_time:DateTime}
+WHERE window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND window_time < toDateTime({end_time:UInt32}, 'UTC')
 GROUP BY
     window_time,
     node_id,

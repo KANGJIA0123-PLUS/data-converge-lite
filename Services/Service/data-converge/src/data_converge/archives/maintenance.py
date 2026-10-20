@@ -10,13 +10,14 @@ import sqlite3
 import stat
 import uuid
 
+from data_converge.time_policy import system_timezone
+
 from . import files
 
 _DAILY = re.compile(r'daily-(\d{8}T\d{12}Z)-[0-9a-f]{32}\.sqlite3\.gz\Z')
 _MIGRATION = re.compile(r'[0-9a-f]{16}-[0-9a-f]{32}\.sqlite3\Z')
 _SNAPSHOT = re.compile(r'\.snapshot-[0-9a-f]{32}\.sqlite3\Z')
 _TEMPORARY = re.compile(r'\.archive-[a-z0-9_]{8}\Z')
-_BEIJING = timezone(timedelta(hours=8))
 
 
 class _Guard:
@@ -195,9 +196,10 @@ def _reap_temporaries(database, now, check, report, *, redundant_only=False):
 
 
 def _valid_today(database, now, check, report):
-    today = now.astimezone(_BEIJING).date()
+    zone = system_timezone()
+    today = now.astimezone(zone).date()
     for item in reversed(daily_archives(database)):
-        if item['created_at'] > now or item['created_at'].astimezone(_BEIJING).date() != today:
+        if item['created_at'] > now or item['created_at'].astimezone(zone).date() != today:
             continue
         try:
             check()

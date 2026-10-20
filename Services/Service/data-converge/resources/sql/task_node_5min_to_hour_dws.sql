@@ -60,7 +60,7 @@ INSERT INTO modelmate_metric.t_mops_node_hour_dws (
 )
 SELECT
     -- 1. 时间窗口切分 (取小时窗口起始时间，如 10:00:00)
-    toStartOfHour(f.window_time)                           AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String})                           AS window_time,
 
     -- 2. 维度字段
     coalesce(f.node_type, 'UNKNOWN')                       AS node_type,
@@ -149,11 +149,11 @@ SELECT
 
 FROM modelmate_metric.t_mops_node_5min_dws AS f
 -- 增量调度过滤条件示例：计算上一个已完成的整点小时（例如 10:00:00 ~ 11:00:00）
-WHERE f.window_time >= {start_time:DateTime}
-  AND f.window_time <  {end_time:DateTime}
+WHERE f.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND f.sync_flag = 0
 GROUP BY
-    toStartOfHour(f.window_time),
+    toDateTime({start_time:UInt32}, {system_timezone:String}),
     coalesce(f.node_type, 'UNKNOWN'),
     f.node_id,
     f.node_ip;

@@ -125,8 +125,8 @@ INSERT INTO modelmate_metric.t_mops_node_day_ads
 )
 WITH card_agg AS (
     SELECT
-        -- 使用 toStartOfDay 动态识别夏令时并归一化当天的起始时刻
-        toStartOfDay(dws.window_time, 'Asia/Shanghai') AS window_time,  -- dws.window_time
+        -- 窗口边界由调度器统一计算，SQL 使用同一绝对起点
+        toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,  -- dws.window_time
         dws.node_id,                                                    -- dws.node_id
 
         -- 基础性能指标聚合
@@ -197,14 +197,14 @@ WITH card_agg AS (
 
     FROM modelmate_metric.t_mops_gpu_day_dws AS dws  -- 源表别名 dws
     -- 改为动态时间范围传参
-    WHERE dws.window_time >= {start_time:DateTime}
-      AND dws.window_time <  {end_time:DateTime}
+    WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+      AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
       AND dws.sync_flag = 0
     GROUP BY dws.window_time, dws.node_id
 )
 SELECT
     -- 保证写入 ADS 的 window_time 是当天安全的 00:00:00 起始时刻
-    toStartOfDay(n.window_time, 'Asia/Shanghai') AS window_time,
+    toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
     n.node_id,
 
     -- 2. 节点维表/属性字段
@@ -352,6 +352,6 @@ SELECT
 FROM modelmate_metric.t_mops_node_day_dws n
 LEFT JOIN card_agg c
     ON n.window_time = c.window_time AND n.node_id = c.node_id
-WHERE n.window_time >= {start_time:DateTime}
-  AND n.window_time <  {end_time:DateTime}
+WHERE n.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+  AND n.window_time <  toDateTime({end_time:UInt32}, 'UTC')
   AND n.sync_flag = 0;

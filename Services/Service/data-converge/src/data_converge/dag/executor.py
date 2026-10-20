@@ -13,6 +13,7 @@ from .memory import InMemoryExecutionRepository
 from .models import DAG, TaskInstance, TaskStatus
 from .ports import CheckpointRepository, ExecutionRepository, TaskRunner
 from .retry import can_start_attempt
+from .builder import shift_elapsed, timeline_time
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ class DAGExecutor:
             self._restore(instance)
 
         order = {name: index for index, name in enumerate(self.dag.topological_order)}
-        instance_list.sort(key=lambda i: (i.data_end, order[i.taskname]))
+        instance_list.sort(key=lambda i: (timeline_time(i.data_end), order[i.taskname]))
         attempted: set[str] = set()
         budget = max_executions if max_executions is not None else len(instance_list)
         while len(attempted) < budget:
@@ -171,7 +172,8 @@ class DAGExecutor:
                     instance.status = TaskStatus.SUCCESS
                     instance.error = None
                 instance.finished_at = self._now(instance)
-                next_retry_at = instance.finished_at + timedelta(seconds=self.retry_delay_seconds) if retryable else None
+                next_retry_at = shift_elapsed(
+                    instance.finished_at, timedelta(seconds=self.retry_delay_seconds)) if retryable else None
                 # A failed success commit must stop dispatch, leaving RUNNING for recovery.
                 # Keep persistence outside the runner exception handler.
                 self.repository.finish(instance.instance_id, instance.status, error=instance.error,
