@@ -60,10 +60,12 @@ def definition_check(path, raw):
 def state_check(store, definition):
     coverage = store.get_meta('coverage_start')
     counts = store.active_status_counts()
-    evidence = dict(path=str(store.path), coverage_start=coverage, counts=counts, **store.progress())
+    evidence = dict(path=str(store.path), coverage_start=coverage, counts=counts,
+                    binding_enforced=False, configuration_enforced=False, issue='DC-STATE-002',
+                    **store.progress())
     if not coverage or not store.get_meta('binding'):
         return check('state', 'FAIL', '状态库未完成初始化', evidence,
-                     '核对部署与原状态目录；不要删除已有状态库来绕过初始化检查。')
+                     '核对部署与原状态目录；本命令不会补齐初始化信息，删除数据库会丢失原执行历史。')
     try:
         parse_window(coverage)
     except (ValueError, TypeError):
@@ -71,17 +73,14 @@ def state_check(store, definition):
                      '核对原账本与部署版本；不要重置覆盖起点来绕过检查。')
     identity = configuration_identity(store, definition)
     evidence.update(identity)
-    if identity.get('configuration_matches') is False:
-        evidence['error_code'] = 'CONFIG_MIGRATION_REQUIRED'
-        return check('state', 'FAIL', '当前配置或 SQL 与已批准快照不同，需要显式迁移', evidence,
-                     '运行 --plan-config 核对变更和任务起点，再按计划应用；保留原账本。')
-    if definition is not None and ledger_binding(
-            store, binding(definition.config, definition.dag)) != store.get_meta('binding'):
-        return check('state', 'FAIL', '当前配置与状态库绑定不一致', evidence,
-                     '有可信旧资料时使用 --plan-config --previous-config 预览迁移；'
-                     '旧账本无配置快照且资料缺失时可正常启动，通过原锁、选主与备份校验后恢复新窗口，'
-                     '旧窗口保留隔离；不要重建状态库。')
-    return check('state', 'PASS', '状态库可只读查询', evidence)
+    if definition is not None:
+        evidence['binding_matches'] = ledger_binding(
+            store, binding(definition.config, definition.dag)) == store.get_meta('binding')
+    if identity.get('configuration_matches') is False or evidence.get('binding_matches') is False:
+        return check('state', 'WARN', '当前配置或 SQL 与账本不同；启动差异校验已临时关闭', evidence,
+                     '可用 --plan-config 核对变更；原绑定、快照和执行记录保留，'
+                     '放行不证明历史兼容或完成补算，后续处理见 DC-STATE-002。')
+    return check('state', 'PASS', '状态库可只读查询；启动配置差异阻断已临时关闭', evidence)
 
 
 def configuration_identity(store, definition):

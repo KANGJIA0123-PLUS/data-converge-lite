@@ -93,6 +93,24 @@ def test_diagnose_corrupt_ledger_continues_and_does_not_repair(app, capsys):
     assert path.read_bytes() == b'not a database'
 
 
+@pytest.mark.parametrize('different_binding, expected', [(False, 'PASS'), (True, 'WARN')])
+def test_diagnose_reports_binding_policy_without_rewriting_state(app, capsys, different_binding, expected):
+    store, _ = seed(app, count=1)
+    if different_binding:
+        store.set_meta('binding', 'a' * 64)
+    store.close()
+    path = app.parent / 'state/state.sqlite3'
+    before = path.read_bytes()
+    _, result = run_json(app, capsys, '--diagnose')
+    state = next(item for item in result['checks'] if item['id'] == 'state')
+    assert state['status'] == expected
+    assert state['evidence']['binding_matches'] is not different_binding
+    assert state['evidence']['binding_enforced'] is False
+    assert state['evidence']['configuration_enforced'] is False
+    assert state['evidence']['issue'] == 'DC-STATE-002'
+    assert path.read_bytes() == before
+
+
 def seed(app, count=25):
     application = Application(app)
     start = datetime.fromisoformat('2026-10-14T15:15:00+08:00')

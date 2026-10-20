@@ -86,14 +86,19 @@ def test_normal_start_does_not_rebuild_invalid_database(app, content):
     assert database.read_bytes() == content
 
 
-def test_normal_start_reports_lost_initialized_state(app, caplog):
-    import shutil
+def test_normal_start_recreates_missing_state_and_executes_new_window(local_http_app, caplog, monkeypatch):
+    from datetime import timedelta
 
+    app, requests = local_http_app
     assert entry.main(['--config', str(app), '--init-state']) == 0
-    shutil.rmtree(app.parent / 'state')
-    assert entry.main(['--config', str(app)]) == 1
-    assert 'STATE_DATABASE_MISSING' in caplog.text
-    assert not (app.parent / 'state' / 'state.sqlite3').exists()
+    database = app.parent / 'state/state.sqlite3'
+    database.unlink()
+    monkeypatch.setattr(runtime.TaskScheduler, 'start',
+                        lambda self: self.tick(self.start_time + timedelta(minutes=6)))
+    assert entry.main(['--config', str(app)]) == 0
+    assert 'STATE_RECREATED' in caplog.text
+    assert database.is_file()
+    assert len([sql for _, sql in requests if sql != 'SELECT 1']) == 1
 
 
 def test_init_rejects_naive_or_partial_window_start(app):
@@ -102,12 +107,13 @@ def test_init_rejects_naive_or_partial_window_start(app):
     assert not (app.parent / "state" / "state.sqlite3").exists()
 
 
-def test_changed_database_cannot_reuse_state(app):
+def test_changed_database_can_reuse_state_with_warning(app, caplog):
     assert entry.main(["--config", str(app), "--init-state"]) == 0
     config = yaml.safe_load(app.read_text())
     config["clickhouse"]["database"] = "different"
     app.write_text(yaml.safe_dump(config))
-    assert entry.main(["--config", str(app), "--init-state"]) == 1
+    assert entry.main(["--config", str(app), "--init-state"]) == 0
+    assert "CONFIGURATION_CHECK_DISABLED" in caplog.text
 
 
 def test_status_does_not_create_missing_state(app):
@@ -289,13 +295,17 @@ def test_partial_runtime_startup_releases_source_heartbeat_and_signal_handlers(l
     assert all(signal.getsignal(signum) is handler for signum, handler in handlers.items())
 
 
-def test_ready_mode_cannot_be_disabled_to_bypass_existing_state(app):
+def test_ready_mode_change_warns_and_preserves_existing_state(app, caplog):
     enable_ready(app)
-    assert entry.main(['--config', str(app), '--init-state']) == 0
+    args = ['--config', str(app), '--init-state']
+    assert entry.main(args) == 0
+    before = operations.Application(app).status().payload
     config = yaml.safe_load(app.read_text())
     config['dwd_ready'] = {'enabled': False}
     app.write_text(yaml.safe_dump(config))
-    assert entry.main(['--config', str(app), '--init-state']) == 1
+    assert entry.main(args) == 0
+    assert 'STATE_BINDING_CHECK_DISABLED' in caplog.text
+    assert operations.Application(app).status().payload == before
 
 
 @pytest.mark.parametrize('preinitialize', [False, True])

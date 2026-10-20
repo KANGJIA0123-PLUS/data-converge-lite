@@ -62,7 +62,7 @@ def next_boundary(value: datetime) -> datetime:
 def initialize_state(store: StateStore, fingerprint: str, start_time: datetime | None) -> None:
     existing = store.get_meta('binding')
     if existing and existing != fingerprint:
-        raise StartupError('STATE_DEPLOYMENT_BINDING_CHANGED')
+        logger.warning('STATE_BINDING_CHECK_DISABLED: issue=DC-STATE-002')
     previous = store.get_meta('coverage_start')
     if previous:
         if start_time and start_time.isoformat() != previous:
@@ -70,7 +70,8 @@ def initialize_state(store: StateStore, fingerprint: str, start_time: datetime |
     else:
         start_time = start_time or next_boundary(datetime.now(system_timezone()))
         store.set_meta('coverage_start', start_time.isoformat())
-    store.set_meta('binding', fingerprint)
+    if not existing:
+        store.set_meta('binding', fingerprint)
 
 
 def report_result(report: ExecutionReport) -> CommandResult:
@@ -177,9 +178,10 @@ class Application:
         current_revision = manifest_digest(self.manifest)
         if current_revision != previous_revision:
             diagnostic = dict(previous_revision=previous_revision, current_revision=current_revision,
-                              changes=compare_manifests(previous, self.manifest))
-            logger.error('CONFIGURATION_REJECTED diagnostic=%s', json.dumps(diagnostic, ensure_ascii=True))
-            raise StartupError('CONFIG_MIGRATION_REQUIRED')
+                              changes=compare_manifests(previous, self.manifest),
+                              configuration_enforced=False, issue='DC-STATE-002')
+            logger.warning('CONFIGURATION_CHECK_DISABLED diagnostic=%s',
+                           json.dumps(diagnostic, ensure_ascii=True))
 
     @contextmanager
     def _active_state(self, *, bootstrap: bool = False):
@@ -217,6 +219,7 @@ class Application:
             task_count=len(self.definition.dag.tasks), current=fingerprint,
             stored=existing, coverage=coverage,
         )
+        evidence.update(binding_enforced=False, configuration_enforced=False, issue='DC-STATE-002')
         # Escape paths and control characters; never serialize arbitrary metadata.
         diagnostic = json.dumps(evidence, ensure_ascii=True)
         try:
@@ -224,11 +227,14 @@ class Application:
         except StartupError:
             logger.error('STATE_BINDING_REJECTED diagnostic=%s', diagnostic)
             raise
-        if existing != fingerprint or not coverage:
+        if not existing or not coverage:
             logger.error('STATE_BINDING_REJECTED diagnostic=%s', diagnostic)
             raise StartupError('STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED')
         parse_time(coverage)
-        logger.info('STATE_BINDING_VALIDATED diagnostic=%s', diagnostic)
+        if existing != fingerprint:
+            logger.warning('STATE_BINDING_CHECK_DISABLED diagnostic=%s', diagnostic)
+        else:
+            logger.info('STATE_BINDING_OBSERVED diagnostic=%s', diagnostic)
 
     def resolve(self, instance_id: str, resolution: str, note: str) -> CommandResult:
         with self._active_state() as (store, lease):

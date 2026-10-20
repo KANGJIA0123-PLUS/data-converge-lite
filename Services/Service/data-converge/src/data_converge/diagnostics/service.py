@@ -204,7 +204,8 @@ def _inspect_history(store, instance_id, data, checks, *, limit, offset):
 def _inspect_dependencies(store, definition, row, data):
     if not inspection_definition(store, definition):
         return [check('dependencies', 'SKIP', '当前配置或 SQL 与账本版本不一致，未推断历史依赖', {},
-                      '运行 --plan-config 核对部署版本；实例原始状态与已保存错误证据仍可查看。')]
+                      '启动差异校验已临时关闭，但历史依赖仍需匹配的配置证据；'
+                      '可用 --plan-config 核对版本，实例原始状态与已保存错误证据仍可查看。')]
     effective = store.get_task_effective_starts().get(row['taskname'])
     if effective is not None and datetime.fromisoformat(row['data_start']) < effective:
         return [check('dependencies', 'SKIP', '实例窗口早于当前任务版本生效起点，未推断历史依赖',

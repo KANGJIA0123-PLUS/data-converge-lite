@@ -40,7 +40,7 @@ leadership:
   standby_poll_seconds: 2
 ```
 
-省略 leadership 的旧配置保持单写模式。所有副本必须使用相同 cluster_name、Redis 服务、DB、业务配置；要连续恢复原执行历史，还必须使用同一份完整持久账本。选主开关或名称变更不再受旧选主身份元数据阻断，但它们仍属于已保存的配置快照，已有快照变化需走显式配置迁移；关闭选主只适用于单写部署，更换命名空间前应停止原命名空间的所有写实例。
+省略 leadership 的旧配置保持单写模式。所有副本必须使用相同 cluster_name、Redis 服务、DB、业务配置；要连续恢复原执行历史，还必须使用同一份完整持久账本。选主开关或名称变更不再受旧选主身份元数据阻断；本轮调测对已有有效配置快照的差异也告警放行，原快照保留，详见 [DC-STATE-002](known-issues.md#dc-state-002)。关闭选主只适用于单写部署，更换命名空间前应停止原命名空间的所有写实例。配置放行或缺库重新初始化都不证明历史连续或不会重复写入。
 
 连接复用 `dwd_ready.redis` 的 Sentinel/PSM/XMS 或 standalone 认证配置。共享连接工厂位于 `infrastructure/redis`，每个调用方拥有独立连接池；选主直接组合连接资源，不再构造 DWD 消费者，也不与阻塞消息读取共用连接。选主当前要求启用 DWD Redis，支持 standalone/sentinel，不支持原生 Redis Cluster。Redis 账号需有 GET、SET NX PX、PEXPIRE、DEL、EVAL 等相应权限；租约操作采用比较 token 的 Lua 脚本。
 

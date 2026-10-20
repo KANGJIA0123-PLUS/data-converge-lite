@@ -78,7 +78,7 @@ def test_real_sentinel_pool_uses_distinct_auth_callbacks_and_owned_connections(t
     assert source._closed
 
 
-def test_sentinel_identity_is_checked_before_receiving_from_changed_queue(tmp_path):
+def test_sentinel_identity_change_warns_and_retains_original_binding(tmp_path, caplog):
     from data_converge.dwd_ready.redis_source import bind_sentinel_identity
     from data_converge.state import StateStore
     store = StateStore(tmp_path/'state.sqlite3', create=True)
@@ -86,8 +86,10 @@ def test_sentinel_identity_is_checked_before_receiving_from_changed_queue(tmp_pa
     try:
         bind_sentinel_identity(store,'a'*64)
         bind_sentinel_identity(store,'a'*64)
-        with pytest.raises(ValueError,match='DWD_REDIS_BINDING_CHANGED'):
-            bind_sentinel_identity(store,'b'*64)
+        bind_sentinel_identity(store,'b'*64)
+        bind_sentinel_identity(store, None)
         assert store.get_meta('dwd_redis_sentinel_binding')=='a'*64
+        assert caplog.text.count('DWD_REDIS_BINDING_CHECK_DISABLED') == 1
+        assert 'DC-STATE-002' in caplog.text
     finally:
         store.close()

@@ -79,6 +79,7 @@ class TaskScheduler:
         self._wall_triggers: dict[str, CronTrigger] = {}
         self._jobs: tuple[CronGroup, ...] = ()
         self._registered = False
+        self._skipped_records: set[tuple[str, str]] = set()
 
     def register_jobs(self) -> None:
         """Compile cron metadata for inspection and durable cursor planning."""
@@ -255,8 +256,9 @@ class TaskScheduler:
             if cursor is not None:
                 cursor = cursor.astimezone(self.timezone)
             if cursor is None or timeline_time(cursor) < timeline_time(effective_start):
-                cursor = next_fire_time(
-                    trigger, wall_trigger, effective_start, move_missing=calendar)
+                cursor = effective_start
+            # A persisted cursor may belong to an older cron expression.
+            cursor = self._align_cursor(trigger, wall_trigger, cursor, calendar)
             count = 0
             while (cursor is not None and timeline_time(cursor) <= timeline_time(now)
                    and count < self.catchup_limit):
@@ -272,6 +274,16 @@ class TaskScheduler:
             if cursor is not None:
                 next_cursors[taskname] = cursor
         return SchedulePlan(tuple(instances), next_cursors)
+
+    @staticmethod
+    def _align_cursor(trigger, wall_trigger, cursor, calendar):
+        if calendar:
+            # A missing local cron time is persisted at the end of the clock gap.
+            before = shift_elapsed(cursor, timedelta(microseconds=-1))
+            shifted = next_fire_time(trigger, wall_trigger, before, move_missing=True)
+            if shifted is not None and timeline_time(shifted) == timeline_time(cursor):
+                return cursor
+        return next_fire_time(trigger, wall_trigger, cursor, move_missing=calendar)
 
     def _poll_ready(self, now: datetime) -> datetime:
         if self.ready_poller is not None and not self.stop_requested:
@@ -313,22 +325,40 @@ class TaskScheduler:
         now = self._normalize_time(now)
         instances = []
         for record in self.state_store.list_pending():
-            scheduled = self._normalize_time(datetime.fromisoformat(record["scheduled_time"]))
-            instance = self.dag_builder.create_instance(self.dag, record["taskname"], scheduled)
-            if (instance.instance_id != record["instance_id"]
-                    or timeline_time(instance.data_start)
-                    != timeline_time(datetime.fromisoformat(record["data_start"]))
-                    or timeline_time(instance.data_end)
-                    != timeline_time(datetime.fromisoformat(record["data_end"]))):
-                raise ValueError(f"Persisted window no longer matches task definition: {record['instance_id']}")
-            self._validate_window_start(instance)
-            instances.append(instance)
+            instance = self._pending_instance(record)
+            if instance is not None:
+                instances.append(instance)
         # Read all pending rows, but bound actual submissions. Old BLOCKED rows
         # cannot monopolize a LIMIT query and starve unrelated ready windows.
         report = self.dag_executor.execute(instances, now=now, max_executions=self.catchup_limit,
                                            should_stop=lambda: self.stop_requested)
         self._log_execution_errors(report)
         return report
+
+    def _pending_instance(self, record: dict) -> TaskInstance | None:
+        times = {field: datetime.fromisoformat(record[field])
+                 for field in ("scheduled_time", "data_start", "data_end")}
+        if any(value.utcoffset() is None for value in times.values()):
+            raise ValueError("Persistent timestamps must include a timezone")
+        if record["taskname"] not in self.dag.tasks:
+            return self._skip_pending(record, "TASK_REMOVED")
+        scheduled = self._normalize_time(times["scheduled_time"])
+        instance = self.dag_builder.create_instance(self.dag, record["taskname"], scheduled)
+        if (instance.instance_id != record["instance_id"]
+                or any(timeline_time(getattr(instance, field)) != timeline_time(times[field])
+                       for field in ("data_start", "data_end"))):
+            return self._skip_pending(record, "TASK_WINDOW_CHANGED")
+        effective_start = self._effective_start(instance.taskname)
+        if effective_start and timeline_time(instance.data_start) < timeline_time(effective_start):
+            return self._skip_pending(record, "WINDOW_BEFORE_EFFECTIVE_START")
+        return instance
+
+    def _skip_pending(self, record: dict, reason: str) -> None:
+        key = (record["instance_id"], reason)
+        if key not in self._skipped_records:
+            self._skipped_records.add(key)
+            logger.warning("PERSISTED_WINDOW_SKIPPED: issue=DC-STATE-002 instance_id=%r reason=%s",
+                           record["instance_id"], reason)
 
     @staticmethod
     def _log_execution_errors(report: ExecutionReport) -> None:

@@ -75,7 +75,7 @@ def test_additive_migration_preserves_success_and_uses_explicit_cutover(local_ht
     assert len(requests) == 3  # Existing and added tasks each execute the new window.
 
 
-def test_preview_is_read_only_and_sql_change_requires_migration(app, monkeypatch):
+def test_preview_is_read_only_and_sql_change_can_be_explicitly_migrated(app, monkeypatch):
     original = Application(app)
     original.initialize(START)
     (app.parent / 'sql/simple.sql').write_text('INSERT INTO target SELECT 42')
@@ -86,8 +86,9 @@ def test_preview_is_read_only_and_sql_change_requires_migration(app, monkeypatch
     assert plan['changes']['changed'] == ['simple']
     assert plan['blockers'] == [] and dump_database(app) == before
     assert not (app.parent / 'logs').exists()
-    with pytest.raises(StartupError, match='CONFIG_MIGRATION_REQUIRED'):
-        target.run_once('2026-10-12T10:06:00+08:00')
+    with target._active_state():
+        pass
+    assert dump_database(app) == before
 
 
 def test_legacy_ledger_requires_matching_old_config_and_trusted_sql_confirmation(app):

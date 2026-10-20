@@ -78,24 +78,31 @@ def test_normal_start_retires_old_facts_executes_new_windows_and_restarts_once(l
 
 
 @pytest.mark.parametrize('operation', ['run_once', 'run_task', 'initialize', 'resolve'])
-def test_non_service_commands_never_implicitly_retire_legacy_history(app, operation):
+def test_non_service_commands_never_implicitly_retire_legacy_history(local_http_app, operation):
+    app, _ = local_http_app
     legacy(app)
     target = Application(app)
-    before = dump_database(app)
-    arguments = {'run_once': [NOW.isoformat()], 'run_task': ['simple', NOW.isoformat()],
-                 'initialize': [], 'resolve': ['missing', 'success', 'note']}
-    with pytest.raises(StartupError, match='BINDING_CHANGED'):
-        getattr(target, operation)(*arguments[operation])
-    assert dump_database(app) == before
+    with closing(StateStore(target.directory / 'state.sqlite3')) as store:
+        uncertain = next(row['instance_id'] for row in store.list_instances() if row['status'] == 'UNKNOWN')
+        binding = store.get_meta('binding')
+    arguments = {'run_once': ['2026-10-12T10:06:00+08:00'],
+                 'run_task': ['simple', '2026-10-12T10:06:00+08:00'],
+                 'initialize': [], 'resolve': [uncertain, 'success', 'confirmed']}
+    assert getattr(target, operation)(*arguments[operation]).exit_code == 0
+    with closing(StateStore(target.directory / 'state.sqlite3')) as store:
+        assert store.legacy_recovery() is None
+        assert store.configuration_snapshot() is None
+        assert store.get_meta('binding') == binding
 
 
-def test_new_snapshot_mismatch_still_requires_reviewed_migration(app, clock):
+def test_new_snapshot_mismatch_can_start_without_rewriting_history(local_http_app, clock, caplog):
+    app, _ = local_http_app
     Application(app).initialize(START)
     add_task(app)
     before = dump_database(app)
-    with pytest.raises(StartupError, match='CONFIG_MIGRATION_REQUIRED'):
-        Application(app).serve()
+    assert Application(app).serve().exit_code == 0
     assert dump_database(app) == before
+    assert 'CONFIGURATION_CHECK_DISABLED' in caplog.text
 
 
 def test_lost_new_snapshot_markers_cannot_masquerade_as_legacy(app, clock):

@@ -115,7 +115,7 @@ def test_migration_parameters_cannot_be_used_by_another_command(app, options):
     assert not (app.parent / 'state').exists()
 
 
-def test_diagnose_detects_sql_change_without_exposing_snapshot_identity(app, capsys):
+def test_diagnose_warns_on_sql_change_without_exposing_or_overwriting_snapshot(app, capsys):
     store, _ = seed(app, count=1)
     save_snapshot(app, store)
     before = store.path.read_bytes()
@@ -123,8 +123,11 @@ def test_diagnose_detects_sql_change_without_exposing_snapshot_identity(app, cap
     (app.parent / 'sql/simple.sql').write_text('INSERT INTO target SELECT 7')
     _, result = run_json(app, capsys, '--diagnose')
     state = next(item for item in result['checks'] if item['id'] == 'state')
-    assert state['status'] == 'FAIL'
-    assert state['evidence']['error_code'] == 'CONFIG_MIGRATION_REQUIRED'
+    assert state['status'] == 'WARN'
+    assert state['evidence']['configuration_matches'] is False
+    assert state['evidence']['configuration_enforced'] is False
+    assert state['evidence']['issue'] == 'DC-STATE-002'
+    assert 'error_code' not in state['evidence']
     assert state['evidence']['configuration_changes']['changed'] == ['simple']
     assert '--plan-config' in state['action']
     evidence = json.dumps(state['evidence'])
@@ -140,6 +143,7 @@ def test_inspection_skips_current_dependencies_after_sql_only_change(app, capsys
     _, result = run_json(app, capsys, '--inspect-instance', instances[0].instance_id)
     dependencies = next(item for item in result['checks'] if item['id'] == 'dependencies')
     assert dependencies['status'] == 'SKIP'
+    assert '临时' in dependencies['action']
     assert 'dependencies' not in result['data'] and 'sql_file' not in result['data']
     assert result['data']['instance']['status'] == 'UNKNOWN'
 

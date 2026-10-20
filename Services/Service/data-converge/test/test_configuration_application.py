@@ -1,4 +1,4 @@
-"""Application startup binds approved configuration without changing legacy facts."""
+"""Temporary configuration admission preserves old snapshots and execution facts."""
 
 from contextlib import closing
 from datetime import datetime
@@ -73,21 +73,27 @@ def test_validation_reads_sql_manifest_without_creating_state(app):
 
 @pytest.mark.parametrize("change", ["sql", "connection"])
 @pytest.mark.parametrize("operation", ["run_once", "initialize"])
-def test_existing_snapshot_rejects_configuration_change_before_resources(app, change, operation):
-    Application(app).initialize(START)
-    before = ledger_dump(app)
+def test_existing_snapshot_warns_and_keeps_original_configuration(local_http_app, caplog, change, operation):
+    app, requests = local_http_app
+    original = Application(app)
+    original.initialize(START)
+    with closing(StateStore(original.directory / "state.sqlite3")) as store:
+        snapshot = store.configuration_snapshot()
     if change == "sql":
         (app.parent / "sql/simple.sql").write_text("INSERT INTO target SELECT 42")
     else:
         raw = yaml.safe_load(app.read_text())
         raw["clickhouse"]["database"] = "different-dataset"
         app.write_text(yaml.safe_dump(raw))
-    application = Application(app, dependencies=RuntimeDependencies(
-        execution_factory=reject_execution_factory))
-    with pytest.raises(StartupError, match="^CONFIG_MIGRATION_REQUIRED$"):
-        getattr(application, operation)()
-    assert ledger_dump(app) == before
-    assert not (app.parent / "state/heartbeat.json").exists()
+    application = Application(app)
+    arguments = [DUE] if operation == "run_once" else []
+    assert getattr(application, operation)(*arguments).exit_code == 0
+    assert "CONFIGURATION_CHECK_DISABLED" in caplog.text
+    with closing(StateStore(application.directory / "state.sqlite3")) as store:
+        assert store.configuration_snapshot() == snapshot
+        assert store.get_meta("binding") == original.fingerprint
+        assert len(store.configuration_history()) == 1
+    assert len(requests) == int(operation == "run_once")
 
 
 def test_reinitialization_does_not_create_another_configuration_revision(app):
@@ -112,13 +118,15 @@ def test_legacy_ledger_does_not_automatically_adopt_a_snapshot(local_http_app):
         assert store.configuration_history() == []
 
 
-def test_legacy_binding_failure_keeps_original_error_code(app):
+def test_legacy_binding_difference_does_not_block_execution(local_http_app, caplog):
+    app, requests = local_http_app
     legacy_initialize(Application(app))
     raw = yaml.safe_load(app.read_text())
     raw["clickhouse"]["database"] = "different-dataset"
     app.write_text(yaml.safe_dump(raw))
-    with pytest.raises(StartupError, match="STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED"):
-        Application(app).run_once(DUE)
+    assert Application(app).run_once(DUE).exit_code == 0
+    assert len(requests) == 1
+    assert "STATE_BINDING_CHECK_DISABLED" in caplog.text
 
 
 def test_manual_task_start_is_checked_before_runtime_resources(app):

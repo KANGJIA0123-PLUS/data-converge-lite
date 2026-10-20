@@ -1,4 +1,4 @@
-"""Explain rejected startup without changing the ledger or exposing its contents."""
+"""Explain temporary admission without overwriting bindings or leaking contents."""
 
 from contextlib import closing
 from datetime import datetime
@@ -35,32 +35,36 @@ def test_changed_binding_logs_evidence_and_preserves_running_work(local_http_app
     instance = definition.builder.create_instance(
         definition.dag, 'simple', datetime.fromisoformat('2026-10-12T10:06:00+08:00'))
     database = path.parent / 'state/state.sqlite3'
-    # Manual execution retains the legacy rejection path; only serve may recover new windows.
+    # Keep a legacy binding and an uncertain write across the configuration change.
     with closing(sqlite3.connect(database)) as connection, connection:
         connection.execute("DELETE FROM metadata WHERE key IN ('configuration_snapshot','configuration_required')")
     with closing(StateStore(database)) as store:
         store.acquire_lock()
         store.enqueue_and_advance([instance], {})
         assert store.claim(instance.instance_id, now=instance.scheduled_time, max_attempts=3)
-    before = ledger_dump(database)
     config = yaml.safe_load(path.read_text())
     config['clickhouse']['database'] = 'private-database-sentinel'
     config['clickhouse']['username'] = 'private-user-sentinel'
     path.write_text(yaml.safe_dump(config))
-    assert entry.main(['--config', str(path), '--run-once']) == 1
-    detail = event_details(caplog, 'STATE_BINDING_REJECTED')
+    assert entry.main(['--config', str(path), '--run-once',
+                       '--now', '2026-10-12T10:06:00+08:00']) == 0
+    detail = event_details(caplog, 'STATE_BINDING_CHECK_DISABLED')
     assert detail['reasons'] == ['BINDING_MISMATCH']
     assert detail['stored_binding'] == application.fingerprint
     assert detail['current_binding'] == Application(path).fingerprint
     assert detail['current_task_count'] == 1
     assert detail['config_path'] == str(path) and detail['state_path'] == str(database)
     assert detail['coverage_start_present'] is True
-    assert 'STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED' in caplog.text
-    assert 'STATE_BINDING_VALIDATED' not in caplog.text
+    assert detail['binding_enforced'] is False and detail['issue'] == 'DC-STATE-002'
+    assert 'STATE_BINDING_REJECTED' not in caplog.text
     assert 'private-database-sentinel' not in caplog.text
     assert 'private-user-sentinel' not in caplog.text
     assert 'synthetic-integration-secret' not in caplog.text
-    assert requests == [] and ledger_dump(database) == before
+    assert requests == []
+    with closing(StateStore(database)) as store:
+        assert store.get_meta('binding') == application.fingerprint
+        saved = store.get_instance(instance.instance_id)
+        assert saved['status'] == 'UNKNOWN' and saved['attempts'] == 1
 
 
 @pytest.mark.parametrize('missing,reasons', [
@@ -81,7 +85,7 @@ def test_missing_metadata_is_distinguished_without_reinitializing(app, caplog, m
     if 'binding' in missing:
         assert detail['stored_binding'] is None
     assert 'STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED' in caplog.text
-    assert 'STATE_BINDING_VALIDATED' not in caplog.text
+    assert 'STATE_BINDING_OBSERVED' not in caplog.text
     assert ledger_dump(database) == before
 
 
@@ -111,7 +115,7 @@ def test_valid_binding_logs_success_and_restart_does_not_repeat_sql(local_http_a
     for expected_statuses in (['SUCCESS'], []):
         caplog.clear()
         assert entry.main(command) == 0
-        detail = event_details(caplog, 'STATE_BINDING_VALIDATED')
+        detail = event_details(caplog, 'STATE_BINDING_OBSERVED')
         assert detail['reasons'] == []
         assert detail['stored_binding'] == detail['current_binding']
         assert 'STATE_BINDING_REJECTED' not in caplog.text
@@ -127,5 +131,5 @@ def test_invalid_coverage_does_not_log_validation_success(app, caplog):
         store.set_meta('coverage_start', 'private-invalid-coverage')
     assert entry.main(['--config', str(app)]) == 1
     assert 'TIME_REQUIRES_ISO8601_WITH_TIMEZONE' in caplog.text
-    assert 'STATE_BINDING_VALIDATED' not in caplog.text
+    assert 'STATE_BINDING_OBSERVED' not in caplog.text
     assert 'private-invalid-coverage' not in caplog.text

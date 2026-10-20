@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import fcntl
+import logging
 import sqlite3
 from pathlib import Path
 from typing import TextIO
 
 from .bootstrap import StateBootstrap, StateBootstrapError
+
+
+logger = logging.getLogger(__name__)
 
 
 class LedgerDatabase:
@@ -40,18 +44,23 @@ class LedgerDatabase:
             raise
 
     def acquire_startup_lock(self) -> bool:
-        """Admit an unmarked, otherwise empty directory; never repair a ledger."""
+        """Create missing startup state under the writer lock; reject corrupt state."""
         if self._lock_file is not None:
             if self._startup_created is None:
                 raise RuntimeError("State startup requires its own lock acquisition")
             return self._startup_created
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self._create:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._acquire_file_lock()
         try:
-            created = StateBootstrap(self.path).prepare(self.lock_path)
+            bootstrap = StateBootstrap(self.path)
+            created = bootstrap.prepare(self.lock_path, create=self._create)
             self._open_database(create=created, upgrade=created)
             self._validate_startup_schema()
             self._startup_created = created
+            if bootstrap.recreated:
+                logger.warning("STATE_RECREATED: issue=DC-STATE-002 history_missing=true; "
+                               "previous tasks, cursors and deduplication history are unavailable")
             return created
         except sqlite3.DatabaseError:
             self.close()

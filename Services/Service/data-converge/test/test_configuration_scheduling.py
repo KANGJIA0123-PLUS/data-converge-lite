@@ -106,20 +106,24 @@ def test_manual_window_at_task_activation_is_allowed(tmp_path):
         assert store.status_counts() == {"SUCCESS": 1}
 
 
-def test_pending_old_window_is_rejected_without_claim_or_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("scope", ["task", "coverage"])
+def test_pending_old_window_is_retained_without_blocking_current_work(tmp_path, caplog, scope):
     with configured_scheduler(tmp_path, None) as (scheduler, store, calls):
         instance = scheduler.dag_builder.create_instance(scheduler.dag, "task_5min", EFFECTIVE)
         store.enqueue_and_advance([instance], {})
-        save_configuration(store, {"task_5min": EFFECTIVE}, COVERAGE)
+        if scope == "task":
+            save_configuration(store, {"task_5min": EFFECTIVE}, COVERAGE)
         scheduler = TaskScheduler(scheduler.dag, scheduler.dag_builder, scheduler.dag_executor,
-                                  start_time=COVERAGE)
-        monkeypatch.setattr(scheduler.dag_executor, "execute",
-                            lambda *a, **kw: pytest.fail("Executor received invalid pending window"))
-        with pytest.raises(ValueError, match="TASK_WINDOW_BEFORE_EFFECTIVE_START"):
-            scheduler.run_pending(EFFECTIVE + timedelta(minutes=6))
+                                  start_time=EFFECTIVE if scope == "coverage" else COVERAGE)
+        valid = scheduler.dag_builder.create_instance(
+            scheduler.dag, "task_5min", EFFECTIVE + timedelta(minutes=6))
+        store.enqueue_and_advance([valid], {})
+        scheduler.run_pending(EFFECTIVE + timedelta(minutes=6))
+        scheduler.run_pending(EFFECTIVE + timedelta(minutes=6))
         saved = store.get_instance(instance.instance_id)
         assert saved["status"] == "PENDING" and saved["attempts"] == 0
-        assert calls == []
+        assert calls == ["task_5min@2026-10-19T10:05:00+08:00"]
+        assert caplog.text.count("PERSISTED_WINDOW_SKIPPED") == 1
 
 
 def test_legacy_ledger_without_task_starts_retains_coverage_planning(tmp_path):

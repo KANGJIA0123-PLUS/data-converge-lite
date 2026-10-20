@@ -97,7 +97,7 @@ def test_failing_probe_closes_source_heartbeat_and_restores_signals(inputs):
     assert all(signal.getsignal(signum) is handler for signum, handler in previous.items())
 
 
-def test_source_binding_failure_closes_new_source_before_runtime_is_yielded(inputs):
+def test_source_binding_change_allows_runtime_and_retains_original_binding(inputs, caplog):
     source = Source()
     source.identity = 'changed-identity'
     inputs[2].set_meta('dwd_redis_sentinel_binding', 'original-identity')
@@ -105,11 +105,13 @@ def test_source_binding_failure_closes_new_source_before_runtime_is_yielded(inpu
         execution_factory=lambda *_: runtime.ExecutionAdapter(lambda _: None, lambda: None),
         source_factory=lambda _: source,
     )
-    with pytest.raises(ValueError, match='DWD_REDIS_BINDING_CHANGED'):
-        with runtime.open_runtime(*inputs, START, dependencies=dependencies):
-            pytest.fail('failed initialization must not yield a runtime')
+    with runtime.open_runtime(*inputs, START, dependencies=dependencies) as service:
+        assert service.run_once(NOW).instances
+        assert inputs[2].get_meta('dwd_redis_sentinel_binding') == 'original-identity'
+        assert not source.closed
     assert source.closed
     assert not (inputs[3] / 'heartbeat.json').exists()
+    assert 'DWD_REDIS_BINDING_CHECK_DISABLED' in caplog.text
 
 
 def test_application_runs_with_injected_adapters_without_external_services(app):

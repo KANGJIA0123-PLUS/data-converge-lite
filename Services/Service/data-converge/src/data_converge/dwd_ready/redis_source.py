@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from data_converge.infrastructure.redis import (
     RedisConnection, RedisConnectionError, create_connection,
 )
 
 from .ports import SignalSourceError
+
+logger = logging.getLogger(__name__)
 
 
 class RedisSignalError(SignalSourceError):
@@ -92,7 +96,7 @@ def bind_sentinel_identity(store, identity):
         return
     previous = store.get_meta('dwd_redis_sentinel_binding')
     if previous is not None and previous != identity:
-        raise ValueError('DWD_REDIS_BINDING_CHANGED') from None
+        logger.warning('DWD_REDIS_BINDING_CHECK_DISABLED: issue=DC-STATE-002 reason=BINDING_MISMATCH')
     if previous is None:
         store.set_meta('dwd_redis_sentinel_binding', identity)
 

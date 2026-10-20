@@ -1,5 +1,6 @@
 """Scheduler progression must distinguish both occurrences of a repeated hour."""
 
+from contextlib import closing
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -161,6 +162,37 @@ def test_calendar_cron_does_not_skip_days_across_clock_changes(zone, start, now,
     scheduler.register_jobs()
     plan = scheduler._plan_due({}, datetime.fromisoformat(now).replace(tzinfo=timezone))
     assert [instance.data_end.isoformat() for instance in plan.instances] == expected
+
+
+@pytest.mark.parametrize("zone, cron, start, before, after, cursor, expected", [
+    ("America/Santiago", "10 0 * * *", "2026-09-05T00:00:00-04:00",
+     "2026-09-05T23:59:00-04:00", "2026-09-06T01:01:00-03:00",
+     "2026-09-06T01:00:00-03:00", "task_5min@2026-09-06T01:00:00-03:00"),
+    ("America/New_York", "10 2 * * *", "2026-03-07T00:00:00-05:00",
+     "2026-03-08T01:59:00-05:00", "2026-03-08T03:01:00-04:00",
+     "2026-03-08T03:00:00-04:00", "task_5min@2026-03-08T00:00:00-05:00"),
+    ("Australia/Lord_Howe", "10 2 * * *", "2026-10-03T00:00:00+10:30",
+     "2026-10-04T01:59:00+10:30", "2026-10-04T02:31:00+11:00",
+     "2026-10-04T02:30:00+11:00", "task_5min@2026-10-04T00:00:00+10:30"),
+])
+def test_persisted_calendar_cursor_keeps_shifted_missing_time(
+        tmp_path, zone, cron, start, before, after, cursor, expected):
+    rule = dict(make_rules()[0], aggregation_interval="P1D", cron=cron)
+    builder = DAGBuilder(FakeConfigLoader([rule]))
+    dag = builder.build()
+    calls = []
+    with closing(StateStore(tmp_path / "calendar.db", create=True)) as store:
+        store.acquire_lock()
+        executor = DAGExecutor(dag, lambda item: calls.append(item.instance_id), state_store=store)
+        scheduler = TaskScheduler(dag, builder, executor, timezone=zone,
+                                  start_time=datetime.fromisoformat(start))
+        scheduler.tick(datetime.fromisoformat(before))
+        assert calls == []
+        assert store.get_cursor("task_5min").isoformat() == cursor
+        scheduler.tick(datetime.fromisoformat(after))
+        scheduler.tick(datetime.fromisoformat(after))
+        assert calls == [expected]
+        assert store.get_instance(expected)["status"] == "SUCCESS"
 
 
 @pytest.mark.parametrize("zone, start, now", [

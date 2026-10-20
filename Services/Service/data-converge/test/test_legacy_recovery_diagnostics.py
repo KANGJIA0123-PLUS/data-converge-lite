@@ -181,7 +181,7 @@ def test_missing_baseline_plan_explains_normal_start_recovery_without_applying(a
     assert (app.parent / 'state/state.sqlite3').read_bytes() == before
 
 
-def test_legacy_mismatch_diagnose_explains_new_window_recovery(app, capsys):
+def test_legacy_mismatch_diagnose_warns_without_changing_old_ledger(app, capsys):
     Application(app).initialize(START.isoformat())
     with closing(StateStore(app.parent / 'state/state.sqlite3')) as store:
         store.acquire_lock()
@@ -189,9 +189,11 @@ def test_legacy_mismatch_diagnose_explains_new_window_recovery(app, capsys):
         before = store.path.read_bytes()
     _, result = run_json(app, capsys, '--diagnose')
     state = next(item for item in result['checks'] if item['id'] == 'state')
-    assert state['status'] == 'FAIL'
-    assert '正常启动' in state['action'] and '新窗口' in state['action']
-    assert '旧窗口' in state['action'] and '--previous-config' in state['action']
+    assert state['status'] == 'WARN'
+    assert state['evidence']['configuration_snapshot_present'] is False
+    assert state['evidence']['binding_matches'] is False
+    assert state['evidence']['binding_enforced'] is False
+    assert state['evidence']['issue'] == 'DC-STATE-002'
     assert (app.parent / 'state/state.sqlite3').read_bytes() == before
 
 
