@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 import subprocess
 import sys
+import shlex
 
 import pytest
 
@@ -223,3 +224,58 @@ def test_wait_warning_uses_elapsed_seconds_across_repeated_hour(store, caplog):
     assert 'DWD_WAIT_TIMEOUT' not in caplog.text
     assert ready.reason(window, before.replace(minute=1, second=0, fold=1))
     assert 'DWD_WAIT_TIMEOUT' in caplog.text
+    assert 'waited_seconds=60' in caplog.text
+    assert 'window_end=2026-11-01T01:00:00-05:00' in caplog.text
+
+
+@pytest.mark.parametrize('received,received_text,missing_text', [
+    ([], 'NONE', 'GPU_REALTIME,MODELINSTANCE_REALTIME,MODELMETRIC_REALTIME,NODE_REALTIME,REQUEST_REALTIME'),
+    (['NODE_REALTIME', 'GPU_REALTIME'], 'GPU_REALTIME,NODE_REALTIME',
+     'MODELINSTANCE_REALTIME,MODELMETRIC_REALTIME,REQUEST_REALTIME'),
+])
+def test_timeout_warning_explains_local_evidence_without_debug(store, caplog, received, received_text, missing_text):
+    for kind in received:
+        store.record_dwd_signal(START, kind, NOW)
+    ready = ReadyCoordinator(store, Source(), START, wait_warning_seconds=90)
+    reason = ready.reason(instance(), NOW + timedelta(seconds=35))
+    assert reason == 'DWD_NOT_READY:' + missing_text
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == 'WARNING'
+    message = caplog.records[0].getMessage()
+    assert 'window_start=2026-10-12T10:00:00+08:00' in message
+    assert 'window_end=2026-10-12T10:05:00+08:00' in message
+    assert 'waited_seconds=95' in message
+    assert 'timeout_seconds=90' in message
+    assert f'received={received_text}' in message
+    assert f'missing={missing_text}' in message
+    assert 'local readiness evidence is incomplete' in message
+    assert 'does not prove upstream data is absent' in message
+    assert 'execution remains blocked' in message
+
+
+def test_timeout_warning_provides_valid_readonly_diagnostic_arguments(store, caplog):
+    from data_converge.main import arguments
+
+    coordinator(store, Source()).reason(instance(), NOW)
+    message = caplog.records[0].getMessage()
+    assert 'diagnostic_args="' in message
+    diagnostic_args = message.split('diagnostic_args="', 1)[1].split('"', 1)[0]
+    args = arguments(shlex.split(diagnostic_args))
+    assert args.dwd_status is True
+    assert args.window == '2026-10-12T10:00:00+08:00'
+    assert args.format == 'json'
+    assert 'same service launcher and --config' in message
+
+
+def test_timeout_warning_remains_rate_limited_per_window(store, caplog):
+    ready = coordinator(store, Source())
+    assert ready.reason(instance(), NOW)
+    assert ready.reason(instance(), NOW)
+    assert ready.reason(instance(), NOW + timedelta(seconds=59))
+    assert len(caplog.records) == 1
+    assert ready.reason(instance(), NOW + timedelta(seconds=60))
+    assert len(caplog.records) == 2
+    for kind in DWD_TYPES:
+        store.record_dwd_signal(START, kind, NOW)
+    assert ready.reason(instance(), NOW + timedelta(seconds=120)) is None
+    assert len(caplog.records) == 2

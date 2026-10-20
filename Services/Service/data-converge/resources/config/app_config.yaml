@@ -1,6 +1,6 @@
 # 平台部署：60个汇聚任务。ClickHouse HTTP端点由Deployment注入。
 logging:
-  debug_enabled: false  # 改为true并重启后仅记录失败SQL、参数及详细错误；成功SQL不打印。
+  debug_enabled: false  # 失败SQL、参数和原因默认以ERROR记录；true额外开启调用栈和阶段调试日志。
   max_bytes: 20971520     # 20 MiB，单条超限日志仍完整保留。
   backup_count: 10       # 最多10个历史文件，不含当前日志。
   retention_days: 7      # 按归档文件最后写入时间清理，重启不重置期限。

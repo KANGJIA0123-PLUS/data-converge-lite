@@ -332,6 +332,30 @@ def test_unknown_upstream_sql_outcome_does_not_block_hour_task(caplog):
     assert child_report.blocked == []
 
 
+@pytest.mark.parametrize("outcome_unknown", [False, True])
+def test_failure_summary_identifies_task_window_without_raw_error(caplog, outcome_unknown):
+    from data_converge.errors import TaskExecutionError
+
+    def failed_runner(instance):
+        raise TaskExecutionError("CLICKHOUSE_HTTP_FAILED", outcome_unknown=outcome_unknown,
+                                 diagnostic={"http_status": 503, "message": "secret diagnostic"})
+
+    scheduler = build_scheduler(failed_runner)
+    report = scheduler.run_task(
+        taskname="task_5min", scheduled_time=datetime(2026, 9, 9, 10, 6, tzinfo=SHANGHAI))
+
+    instance = (report.failed + report.unknown)[0]
+    assert "taskname=task_5min" in caplog.text
+    assert f"instance={instance.instance_id}" in caplog.text
+    assert "window=[2026-09-09 10:00:00+08:00, 2026-09-09 10:05:00+08:00)" in caplog.text
+    assert f"status={'UNKNOWN' if outcome_unknown else 'FAILED'}" in caplog.text
+    assert "error=CLICKHOUSE_HTTP_FAILED" in caplog.text
+    assert "secret diagnostic" not in caplog.text
+    assert instance.error == "CLICKHOUSE_HTTP_FAILED"
+    diagnostic = scheduler.dag_executor.repository.get_execution_diagnostic(instance.instance_id)
+    assert diagnostic["http_status"] == 503 and "message" not in diagnostic
+
+
 def test_invalid_cron_expression_is_rejected():
     """非法 Cron 应在注册阶段明确指出对应任务。"""
     rules = make_rules()

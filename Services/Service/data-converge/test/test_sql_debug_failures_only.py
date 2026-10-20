@@ -1,4 +1,4 @@
-"""Only the failed HTTP operation may expose its redacted SQL in debug logs."""
+"""Only the failed HTTP operation emits its redacted SQL at ERROR by default."""
 
 import io
 import json
@@ -19,8 +19,10 @@ from .test_main import app
 
 
 @pytest.mark.parametrize("failed_operation", [1, 2], ids=["cleanup", "aggregation"])
-def test_runner_logs_only_the_failed_operation_sql(tmp_path, monkeypatch, caplog, failed_operation):
-    task_runner = make_runner(tmp_path, debug_enabled=True)
+@pytest.mark.parametrize("debug_enabled", [False, True])
+def test_runner_logs_only_the_failed_operation_sql(
+        tmp_path, monkeypatch, caplog, failed_operation, debug_enabled):
+    task_runner = make_runner(tmp_path, debug_enabled=debug_enabled)
     calls = []
 
     class Opener:
@@ -36,12 +38,15 @@ def test_runner_logs_only_the_failed_operation_sql(tmp_path, monkeypatch, caplog
     with pytest.raises(TaskExecutionError):
         task_runner(make_instance())
     records = [record for record in caplog.records if "SQL_REQUEST" in record.getMessage()]
-    assert len(records) == 1 and records[0].levelno == logging.DEBUG
+    assert len(records) == 1 and records[0].levelno == logging.ERROR
     text = records[0].getMessage()
     assert calls[-1].data.decode() in text
     assert "runner-attempt" in text
     assert "param_start_time" in text and "param_end_time" in text
     assert "Table target does not exist" in caplog.text
+    errors = [record for record in caplog.records if "SQL_ERROR" in record.getMessage()]
+    assert len(errors) == 1
+    assert "SQL_TASK_FAILED" in caplog.text
     if failed_operation == 2:
         assert calls[0].data.decode() not in caplog.text
     assert "runner-secret-password" not in caplog.text
@@ -104,7 +109,7 @@ def test_deadline_expiring_after_response_still_logs_failed_request(monkeypatch,
 
 
 @pytest.mark.parametrize("debug_enabled", [False, True])
-def test_cli_failure_writes_only_failed_sql_when_enabled(app, monkeypatch, capsys, debug_enabled):
+def test_cli_failure_writes_failed_sql_at_default_and_debug_levels(app, monkeypatch, capsys, debug_enabled):
     monkeypatch.setenv("LOG_PATH", str(app.parent / "logs"))
     monkeypatch.setenv("SERVICE_NAME", "data-converge")
     config = yaml.safe_load(app.read_text())
@@ -120,10 +125,12 @@ def test_cli_failure_writes_only_failed_sql_when_enabled(app, monkeypatch, capsy
     assert entry.main(base + ["--init-state", "--start-time", "2026-10-12T10:00:00+08:00"]) == 0
     capsys.readouterr()
     assert entry.main(base + ["--run-once", "--now", "2026-10-12T10:06:00+08:00"]) == 1
-    assert json.loads(capsys.readouterr().out)["instances"][0]["status"] == "UNKNOWN"
+    output = capsys.readouterr().out
+    assert json.loads(output)["instances"][0]["status"] == "UNKNOWN"
+    assert "Table target_local does not exist" not in output and "SQL_REQUEST" not in output
     assert len(calls) == 1
     text = (app.parent / "logs/data-converge.log").read_text()
-    assert text.count("SQL_REQUEST") == int(debug_enabled)
-    assert (calls[0][0].data.decode() in text) is debug_enabled
-    assert ("Table target_local does not exist" in text) is debug_enabled
+    assert text.count("SQL_REQUEST") == 1
+    assert calls[0][0].data.decode() in text
+    assert "Table target_local does not exist" in text
     assert "INSERT INTO target" not in text and "synthetic-test-password" not in text

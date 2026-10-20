@@ -1,4 +1,4 @@
-"""Runner context and error diagnostics are opt-in and never submit real SQL."""
+"""Runner failures include task context while successful phases remain opt-in."""
 
 import logging
 from datetime import datetime, timezone
@@ -101,8 +101,8 @@ def test_default_configuration_suppresses_runner_debug_even_with_debug_logger(
     assert "Traceback" not in caplog.text and PASSWORD not in caplog.text
 
 
-@pytest.mark.parametrize("debug_enabled", [False, True])
-def test_cleanup_error_keeps_raw_details_only_in_opt_in_debug(
+@pytest.mark.parametrize("debug_enabled", [None, False, True])
+def test_cleanup_error_logs_redacted_details_without_changing_safe_wrapper(
         tmp_path, monkeypatch, caplog, debug_enabled):
     runner = make_runner(tmp_path, debug_enabled)
     submissions = []
@@ -118,10 +118,14 @@ def test_cleanup_error_keeps_raw_details_only_in_opt_in_debug(
         runner(make_instance())
 
     errors = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
-    assert len(errors) == 1 and "RuntimeError" in errors[0]
-    assert "private cleanup diagnostic" not in errors[0] and PASSWORD not in caplog.text
-    assert ("private cleanup diagnostic" in caplog.text) is debug_enabled
-    assert ("Traceback (most recent call last)" in caplog.text) is debug_enabled
+    contexts = [message for message in errors if "SQL_TASK_FAILED" in message]
+    assert len(contexts) == 1 and "phase=cleanup" in contexts[0]
+    assert "taskname=hourly_task" in contexts[0] and "instance_id=hourly_task@batch" in contexts[0]
+    assert "query_id=runner-attempt" in contexts[0] and f"sql_file={tmp_path / 'hour.sql'}" in contexts[0]
+    assert "window=[2026-10-20 01:00:00+00:00, 2026-10-20 02:00:00+00:00)" in contexts[0]
+    assert "private cleanup diagnostic" in "\n".join(errors)
+    assert PASSWORD not in caplog.text and "[REDACTED]" in caplog.text
+    assert ("Traceback (most recent call last)" in caplog.text) is bool(debug_enabled)
     assert caught.value.retryable and caught.value.outcome_unknown
     assert caught.value.query_id == "runner-attempt" and caught.value.__suppress_context__
     assert caught.value.diagnostic == {"error_type": "RuntimeError"}
@@ -145,3 +149,65 @@ def test_cleanup_error_retains_safe_code_and_numeric_evidence(tmp_path, monkeypa
     assert "'error_code': 'CLICKHOUSE_HTTP_FAILED'" in caplog.text
     assert "'query_id': 'runner-attempt'" in caplog.text
     assert caught.value.diagnostic["http_status"] == 503
+
+
+@pytest.mark.parametrize("debug_enabled", [None, False])
+@pytest.mark.parametrize("invalid", ["missing", "empty", "changed"])
+def test_default_preflight_failure_identifies_task_and_window(
+        tmp_path, monkeypatch, caplog, debug_enabled, invalid):
+    runner = make_runner(tmp_path, debug_enabled)
+    instance = make_instance()
+    sql_file = tmp_path / "hour.sql"
+    if invalid == "missing":
+        sql_file.unlink()
+    elif invalid == "empty":
+        sql_file.write_text(" \n", encoding="utf-8")
+    else:
+        runner.expected_sql_hashes = {"hourly_task": "previous-hash"}
+    monkeypatch.setattr(runner_module, "execute_sql", lambda **_: pytest.fail("SQL submitted"))
+    caplog.set_level(logging.ERROR, logger="data_converge")
+
+    with pytest.raises(TaskExecutionError) as caught:
+        runner(instance)
+
+    context = next(record.getMessage() for record in caplog.records
+                   if "SQL_TASK_FAILED" in record.getMessage())
+    assert "phase=preflight" in context and "taskname=hourly_task" in context
+    assert "instance_id=hourly_task@batch" in context and "query_id=runner-attempt" in context
+    assert f"sql_file={sql_file}" in context
+    assert "window=[2026-10-20 01:00:00+00:00, 2026-10-20 02:00:00+00:00)" in context
+    assert not caught.value.retryable and not caught.value.outcome_unknown
+    assert str(caught.value) == (
+        "SQL_CONFIGURATION_CHANGED" if invalid == "changed" else "SQL_PREFLIGHT_FAILED")
+    assert PASSWORD not in caplog.text and AGGREGATION_SQL not in caplog.text
+    assert "phase=cleanup" not in caplog.text and "phase=aggregate" not in caplog.text
+
+
+@pytest.mark.parametrize("debug_enabled", [None, False])
+def test_default_aggregate_failure_logs_context_and_preserves_original_error(
+        tmp_path, monkeypatch, caplog, debug_enabled):
+    runner = make_runner(tmp_path, debug_enabled)
+    error = TaskExecutionError("CLICKHOUSE_HTTP_FAILED", retryable=True,
+                               query_id="runner-attempt",
+                               diagnostic={"http_status": 503, "clickhouse_exception_code": 241})
+
+    def failed_aggregation(**values):
+        if values["sql"] == AGGREGATION_SQL:
+            raise error
+
+    monkeypatch.setattr(runner_module, "execute_sql", failed_aggregation)
+    caplog.set_level(logging.ERROR, logger="data_converge")
+
+    with pytest.raises(TaskExecutionError) as caught:
+        runner(make_instance())
+
+    context = next(record.getMessage() for record in caplog.records
+                   if "SQL_TASK_FAILED" in record.getMessage())
+    assert "phase=aggregate" in context and "taskname=hourly_task" in context
+    assert "instance_id=hourly_task@batch" in context and "query_id=runner-attempt" in context
+    assert f"sql_file={tmp_path / 'hour.sql'}" in context
+    assert "window=[2026-10-20 01:00:00+00:00, 2026-10-20 02:00:00+00:00)" in context
+    assert "'http_status': 503" in context and "'clickhouse_exception_code': 241" in context
+    assert caught.value is error and error.retryable and not error.outcome_unknown
+    assert PASSWORD not in caplog.text and AGGREGATION_SQL not in caplog.text
+    assert "phase=preflight" not in caplog.text and "phase=cleanup" not in caplog.text

@@ -1,4 +1,4 @@
-"""Opt-in SQL diagnostics retain useful evidence while masking credentials."""
+"""Default SQL failure diagnostics retain useful evidence while masking credentials."""
 
 import base64
 import importlib
@@ -26,7 +26,7 @@ def debug():
 
 def debug_config(**settings):
     return {"clickhouse": {"username": "operator", "password": 'p@ss "词"/?'},
-            "logging": {"debug_enabled": True, **settings}}
+            "logging": {"debug_enabled": False, **settings}}
 
 
 def sql_request(sql="SELECT {start_time:UInt32}"):
@@ -41,7 +41,7 @@ def sql_request(sql="SELECT {start_time:UInt32}"):
 
 
 @pytest.mark.parametrize("flag", [None, False, "true", 1])
-def test_disabled_debug_never_reads_or_logs_private_content(debug, caplog, flag):
+def test_disabled_debug_keeps_error_evidence_without_traceback(debug, caplog, flag):
     config = debug_config(debug_enabled=flag)
     body = io.BytesIO(b"private error body")
     failure = urllib.error.HTTPError("private URL", 500, "private reason", {}, body)
@@ -50,18 +50,24 @@ def test_disabled_debug_never_reads_or_logs_private_content(debug, caplog, flag)
         debug.log_error(config, "attempt-42", failure, body=b"private response")
         debug.log_http_error(config, "attempt-42", failure)
     assert not debug.enabled(config)
-    assert body.tell() == 0 and not body.closed
-    assert caplog.records == []
+    assert body.tell() == len(b"private error body") and not body.closed
+    assert "SELECT private_sql" in caplog.text and "private error body" in caplog.text
+    assert "private reason" in caplog.text and "private response" in caplog.text
+    assert "traceback=" not in caplog.text
+    assert all(record.levelno == logging.ERROR for record in caplog.records)
 
 
 def test_debug_requires_effective_debug_log_level(debug, caplog):
     body = io.BytesIO(b"private error body")
     failure = urllib.error.HTTPError("private URL", 500, "private reason", {}, body)
     with caplog.at_level(logging.INFO, logger=MODULE):
-        debug.log_request(debug_config(), sql_request())
-        debug.log_http_error(debug_config(), "attempt-42", failure)
-        assert not debug.enabled(debug_config())
-    assert body.tell() == 0 and caplog.records == []
+        config = debug_config(debug_enabled=True)
+        debug.log_request(config, sql_request())
+        debug.log_http_error(config, "attempt-42", failure)
+        assert not debug.enabled(config)
+    assert body.tell() == len(b"private error body")
+    assert "private error body" in caplog.text and "traceback=" not in caplog.text
+    assert all(record.levelno == logging.ERROR for record in caplog.records)
 
 
 def test_request_logs_complete_wire_sql_and_only_approved_parameters(debug, caplog):
@@ -118,7 +124,7 @@ def test_traceback_excludes_locals_and_chained_exception(debug, caplog):
             raise RuntimeError("missing table") from cause
     except RuntimeError as failure:
         with caplog.at_level(logging.DEBUG, logger=MODULE):
-            debug.log_error(debug_config(), "attempt-42", failure)
+            debug.log_error(debug_config(debug_enabled=True), "attempt-42", failure)
     assert "Traceback" in caplog.text and "RuntimeError: missing table" in caplog.text
     assert private_local not in caplog.text and "hidden chained detail" not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)

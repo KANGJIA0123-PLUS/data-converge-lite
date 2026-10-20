@@ -137,9 +137,19 @@ JSON 中的 `data.dependencies` 只统计当前同周期执行前置实例；`to
 
 DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号；`BEFORE_COVERAGE` 和 `WINDOW_OPEN` 分别表示早于账本覆盖起点、窗口尚未结束。等待时长从窗口结束算起，收齐后停止累计，另用 `ready_delay_seconds` 保留收齐延迟。默认只看最近20个完整窗口，旧窗口用 `--window` 精确查询；更早的已登记阻断任务可用 `--failures` 查到。
 
-## 临时开启 SQL 与详细错误日志
+## 默认错误日志与可选调试日志
 
-`logging.debug_enabled` 默认是 `false`，省略时也保持关闭。需要排查实际发送给 ClickHouse 的 SQL 时，在当前使用的应用配置文件中修改：
+无需开启 DEBUG，SQL 执行失败时就会在现有服务日志中输出以下 ERROR 记录，可用同一个 `query_id` 关联：
+
+- `SQL_ERROR`：原始异常类型、脱敏后的错误消息、HTTP 状态码、ClickHouse 异常码（响应头提供时）和服务端错误正文。
+- `SQL_REQUEST`：失败操作实际使用的 SQL、绑定参数与 query_id。
+- `SQL_TASK_FAILED`：任务、实例、SQL 文件、失败阶段（`preflight` / `cleanup` / `aggregate`）和处理窗口。
+
+成功执行的 SQL 不打印。清理成功、汇聚失败时，只打印失败的汇聚 SQL；清理失败时只打印清理 SQL。预检失败尚未发送 SQL，此时查看 `SQL_TASK_FAILED` 和对应错误原因。连接失败、超时或响应校验失败也记录对应请求，但不代表数据库已确认执行失败，原 UNKNOWN 判定保持不变。
+
+SQL 保留实际请求中的参数占位符，参数值单独展示。密码、认证字段和连接凭据会脱敏，错误正文按 UTF-8 解码前的字节长度最多保留 64 KiB，超出部分由 `body_truncated` 标记；截断边界还会保守省略一段尾部并标记 `REDACTED_TRUNCATED_TAIL`，避免留下凭据片段。错误正文读取沿用原请求截止时间，读取失败会显示 `body_read_failed`，不会因此改写原 HTTP 错误的执行结果判定。失败 SQL 可能包含业务值，沿用当前日志的访问权限、轮转和保留期限。
+
+`logging.debug_enabled` 默认是 `false`，省略时也保持关闭。若还需要 Python 调用栈及各执行阶段的 DEBUG 记录，在当前使用的应用配置文件中修改：
 
 ```yaml
 logging:
@@ -148,11 +158,11 @@ logging:
 
 保留该段原有的 `max_bytes`、`backup_count` 和 `retention_days` 设置，重启服务后生效。必须使用 YAML 布尔值 `true` / `false`，不要使用带引号的字符串或 `0` / `1`；类型错误会报告 `LOGGING_SETTING_INVALID`。排查结束后改回 `false` 并重启。
 
-开启后，服务在现有日志中追加 DEBUG 记录：`SQL_TASK` 标识任务、SQL 文件和预检／清理／汇聚阶段，不含 SQL 正文；`SQL_REQUEST` **仅在请求失败时**记录该条 SQL、绑定参数与 query_id；`SQL_ERROR` 包含错误正文和经过脱敏的调用栈。成功执行的 SQL 不打印。清理成功、汇聚失败时，只打印失败的汇聚 SQL；清理失败时只打印清理 SQL。连接失败、超时或响应校验失败也记录对应请求，但不代表数据库已确认执行失败，原 UNKNOWN 判定保持不变。
-
-SQL 保留实际请求中的参数占位符，参数值单独展示。密码、认证字段和连接凭据会脱敏，错误正文按 UTF-8 解码前的字节长度最多保留 64 KiB，超出部分由 `body_truncated` 标记；截断边界还会保守省略一段尾部并标记 `REDACTED_TRUNCATED_TAIL`，避免留下凭据片段。SQL 本身可能包含业务值，因此只在需要排查时开启，并沿用当前日志的访问权限、轮转和保留期限。
+开启后额外输出 `SQL_TASK`（任务、SQL 文件和执行阶段，不含 SQL 正文）与 `SQL_TRACEBACK`（脱敏后的 Python 调用栈，不展开局部变量或异常链）。失败原因和 SQL 始终以 ERROR 输出，不依赖这个开关。
 
 日志仍写入现有 `LOG_PATH` / `SERVICE_LOG_PATH` 指定的文件；没有配置文件日志路径时，沿用当前控制台日志处理器。普通 INFO / ERROR 继续输出，第三方库不会因此整体切换为 DEBUG。日志不写入命令的 JSON 标准输出，账本和诊断结果仍只保存原有安全错误证据；开关也不改变部署指纹、任务配置版本或执行策略。
+
+`DWD_WAIT_TIMEOUT` 始终为 WARNING：显示完整窗口、从窗口结束起计算的等待秒数、告警阈值、已收和缺失的信号类型，并附该窗口的 `--dwd-status` 查询参数。缺失指本地账本没有就绪证据，不能单凭此日志判断上游没有写入；超时仍保持阻塞，不放行执行。
 
 运行 `--diagnose --format json` 可在 `logging.settings.evidence.debug_enabled` 中检查当前配置值。该值表示本次读取的文件设置，不证明已有服务进程已经重启生效；诊断命令保持只读，不创建日志文件或启用运行中的调试日志。
 

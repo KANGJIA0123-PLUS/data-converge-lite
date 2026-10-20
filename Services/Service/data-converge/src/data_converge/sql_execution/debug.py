@@ -1,4 +1,4 @@
-"""Opt-in SQL diagnostics, separate from public errors and persisted evidence."""
+"""Default failure diagnostics, separate from public errors and persisted evidence."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def _redact(config, text):
 
 def log_request(config, request):
     """Record a failed POST's body and approved wire parameters, never headers."""
-    if not enabled(config):
+    if not logger.isEnabledFor(logging.ERROR):
         return
     parameters = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query,
                                        keep_blank_values=True)
@@ -67,22 +67,23 @@ def log_request(config, request):
     sql = request.data.decode("utf-8", errors="replace")
     message = (f"SQL_REQUEST query_id={query_id} "
                f"parameters={json.dumps(parameters, ensure_ascii=False, sort_keys=True)}\nsql={sql}")
-    logger.debug("%s", _redact(config, message))
+    logger.error("%s", _redact(config, message))
 
 
 def log_error(config, query_id, error, *, body=None):
-    """Format the original stack without locals or chained exception content."""
-    if not enabled(config):
+    """Log useful failure details by default; keep Python stacks opt-in."""
+    if not logger.isEnabledFor(logging.ERROR):
         return
     response, truncated = _response_text(config, body)
-    stack = "".join(traceback.format_exception(type(error), error, error.__traceback__, chain=False))
     details = json.dumps(safe_error_details(error), sort_keys=True)
     message = (f"SQL_ERROR query_id={query_id} error_type={type(error).__name__} "
-               f"body_truncated={truncated} diagnostic={details}")
+               f"body_truncated={truncated} diagnostic={details}\nmessage={error}")
     if response is not None:
         message += f"\nresponse_body={response}"
-    message += f"\ntraceback={stack}"
-    logger.debug("%s", _redact(config, message))
+    logger.error("%s", _redact(config, message))
+    if enabled(config):
+        stack = "".join(traceback.format_exception(type(error), error, error.__traceback__, chain=False))
+        logger.debug("%s", _redact(config, f"SQL_TRACEBACK query_id={query_id}\ntraceback={stack}"))
 
 
 def _response_text(config, body):
@@ -104,13 +105,14 @@ def _response_text(config, body):
 
 
 def log_http_error(config, query_id, error):
-    """Read optional evidence while the caller still owns the active deadline."""
-    if not enabled(config):
+    """Read bounded error evidence while the caller owns the active deadline."""
+    if not logger.isEnabledFor(logging.ERROR):
         return
     body = None
     try:
         body = error.read(MAX_DEBUG_BODY_BYTES + 1)
     except (OSError, http.client.HTTPException, ValueError) as read_error:
-        message = f"SQL_ERROR query_id={query_id} body_read_failed={type(read_error).__name__}"
-        logger.debug("%s", _redact(config, message))
+        message = (f"SQL_ERROR query_id={query_id} body_read_failed={type(read_error).__name__} "
+                   f"message={read_error}")
+        logger.error("%s", _redact(config, message))
     log_error(config, query_id, error, body=body)

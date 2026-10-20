@@ -366,8 +366,10 @@ class TaskScheduler:
     @staticmethod
     def _log_execution_errors(report: ExecutionReport) -> None:
         for instance in report.failed + report.unknown:
-            logger.error("任务执行结果：instance=%s status=%s query_id=%s error=%s",
-                         instance.instance_id, instance.status.value, instance.query_id, instance.error)
+            logger.error("任务执行结果：taskname=%s instance=%s status=%s query_id=%s "
+                         "window=[%s, %s) error=%s",
+                         instance.taskname, instance.instance_id, instance.status.value,
+                         instance.query_id, instance.data_start, instance.data_end, instance.error)
 
     @property
     def stop_requested(self) -> bool:

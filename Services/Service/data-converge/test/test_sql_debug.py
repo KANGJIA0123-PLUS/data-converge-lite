@@ -1,4 +1,4 @@
-"""Debug SQL evidence must not change transport outcomes or ordinary output."""
+"""Default failure evidence must not change transport outcomes or public output."""
 
 import io
 import json
@@ -25,20 +25,18 @@ def debug_config(**values):
 
 
 @pytest.mark.parametrize("settings", [None, {"debug_enabled": False}])
-def test_disabled_debug_does_not_read_error_body_or_log_sql(monkeypatch, caplog, settings):
-    class UnreadBody(io.BytesIO):
-        def read(self, *_):
-            pytest.fail("disabled debugging must not consume the error body")
-
-    body = UnreadBody(b"Table metrics.missing does not exist")
+def test_default_error_logs_body_and_sql_without_debug(monkeypatch, caplog, settings):
+    body = io.BytesIO(b"Table metrics.missing does not exist; password=hidden")
     error = urllib.error.HTTPError("private-url", 404, "missing", {}, body)
     capture_http(monkeypatch, error=error)
     config = dict(make_clickhouse_config(), logging=settings)
-    caplog.set_level(logging.DEBUG, logger="data_converge")
+    caplog.set_level(logging.INFO, logger="data_converge")
     with pytest.raises(client.SQLExecutionError, match="CLICKHOUSE_HTTP_FAILED"):
         client.execute_sql(config, "SELECT private_table", query_id="debug-off")
-    assert "private_table" not in caplog.text
-    assert "does not exist" not in caplog.text
+    assert "SELECT private_table" in caplog.text
+    assert "Table metrics.missing does not exist" in caplog.text
+    assert "hidden" not in caplog.text and "Traceback" not in caplog.text
+    assert all(record.levelno == logging.ERROR for record in caplog.records)
     assert body.closed
 
 
@@ -62,17 +60,20 @@ def test_debug_omits_successful_cleanup_and_aggregation_sql(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("status, unknown", [(401, False), (404, True), (500, True)])
+@pytest.mark.parametrize("debug_enabled", [False, True])
 def test_real_http_debug_contains_missing_table_without_changing_failure(
-        localhost_clickhouse, caplog, status, unknown):
+        localhost_clickhouse, caplog, status, unknown, debug_enabled):
     caplog.set_level(logging.DEBUG, logger="data_converge")
     server = localhost_clickhouse
     server.status = status
     server.body = b"Code: 60. DB::Exception: Table metrics.missing does not exist."
+    config = dict(make_clickhouse_config(port=server.port), logging={"debug_enabled": debug_enabled})
     with pytest.raises(client.SQLExecutionError) as caught:
-        client.execute_sql(debug_config(port=server.port), "SELECT * FROM metrics.missing",
+        client.execute_sql(config, "SELECT * FROM metrics.missing",
                            timeout=2, query_id="missing-table")
     assert "Table metrics.missing does not exist" in caplog.text
-    assert "HTTPError" in caplog.text and "Traceback" in caplog.text
+    assert "HTTPError" in caplog.text
+    assert ("Traceback" in caplog.text) is debug_enabled
     assert "missing-table" in caplog.text
     records = [item.getMessage() for item in caplog.records if "SQL_REQUEST" in item.getMessage()]
     assert len(records) == 1 and "SELECT * FROM metrics.missing" in records[0]
@@ -84,24 +85,29 @@ def test_real_http_debug_contains_missing_table_without_changing_failure(
     assert len(server.requests) == 1
 
 
-def test_debug_transport_exception_includes_detail_but_exception_stays_safe(monkeypatch, caplog):
+@pytest.mark.parametrize("debug_enabled", [False, True])
+def test_transport_exception_includes_detail_but_exception_stays_safe(monkeypatch, caplog, debug_enabled):
     caplog.set_level(logging.DEBUG, logger="data_converge")
     capture_http(monkeypatch, error=ConnectionResetError("peer closed connection"))
+    config = dict(make_clickhouse_config(), logging={"debug_enabled": debug_enabled})
     with pytest.raises(client.SQLExecutionError, match="CLICKHOUSE_OUTCOME_UNKNOWN") as caught:
-        client.execute_sql(debug_config(), "SELECT 1", query_id="reset-attempt")
+        client.execute_sql(config, "SELECT 1", query_id="reset-attempt")
     assert "peer closed connection" in caplog.text
-    assert "Traceback" in caplog.text
+    assert ("Traceback" in caplog.text) is debug_enabled
     assert caught.value.outcome_unknown and not caught.value.retryable
     assert str(caught.value) == "CLICKHOUSE_OUTCOME_UNKNOWN"
     records = [item.getMessage() for item in caplog.records if "SQL_REQUEST" in item.getMessage()]
     assert len(records) == 1 and "SELECT 1" in records[0]
 
 
-def test_debug_records_exception_body_returned_with_http_200(localhost_clickhouse, caplog):
+@pytest.mark.parametrize("debug_enabled", [False, True])
+def test_records_exception_body_returned_with_http_200(localhost_clickhouse, caplog, debug_enabled):
     caplog.set_level(logging.DEBUG, logger="data_converge")
     localhost_clickhouse.body = b'{"exception":"Table metrics.missing does not exist."}'
+    config = dict(make_clickhouse_config(port=localhost_clickhouse.port),
+                  logging={"debug_enabled": debug_enabled})
     with pytest.raises(client.SQLExecutionError, match="CLICKHOUSE_RESPONSE_INVALID") as caught:
-        client.execute_sql(debug_config(port=localhost_clickhouse.port), "SELECT 1", timeout=2)
+        client.execute_sql(config, "SELECT 1", timeout=2)
     assert "Table metrics.missing does not exist" in caplog.text
     assert caught.value.outcome_unknown and not caught.value.retryable
     records = [item.getMessage() for item in caplog.records if "SQL_REQUEST" in item.getMessage()]
@@ -149,8 +155,9 @@ def slow_error_handler(status, stopped):
 
 
 @pytest.mark.parametrize("status, unknown", [(401, False), (500, True)])
+@pytest.mark.parametrize("debug_enabled", [False, True])
 def test_debug_error_body_obeys_deadline_without_changing_classification(
-        caplog, monkeypatch, status, unknown):
+        caplog, monkeypatch, status, unknown, debug_enabled):
     caplog.set_level(logging.DEBUG, logger="data_converge")
     stopped = threading.Event()
     timers, real_timer = [], threading.Timer
@@ -168,7 +175,9 @@ def test_debug_error_body_obeys_deadline_without_changing_classification(
         started = time.monotonic()
         try:
             with pytest.raises(client.SQLExecutionError) as caught:
-                client.execute_sql(debug_config(port=server.server_address[1]), "SELECT 1",
+                config = dict(make_clickhouse_config(port=server.server_address[1]),
+                              logging={"debug_enabled": debug_enabled})
+                client.execute_sql(config, "SELECT 1",
                                    timeout=0.15, query_id="slow-debug")
             assert time.monotonic() - started < 1
             assert caught.value.outcome_unknown is unknown

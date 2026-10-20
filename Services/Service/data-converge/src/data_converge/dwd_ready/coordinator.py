@@ -89,13 +89,26 @@ class ReadyCoordinator:
         if now >= instance.data_end.astimezone(timezone.utc) + timedelta(seconds=self.wait_warning_seconds):
             previous = self._warnings.get(window_start)
             if previous is None or now >= previous + timedelta(seconds=self.wait_warning_seconds):
-                logger.warning('DWD_WAIT_TIMEOUT: window=%s missing=%s; execution remains blocked',
-                               instance.data_start.isoformat(), ','.join(missing))
+                self._warn_timeout(instance, now, missing)
                 self._warnings[window_start] = now
                 self._warnings.move_to_end(window_start)
                 if len(self._warnings) > 1024:
                     self._warnings.popitem(last=False)
         return 'DWD_NOT_READY:' + ','.join(missing)
+
+    def _warn_timeout(self, instance, now, missing):
+        start = instance.data_start.isoformat()
+        waited = int((now - instance.data_end.astimezone(timezone.utc)).total_seconds())
+        received = sorted(DWD_TYPES - set(missing))
+        logger.warning(
+            'DWD_WAIT_TIMEOUT: window_start=%s window_end=%s waited_seconds=%s timeout_seconds=%s '
+            'received=%s missing=%s; local readiness evidence is incomplete '
+            '(does not prove upstream data is absent); execution remains blocked; '
+            'diagnostic_args="--dwd-status --window \'%s\' --format json" '
+            '(read-only; use the same service launcher and --config)',
+            start, instance.data_end.isoformat(), waited, self.wait_warning_seconds,
+            ','.join(received) or 'NONE', ','.join(missing), start,
+        )
 
     def close(self):
         self.source.close()

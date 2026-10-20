@@ -11,7 +11,7 @@ from data_converge.dag import TaskInstance
 from data_converge.errors import TaskExecutionError, safe_error_details
 
 from . import debug
-from .client import execute_sql, load_sql
+from .client import SQLExecutionError, execute_sql, load_sql
 from .config import load_config, resolve_credentials
 from .targets import cleanup_table_from_sql
 
@@ -61,14 +61,18 @@ class SQLTaskRunner:
             instance.data_start,
             instance.data_end,
         )
-        execute_sql(
-            config=self.config,
-            sql=sql,
-            timeout=self.timeout,
-            start_time=instance.data_start,
-            end_time=instance.data_end,
-            query_id=getattr(instance, "query_id", None),
-        )
+        try:
+            execute_sql(
+                config=self.config,
+                sql=sql,
+                timeout=self.timeout,
+                start_time=instance.data_start,
+                end_time=instance.data_end,
+                query_id=getattr(instance, "query_id", None),
+            )
+        except Exception as error:
+            self._log_failure(instance, sql_file, "aggregate", error)
+            raise
 
     def _load_verified_sql(self, instance: TaskInstance, sql_file: Path) -> tuple[str, str]:
         """Read and verify the approved SQL before any query can be submitted."""
@@ -83,9 +87,12 @@ class SQLTaskRunner:
                     query_id=getattr(instance, "query_id", None),
                 )
             local_table = cleanup_table_from_sql(sql)
+        except TaskExecutionError as error:
+            self._log_failure(instance, sql_file, "preflight", error)
+            raise
         except (OSError, ValueError) as error:
             # File and target validation complete before any SQL reaches ClickHouse.
-            debug.log_error(self.config, getattr(instance, "query_id", None), error)
+            self._log_failure(instance, sql_file, "preflight", error)
             raise TaskExecutionError(
                 "SQL_PREFLIGHT_FAILED", retryable=False, outcome_unknown=False,
                 query_id=getattr(instance, "query_id", None),
@@ -113,8 +120,7 @@ class SQLTaskRunner:
             )
         except Exception as error:
             diagnostic = safe_error_details(error)
-            logger.error("Pre-cleanup failed: %s", diagnostic)
-            debug.log_error(self.config, getattr(instance, "query_id", None), error)
+            self._log_failure(instance, sql_file, "cleanup", error)
             raise TaskExecutionError(
                 "IDEMPOTENT_CLEANUP_FAILED",
                 retryable=True,
@@ -122,6 +128,25 @@ class SQLTaskRunner:
                 query_id=getattr(instance, "query_id", None),
                 diagnostic=diagnostic,
             ) from None
+
+    def _log_failure(self, instance: TaskInstance, sql_file: Path,
+                     phase: str, error: Exception) -> None:
+        """Keep task identity beside safe evidence without repeating failed SQL."""
+        logger.error(
+            "SQL_TASK_FAILED phase=%s taskname=%s instance_id=%s sql_file=%s "
+            "query_id=%s window=[%s, %s) diagnostic=%s",
+            phase,
+            getattr(instance, "taskname", None),
+            getattr(instance, "instance_id", None),
+            sql_file,
+            getattr(instance, "query_id", None),
+            instance.data_start,
+            instance.data_end,
+            safe_error_details(error),
+        )
+        # The client already logged the original cause and failed request.
+        if not isinstance(error, SQLExecutionError):
+            debug.log_error(self.config, getattr(instance, "query_id", None), error)
 
     def _log_phase(self, instance: TaskInstance, sql_file: Path, phase: str) -> None:
         """Associate client diagnostics with a task without repeating SQL."""
