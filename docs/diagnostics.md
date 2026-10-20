@@ -137,6 +137,23 @@ JSON 中的 `data.dependencies` 只统计当前同周期执行前置实例；`to
 
 DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号；`BEFORE_COVERAGE` 和 `WINDOW_OPEN` 分别表示早于账本覆盖起点、窗口尚未结束。等待时长从窗口结束算起，收齐后停止累计，另用 `ready_delay_seconds` 保留收齐延迟。默认只看最近20个完整窗口，旧窗口用 `--window` 精确查询；更早的已登记阻断任务可用 `--failures` 查到。
 
+## 临时开启 SQL 与详细错误日志
+
+`logging.debug_enabled` 默认是 `false`，省略时也保持关闭。需要排查实际发送给 ClickHouse 的 SQL 时，在当前使用的应用配置文件中修改：
+
+```yaml
+logging:
+  debug_enabled: true
+```
+
+保留该段原有的 `max_bytes`、`backup_count` 和 `retention_days` 设置，重启服务后生效。必须使用 YAML 布尔值 `true` / `false`，不要使用带引号的字符串或 `0` / `1`；类型错误会报告 `LOGGING_SETTING_INVALID`。排查结束后改回 `false` 并重启。
+
+开启后，服务在现有日志中追加 DEBUG 记录：`SQL_TASK` 标识任务、SQL 文件和预检／清理／汇聚阶段；`SQL_REQUEST` 包含实际发送的 SQL、绑定参数与 query_id；`SQL_ERROR` 包含错误正文和经过脱敏的调用栈。SQL 保留实际请求中的参数占位符，参数值单独展示。密码、认证字段和连接凭据会脱敏，错误正文按 UTF-8 解码前的字节长度最多保留 64 KiB，超出部分由 `body_truncated` 标记；截断边界还会保守省略一段尾部并标记 `REDACTED_TRUNCATED_TAIL`，避免留下凭据片段。SQL 本身可能包含业务值，因此只在需要排查时开启，并沿用当前日志的访问权限、轮转和保留期限。
+
+日志仍写入现有 `LOG_PATH` / `SERVICE_LOG_PATH` 指定的文件；没有配置文件日志路径时，沿用当前控制台日志处理器。普通 INFO / ERROR 继续输出，第三方库不会因此整体切换为 DEBUG。日志不写入命令的 JSON 标准输出，账本和诊断结果仍只保存原有安全错误证据；开关也不改变部署指纹、任务配置版本或执行策略。
+
+运行 `--diagnose --format json` 可在 `logging.settings.evidence.debug_enabled` 中检查当前配置值。该值表示本次读取的文件设置，不证明已有服务进程已经重启生效；诊断命令保持只读，不创建日志文件或启用运行中的调试日志。
+
 ## 启动配置差异的临时放行
 
 2026-10-20 按调测要求，已有有效状态库的部署绑定、当前配置或 SQL 与保存快照不一致时，正常启动改为 WARNING 并继续，原绑定、配置快照、任务起点和历史记录保留。`--diagnose --format json` 的 `state` 项对此显示 WARN，并附 `binding_enforced=false`、`configuration_enforced=false` 和 `issue=DC-STATE-002`；匹配时可显示 PASS，但仍保留这些策略字段，不能理解为已恢复配置差异阻断。详见 [DC-STATE-002](known-issues.md#dc-state-002)。
@@ -211,7 +228,7 @@ DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号�
 
 在线检查复用原解密及认证实现，查询阶段沿用10秒ClickHouse超时和Redis配置的socket超时；解密使用原KMS超时。系统DNS阻塞仍受操作系统解析行为影响，不承诺整个命令固定10秒结束。Redis检查的 `credential_user` 表示选中的PMS账号，不等于服务端ACL用户名。
 
-错误证据仅保存固定错误码、异常类型、query_id、HTTP状态、数字ClickHouse异常码、TLS校验码、OS错误号，不打印密码、SDK异常正文、服务端SQL或Redis消息内容。`execution_diagnostics` 保留与当前实例 query_id 匹配的当前失败证据；`execution_attempts` 在派发、finish 和恢复事务中保存逐次尝试，旧 claim 接口仍兼容，重试不覆盖旧记录。人工处置单独入账，不改变原尝试的真实结果，输出不包含备注正文。旧账本中没有尝试行的人工处理在 `legacy_resolutions` 单独展示，各自使用同一组分页参数；无法补造旧执行过程。诊断只读不建表，无历史表时显示“旧版本未记录”。
+账本和诊断输出的错误证据仅保存固定错误码、异常类型、query_id、HTTP状态、数字ClickHouse异常码、TLS校验码、OS错误号，不打印密码、SDK异常正文、服务端SQL或Redis消息内容。临时调试日志的范围见上文；开启调试不会扩大持久错误证据或诊断输出的字段。`execution_diagnostics` 保留与当前实例 query_id 匹配的当前失败证据；`execution_attempts` 在派发、finish 和恢复事务中保存逐次尝试，旧 claim 接口仍兼容，重试不覆盖旧记录。人工处置单独入账，不改变原尝试的真实结果，输出不包含备注正文。旧账本中没有尝试行的人工处理在 `legacy_resolutions` 单独展示，各自使用同一组分页参数；无法补造旧执行过程。诊断只读不建表，无历史表时显示“旧版本未记录”。
 
 ## 恢复预览与事务事件
 

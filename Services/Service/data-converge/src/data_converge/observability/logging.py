@@ -30,17 +30,19 @@ def create_file_handler(settings: LoggingSettings | None = None) -> RetentionFil
         return None
     path.parent.mkdir(parents=True, exist_ok=True)
     handler = RetentionFileHandler(path, settings)
-    handler.setLevel(logging.INFO)
+    handler.setLevel(logging.DEBUG if settings and settings.debug_enabled else logging.INFO)
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
     return handler
 
 
 class LoggingSession(AbstractContextManager):
-    """Bootstrap diagnostics first, then apply the validated retention policy."""
+    """Own file output and service verbosity for one command's lifetime."""
 
     def __init__(self):
         self._root = logging.getLogger()
         self._previous_level = self._root.level
+        self._application = logging.getLogger('data_converge')
+        self._previous_application_level = self._application.level
         self._handler = None
 
     def __enter__(self):
@@ -50,6 +52,7 @@ class LoggingSession(AbstractContextManager):
 
     def configure(self, settings: LoggingSettings) -> None:
         self._replace_handler(create_file_handler(settings))
+        self._application.setLevel(logging.DEBUG if settings.debug_enabled else logging.INFO)
 
     def _replace_handler(self, handler) -> None:
         previous = self._handler
@@ -69,11 +72,12 @@ class LoggingSession(AbstractContextManager):
             logging.getLogger(__name__).error('LOGGING_CLOSE_FAILED')
 
     def __exit__(self, *_):
-        if self._handler is not None:
-            handler = self._handler
-            self._handler = None
-            try:
+        try:
+            if self._handler is not None:
+                handler = self._handler
+                self._handler = None
                 self._close_handler(handler)
-            finally:
-                self._root.setLevel(self._previous_level)
+        finally:
+            self._root.setLevel(self._previous_level)
+            self._application.setLevel(self._previous_application_level)
         return False

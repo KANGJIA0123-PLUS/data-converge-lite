@@ -33,9 +33,9 @@ def protected_check(identifier, callback, *args):
 
 def logging_settings_check(raw):
     settings = LoggingSettings.from_mapping(raw.get('logging'))
-    return check('logging.settings', 'PASS', '日志轮转与老化配置有效',
+    return check('logging.settings', 'PASS', '日志轮转、老化与调试配置有效',
                  dict(max_bytes=settings.max_bytes, backup_count=settings.backup_count,
-                      retention_days=settings.retention_days))
+                      retention_days=settings.retention_days, debug_enabled=settings.debug_enabled))
 
 
 def definition_check(path, raw):

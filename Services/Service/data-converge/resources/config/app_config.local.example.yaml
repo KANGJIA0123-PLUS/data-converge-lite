@@ -1,5 +1,6 @@
 # 仅用于本地或隔离环境；该配置不创建数据库/表。
 logging:
+  debug_enabled: false  # true开启SQL与详细错误日志，修改后需重启；必须使用布尔值。
   max_bytes: 20971520
   backup_count: 10
   retention_days: 7

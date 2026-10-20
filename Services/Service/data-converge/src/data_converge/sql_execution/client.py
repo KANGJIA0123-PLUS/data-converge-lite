@@ -20,6 +20,7 @@ from typing import Any
 from data_converge.errors import TaskExecutionError, safe_error_details
 from data_converge.time_policy import system_timezone, system_timezone_name
 
+from . import debug
 # Keep the established client configuration API for operational commands.
 from .config import (
     connection_origin,
@@ -93,34 +94,58 @@ def execute_sql(config: dict[str, Any], sql: str, timeout: int = 300,
         raise ValueError("CLICKHOUSE_QUERY_ID_INVALID") from None
     request = _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, query_id)
     handlers = build_query_handlers(deadline, secure, verify)
-    response_started = False
+    debug.log_request(config, request)
+    body, remaining = _post_sql_request(config, request, handlers, deadline, timeout, query_id)
+    if deadline.expired:
+        error = SQLExecutionError("CLICKHOUSE_OUTCOME_UNKNOWN", outcome_unknown=True, query_id=query_id)
+        debug.log_error(config, query_id, error)
+        raise error from None
     try:
-        with deadline:
+        return _decode_query_response(body, remaining, query_id)
+    except SQLExecutionError as error:
+        debug.log_error(config, query_id, error,
+                        body=body if str(error) == "CLICKHOUSE_RESPONSE_INVALID" else None)
+        raise
+
+
+def _post_sql_request(config, request, handlers, deadline, timeout, query_id):
+    """Capture optional error evidence while the response deadline is active."""
+    response_started = False
+    with deadline:
+        try:
             with urllib.request.build_opener(*handlers).open(request, timeout=timeout) as response:
                 response_started = True
                 body = response.read(MAX_RESPONSE_BYTES + 1)
                 # HTTPResponse.read(n) can silently return short data on disconnect.
                 # Its remaining Content-Length must reach zero before accepting success.
                 remaining = getattr(response, "length", None)
-    except urllib.error.HTTPError as error:
-        code = error.code
-        diagnostic = safe_error_details(error)
+        except urllib.error.HTTPError as error:
+            raise _http_failure(config, query_id, error, deadline) from None
+        except (OSError, http.client.HTTPException, ValueError) as error:
+            reason = error.reason if isinstance(error, urllib.error.URLError) else error
+            unsent = not deadline.expired and not response_started and (
+                isinstance(reason, (ConnectionRefusedError, socket.gaierror)) or (
+                    isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED))
+            debug.log_error(config, query_id, error)
+            raise SQLExecutionError("CLICKHOUSE_CONNECT_FAILED" if unsent else "CLICKHOUSE_OUTCOME_UNKNOWN",
+                                    retryable=unsent, outcome_unknown=not unsent, query_id=query_id,
+                                    diagnostic=safe_error_details(error)) from None
+    return body, remaining
+
+
+def _http_failure(config, query_id, error, deadline):
+    # Freeze classification before optional diagnostic I/O: a slow error body
+    # must not turn a definite 401 rejection into an unknown execution outcome.
+    expired, code = deadline.expired, error.code
+    diagnostic = safe_error_details(error)
+    try:
+        debug.log_http_error(config, query_id, error)
+    finally:
         error.close()
-        message = "CLICKHOUSE_OUTCOME_UNKNOWN" if deadline.expired else (
-            "CLICKHOUSE_AUTH_FAILED" if code == 401 else "CLICKHOUSE_HTTP_FAILED")
-        raise SQLExecutionError(message, outcome_unknown=deadline.expired or code != 401,
-                                query_id=query_id, diagnostic=diagnostic) from None
-    except (OSError, http.client.HTTPException, ValueError) as error:
-        reason = error.reason if isinstance(error, urllib.error.URLError) else error
-        unsent = not deadline.expired and not response_started and (
-            isinstance(reason, (ConnectionRefusedError, socket.gaierror)) or (
-                isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED))
-        raise SQLExecutionError("CLICKHOUSE_CONNECT_FAILED" if unsent else "CLICKHOUSE_OUTCOME_UNKNOWN",
-                                retryable=unsent, outcome_unknown=not unsent, query_id=query_id,
-                                diagnostic=safe_error_details(error)) from None
-    if deadline.expired:
-        raise SQLExecutionError("CLICKHOUSE_OUTCOME_UNKNOWN", outcome_unknown=True, query_id=query_id) from None
-    return _decode_query_response(body, remaining, query_id)
+    message = "CLICKHOUSE_OUTCOME_UNKNOWN" if expired else (
+        "CLICKHOUSE_AUTH_FAILED" if code == 401 else "CLICKHOUSE_HTTP_FAILED")
+    return SQLExecutionError(message, outcome_unknown=expired or code != 401,
+                             query_id=query_id, diagnostic=diagnostic)
 
 
 def _decode_query_response(body, remaining, query_id):
