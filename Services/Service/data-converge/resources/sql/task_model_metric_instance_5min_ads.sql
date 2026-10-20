@@ -127,9 +127,178 @@ INSERT INTO modelmate_metric.t_mops__modelmetric_instance__5min_ads
     engine_request_generation_tokens_sum_delta,
     engine_request_generation_tokens_bucket_argMax,
     engine_request_generation_tokens_bucket_delta,
+    -- 新增补充指标
+    input_output_token_rate,
+    request_received_total_qps,
+    unit_token_computepower_consumption,
     sync_flag
 )
 SELECT
+    -- ============================================================================
+    -- 1. 时间与 ADS 核心维度
+    -- ============================================================================
+    t.window_time,
+    t.server_name,
+    t.modelinstance_id,
+
+    -- ============================================================================
+    -- 2. 实例关联属性
+    -- ============================================================================
+    t.modelinstance_name,
+    t.framework_type,
+    t.framework_version,
+    t.deploy_info,
+    t.model_name,
+    t.model_id,
+    t.node_ids,
+    t.node_ips,
+    t.node_name,
+    t.node_type,
+    t.dev_mfr,
+    t.dev_model,
+    t.dev_status_code,
+    t.dev_status_name,
+
+    -- ============================================================================
+    -- 3. Coordinator 视角指标
+    -- ============================================================================
+    t.coord_request_received_total_argMax,
+    t.coord_request_received_total_delta,
+    t.coord_request_received_total_qpm_avg,
+    t.coord_request_failed_total_argMax,
+    t.coord_request_failed_total_delta,
+    t.coord_request_success_total_argMax,
+    t.coord_request_success_total_delta,
+    t.coord_request_success_rate_avg,
+    t.coord_request_failed_rate_avg,
+    t.coord_num_requests_waiting_avg,
+    t.coord_e2e_request_latency_seconds_avg,
+    t.coord_e2e_request_latency_seconds_count_argMax,
+    t.coord_e2e_request_latency_seconds_count_delta,
+    t.coord_e2e_request_latency_seconds_sum_argMax,
+    t.coord_e2e_request_latency_seconds_sum_delta,
+    t.coord_e2e_request_latency_seconds_bucket_argMax,
+    t.coord_e2e_request_latency_seconds_bucket_delta,
+
+    -- ============================================================================
+    -- 4. Engine 视角 Request & Concurrency Metrics
+    -- ============================================================================
+    t.engine_request_received_total_argMax,
+    t.engine_request_received_total_delta,
+    t.engine_request_failed_total_argMax,
+    t.engine_request_failed_total_delta,
+    t.engine_request_success_total_argMax,
+    t.engine_request_success_total_delta,
+    t.engine_request_success_rate_avg,
+    t.engine_request_failed_rate_avg,
+    t.engine_inference_concurrent_requests_avg,
+    t.engine_num_requests_running_avg,
+    t.engine_num_requests_waiting_avg,
+    t.engine_num_requests_swapped_avg,
+    t.engine_num_preemptions_total_argMax,
+    t.engine_num_preemptions_total_delta,
+
+    -- ============================================================================
+    -- 5. Engine 视角 Token Totals & Throughput Rates
+    -- ============================================================================
+    t.engine_prompt_tokens_total_argMax,
+    t.engine_prompt_tokens_total_delta,
+    t.engine_generation_tokens_total_argMax,
+    t.engine_generation_tokens_total_delta,
+    t.engine_prompt_tokens_total_delta_rate_avg,
+    t.engine_generation_tokens_total_delta_rate_avg,
+    t.engine_total_throughput_rate,
+    t.engine_avg_prompt_throughput_toks_per_s_avg,
+    t.engine_avg_prompt_throughput_toks_per_s_delta,
+    t.engine_avg_prompt_throughput_toks_per_s_max,
+    t.engine_avg_generation_throughput_toks_per_s_avg,
+    t.engine_avg_generation_throughput_toks_per_s_delta,
+    t.engine_avg_generation_throughput_toks_per_s_max,
+
+    -- ============================================================================
+    -- 6. Engine 视角 Key Latencies
+    -- ============================================================================
+    t.engine_time_to_first_token_seconds_avg,
+    t.engine_time_to_first_token_seconds_count_argMax,
+    t.engine_time_to_first_token_seconds_count_delta,
+    t.engine_time_to_first_token_seconds_sum_argMax,
+    t.engine_time_to_first_token_seconds_sum_delta,
+    t.engine_time_to_first_token_seconds_bucket_argMax,
+    t.engine_time_to_first_token_seconds_bucket_delta,
+    t.engine_time_per_output_token_seconds_avg,
+    t.engine_time_per_output_token_seconds_count_argMax,
+    t.engine_time_per_output_token_seconds_count_delta,
+    t.engine_time_per_output_token_seconds_sum_argMax,
+    t.engine_time_per_output_token_seconds_sum_delta,
+    t.engine_time_per_output_token_seconds_bucket_argMax,
+    t.engine_time_per_output_token_seconds_bucket_delta,
+    t.engine_e2e_request_latency_seconds_avg,
+    t.engine_e2e_request_latency_seconds_count_argMax,
+    t.engine_e2e_request_latency_seconds_count_delta,
+    t.engine_e2e_request_latency_seconds_sum_argMax,
+    t.engine_e2e_request_latency_seconds_sum_delta,
+    t.engine_e2e_request_latency_seconds_bucket_argMax,
+    t.engine_e2e_request_latency_seconds_bucket_delta,
+
+    -- ============================================================================
+    -- 7. Engine 视角 Cache & Memory Metrics
+    -- ============================================================================
+    t.engine_npu_cache_usage_perc_avg,
+    t.engine_npu_cache_usage_perc_max,
+    t.engine_cpu_cache_usage_perc_avg,
+    t.engine_cpu_cache_usage_perc_max,
+    t.engine_npu_prefix_cache_hit_rate_avg,
+
+    -- ============================================================================
+    -- 8. Engine 视角 Prompt & Generation Tokens 分布
+    -- ============================================================================
+    t.engine_request_prompt_tokens_avg,
+    t.engine_request_prompt_tokens_max,
+    t.engine_request_prompt_tokens_count_argMax,
+    t.engine_request_prompt_tokens_count_delta,
+    t.engine_request_prompt_tokens_sum_argMax,
+    t.engine_request_prompt_tokens_sum_delta,
+    t.engine_request_prompt_tokens_bucket_argMax,
+    t.engine_request_prompt_tokens_bucket_delta,
+    t.engine_request_generation_tokens_avg,
+    t.engine_request_generation_tokens_max,
+    t.engine_request_generation_tokens_count_argMax,
+    t.engine_request_generation_tokens_count_delta,
+    t.engine_request_generation_tokens_sum_argMax,
+    t.engine_request_generation_tokens_sum_delta,
+    t.engine_request_generation_tokens_bucket_argMax,
+    t.engine_request_generation_tokens_bucket_delta,
+
+    -- ============================================================================
+    -- 9. 新增补充指标计算
+    -- ============================================================================
+    -- (1) 输入/输出比率
+    CAST(coalesce(
+        t.engine_prompt_tokens_total_delta / nullIf(t.engine_generation_tokens_total_delta, 0.0),
+        0.0
+    ) AS Nullable(Float32)) AS input_output_token_rate,
+
+    -- (2) 总请求 QPS
+    CAST(coalesce(
+        t.engine_request_received_total_delta / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
+        0.0
+    ) AS Nullable(Float32)) AS request_received_total_qps,
+
+    -- (3) 产生百万 token 所用的卡时 = 卡数 × 区间秒数 × 1000000 / (3600 × token 增量)
+    CAST(coalesce(
+        (coalesce(m.allocated_npu_num, 0) * toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) * 1000000.0)
+        / nullIf(3600.0 * (coalesce(t.engine_prompt_tokens_total_delta, 0) + coalesce(t.engine_generation_tokens_total_delta, 0)), 0.0),
+        0.0
+    ) AS Nullable(Float32)) AS unit_token_computepower_consumption,
+
+    -- ============================================================================
+    -- 10. 标识控制
+    -- ============================================================================
+    0 AS sync_flag
+
+FROM
+(
+   SELECT
     -- ============================================================================
     -- 1. 时间与 ADS 核心维度 (抹除 process_role、group_id、container_id)
     -- ============================================================================
@@ -409,12 +578,7 @@ SELECT
             mapValues(group_gen_tok_bucket_delta),
             process_role IN ('engine', 'prefill', 'decode', 'single')
         ).2
-    ) AS engine_request_generation_tokens_bucket_delta,
-
-    -- ============================================================================
-    -- 9. 标识控制
-    -- ============================================================================
-    0 AS sync_flag
+    ) AS engine_request_generation_tokens_bucket_delta
 
 FROM
 (
@@ -551,3 +715,20 @@ GROUP BY
     window_time,
     server_name,
     modelinstance_id
+) AS t
+LEFT JOIN
+(
+    -- 关联表 t_mops_modelinstance_5min_ads 获取 allocated_npu_num
+    SELECT
+        resource.window_time,
+        resource.server_name,
+        resource.modelinstance_id,
+        anyLast(resource.allocated_npu_num) AS allocated_npu_num
+    FROM modelmate_metric.t_mops_modelinstance_5min_ads AS resource
+    WHERE resource.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+      AND resource.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+    GROUP BY resource.window_time, resource.server_name, resource.modelinstance_id
+) AS m
+ON t.window_time = m.window_time
+   AND t.server_name = m.server_name
+   AND t.modelinstance_id = m.modelinstance_id;

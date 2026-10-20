@@ -59,6 +59,8 @@ INSERT INTO modelmate_metric.t_mops_modelinstance_month_ads
     container_rx_pack_drop_rate_max,
     container_rx_pack_drop_rate_min,
     container_rx_pack_drop_rate_argMax,
+    -- 新增：模型实例所使用的 NPU 卡数
+    allocated_npu_num,
     hbm_util_avg,
     hbm_util_max,
     hbm_util_min,
@@ -94,6 +96,14 @@ INSERT INTO modelmate_metric.t_mops_modelinstance_month_ads
     ai_card_computing_power_argMax,
     ai_card_used_computing_power_counter,
     ai_card_unused_computing_power_counter,
+    -- 新增：忙闲时算力指标与状态打标
+    work_time_ai_core_util_avg,
+    work_time_ai_core_util_max,
+    work_time_ai_core_util_min,
+    idle_time_ai_core_util_avg,
+    idle_time_ai_core_util_max,
+    idle_time_ai_core_util_min,
+    work_time_ai_core_util_status,
     sync_flag
 )
 WITH
@@ -205,6 +215,9 @@ WITH
             r.server_name,
             r.modelinstance_id,
 
+            -- 统计该实例去重后的绑定 NPU 卡数
+            uniqExact(tuple(c.node_ip, c.ai_card_index, c.chip_id)) AS allocated_npu_num,
+
             avg(c.hbm_util_avg)                                     AS hbm_util_avg,
             max(c.hbm_util_max)                                     AS hbm_util_max,
             min(c.hbm_util_min)                                     AS hbm_util_min,
@@ -250,7 +263,25 @@ WITH
 
             argMax(c.ai_card_computing_power_argMax, c.window_time) AS ai_card_computing_power_argMax,
             sum(c.ai_card_used_computing_power_counter)           AS ai_card_used_computing_power_counter,
-            sum(c.ai_card_unused_computing_power_counter)         AS ai_card_unused_computing_power_counter
+            sum(c.ai_card_unused_computing_power_counter)         AS ai_card_unused_computing_power_counter,
+
+            -- 【新增】：月度实例级别下的忙闲时 AI Core 利用率与状态打标
+            avg(c.work_time_ai_core_util_avg) AS work_time_ai_core_util_avg,
+            max(c.work_time_ai_core_util_max) AS work_time_ai_core_util_max,
+            min(c.work_time_ai_core_util_min) AS work_time_ai_core_util_min,
+
+            avg(c.idle_time_ai_core_util_avg) AS idle_time_ai_core_util_avg,
+            max(c.idle_time_ai_core_util_max) AS idle_time_ai_core_util_max,
+            min(c.idle_time_ai_core_util_min) AS idle_time_ai_core_util_min,
+
+            multiIf(
+                avg(c.work_time_ai_core_util_avg) IS NULL, NULL,
+                avg(c.work_time_ai_core_util_avg) > 80,   '超负荷使用',
+                avg(c.work_time_ai_core_util_avg) >= 15,  '常规使用',
+                avg(c.work_time_ai_core_util_avg) >= 0,   '低效使用',
+                NULL
+            ) AS work_time_ai_core_util_status
+
         FROM instance_card_rel AS r
         INNER JOIN modelmate_metric.t_mops_gpu_month_dws AS c
             ON  r.window_time = c.window_time
@@ -341,6 +372,9 @@ SELECT
     i.container_rx_pack_drop_rate_argMax,
 
     -- 卡指标
+    -- 新增：该实例使用的 NPU 卡数
+    coalesce(c.allocated_npu_num, 0) AS allocated_npu_num,
+
     c.hbm_util_avg,
     c.hbm_util_max,
     c.hbm_util_min,
@@ -386,6 +420,15 @@ SELECT
     c.ai_card_computing_power_argMax,
     c.ai_card_used_computing_power_counter,
     c.ai_card_unused_computing_power_counter,
+
+    -- 新增的 7 个忙闲时及状态打标指标映射
+    c.work_time_ai_core_util_avg,
+    c.work_time_ai_core_util_max,
+    c.work_time_ai_core_util_min,
+    c.idle_time_ai_core_util_avg,
+    c.idle_time_ai_core_util_max,
+    c.idle_time_ai_core_util_min,
+    c.work_time_ai_core_util_status,
 
     i.sync_flag
 FROM instance_base AS i

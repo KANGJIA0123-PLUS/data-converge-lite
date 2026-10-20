@@ -108,7 +108,7 @@ def test_dconv_runs_packaged_bytecode_with_default_configuration(compiled_applic
     result = subprocess.run(['dconv', '--validate-only'], cwd=temp, env=env,
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)['tasks'] == 56
+    assert json.loads(result.stdout)['tasks'] == 60
     result = subprocess.run(['dconv'], cwd=temp, env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert '--history' in result.stdout

@@ -1,41 +1,38 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation
     "helm.sh/hook-weight": "-10"
-  name: {{.Chart.Name}}-cluster-role
+  name: {{.Chart.Name}}-role
+  namespace: {{.Values.global.current_namespace}}
 rules:
   - apiGroups:
-      - '*'
+      - ""
     resources:
       - secrets
       - configmaps
-      - certificateauthority
     verbs:
       - get
-      - list
-      - watch
       - create
-      - update
-      - patch
       - delete
 
 ---
 
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: {{.Chart.Name}}-cluster-role-binding
+  name: {{.Chart.Name}}-role-binding
+  namespace: {{.Values.global.current_namespace}}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation
     "helm.sh/hook-weight": "-10"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{.Chart.Name}}-cluster-role
+  kind: Role
+  name: {{.Chart.Name}}-role
 subjects:
   - kind: ServiceAccount
     name: {{.Chart.Name}}-sa

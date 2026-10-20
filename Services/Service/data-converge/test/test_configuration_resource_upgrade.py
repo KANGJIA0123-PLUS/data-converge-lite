@@ -1,10 +1,11 @@
-"""Exercise the real 52-to-56 task graph upgrade without remote resources."""
+"""Exercise four-task additions using the current catalog without remote resources."""
 
 from contextlib import closing
 from datetime import datetime
 import shutil
 import sqlite3
 
+import pytest
 import yaml
 
 from data_converge.application import Application
@@ -17,15 +18,15 @@ from .test_main import app
 from .test_configuration_migration import preserve_config
 
 
-def configure_real_rules(path):
+def configure_real_rules(path, prefix):
     rules = yaml.safe_load((RESOURCES_ROOT / 'config/convergence_rules.yaml').read_text())
     added = [rule['taskname'] for rule in rules['convergence_rules']
-             if rule['taskname'].startswith('task_resource_server_')]
+             if rule['taskname'].startswith(prefix)]
     original = {'convergence_rules': [rule for rule in rules['convergence_rules']
                                       if rule['taskname'] not in added]}
     shutil.copytree(RESOURCES_ROOT / 'sql', path.parent / 'sql', dirs_exist_ok=True)
     (path.parent / 'rules.yaml').write_text(yaml.safe_dump(original))
-    assert len(original['convergence_rules']) == 52 and len(added) == 4
+    assert len(original['convergence_rules']) == 56 and len(added) == 4
     return rules, sorted(added)
 
 
@@ -46,8 +47,9 @@ def preserve_real_facts(application):
             store.finish(item.instance_id, status)
 
 
-def test_real_resource_task_addition_migrates_legacy_without_clearing_unknown(app):
-    rules, added = configure_real_rules(app)
+@pytest.mark.parametrize("prefix", ["task_resource_server_", "task_model_server_"])
+def test_real_task_addition_migrates_legacy_without_clearing_unknown(app, prefix):
+    rules, added = configure_real_rules(app, prefix)
     original = Application(app)
     original.initialize('2026-10-16T18:10:00+08:00')
     preserve_real_facts(original)
@@ -62,10 +64,10 @@ def test_real_resource_task_addition_migrates_legacy_without_clearing_unknown(ap
                    allow_backfill=True)
     plan = preview_config(target, **options)
     assert plan['changes']['added'] == added and plan['changes']['changed'] == []
-    assert plan['blockers'] == [] and len(target.definition.dag.tasks) == 56
+    assert plan['blockers'] == [] and len(target.definition.dag.tasks) == 60
     apply_config(target, plan['plan_id'], **options, accept_legacy_baseline=True)
     assert target.status().payload == before
     with closing(StateStore(target.directory / 'state.sqlite3')) as store:
         assert store.get_meta('coverage_start') == '2026-10-16T18:10:00+08:00'
         assert store.status_counts() == {'SUCCESS': 1, 'UNKNOWN': 1}
-        assert len(store.get_task_effective_starts()) == 56
+        assert len(store.get_task_effective_starts()) == 60

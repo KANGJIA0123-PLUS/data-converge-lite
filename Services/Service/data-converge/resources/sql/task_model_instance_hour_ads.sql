@@ -59,6 +59,8 @@ INSERT INTO modelmate_metric.t_mops_modelinstance_hour_ads
     container_rx_pack_drop_rate_max,
     container_rx_pack_drop_rate_min,
     container_rx_pack_drop_rate_argMax,
+    -- 新增：模型实例所使用的 NPU 卡数
+    allocated_npu_num,
     hbm_util_avg,
     hbm_util_max,
     hbm_util_min,
@@ -205,6 +207,9 @@ WITH
             r.server_name,
             r.modelinstance_id,
 
+            -- 统计该实例去重后的绑定 NPU 卡数
+            uniqExact(tuple(c.node_ip, c.ai_card_index, c.chip_id)) AS allocated_npu_num,
+
             avg(c.hbm_util_avg)                                     AS hbm_util_avg,
             max(c.hbm_util_max)                                     AS hbm_util_max,
             min(c.hbm_util_min)                                     AS hbm_util_min,
@@ -341,6 +346,9 @@ SELECT
     i.container_rx_pack_drop_rate_argMax,
 
     -- 卡指标
+    -- 新增：该实例使用的 NPU 卡数
+    coalesce(c.allocated_npu_num, 0) AS allocated_npu_num,
+
     c.hbm_util_avg,
     c.hbm_util_max,
     c.hbm_util_min,

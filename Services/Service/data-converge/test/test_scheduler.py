@@ -545,7 +545,7 @@ def test_signal_shutdown_cannot_deadlock_when_wait_condition_is_locked():
     assert result.stdout.strip() == "stopped"
 
 
-def test_ready_event_registers_all_fourteen_five_minute_tasks_before_cron(tmp_path):
+def test_ready_event_registers_all_fifteen_five_minute_tasks_before_cron(tmp_path):
     from pathlib import Path
     from data_converge.config import ConfigLoader
     from data_converge.state import StateStore
@@ -562,11 +562,12 @@ def test_ready_event_registers_all_fourteen_five_minute_tasks_before_cron(tmp_pa
         scheduler.enqueue_ready_windows([start], now=start + timedelta(minutes=5))
         assert store.get_cursor("task_gpu_realtime_to_5min_dws") is None
         scheduler.tick(start + timedelta(minutes=5))
-        assert len(calls) == 14
+        assert len(calls) == 15
+        assert "task_model_server_5min_ads@2026-10-12T10:05:00+08:00" in calls
         assert all(dag.get_task(instance_id.rsplit("@", 1)[0]).aggregation_interval == "PT5M" for instance_id in calls)
         scheduler.tick(start + timedelta(minutes=6))
-        assert len(calls) == 14
-        assert store.status_counts() == {"SUCCESS": 14}
+        assert len(calls) == 15
+        assert store.status_counts() == {"SUCCESS": 15}
     finally:
         store.close()
 

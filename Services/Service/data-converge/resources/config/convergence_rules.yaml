@@ -354,6 +354,59 @@ convergence_rules:
       - task_gpu_day_to_month_dws
     sql_id: task_model_instance_month_ads
 
+  # 模型服务资源 ADS：合并同一服务的实例资源及去重后的卡指标。
+  - taskname: task_model_server_5min_ads
+    description: 模型服务5分钟资源ADS表
+    source_tables:
+      - t_mops_modelinstance_5min_dws
+      - t_mops_gpu_5min_dws
+    target_table: t_mops__modelinstance_server__5min_ads
+    aggregation_interval: PT5M
+    cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    depends_on:
+      - task_model_instance_5min_dws
+      - task_gpu_realtime_to_5min_dws
+    sql_id: task_model_server_5min_ads
+
+  - taskname: task_model_server_hour_ads
+    description: 模型服务小时资源ADS表
+    source_tables:
+      - t_mops_modelinstance_hour_dws
+      - t_mops_gpu_hour_dws
+    target_table: t_mops__modelinstance_server__hour_ads
+    aggregation_interval: PT1H
+    cron: "6 * * * *"
+    depends_on:
+      - task_model_instance_hour_dws
+      - task_gpu_5min_to_hour_dws
+    sql_id: task_model_server_hour_ads
+
+  - taskname: task_model_server_day_ads
+    description: 模型服务天资源ADS表
+    source_tables:
+      - t_mops_modelinstance_day_dws
+      - t_mops_gpu_day_dws
+    target_table: t_mops__modelinstance_server__day_ads
+    aggregation_interval: P1D
+    cron: "10 0 * * *"
+    depends_on:
+      - task_model_instance_day_dws
+      - task_gpu_hour_to_day_dws
+    sql_id: task_model_server_day_ads
+
+  - taskname: task_model_server_month_ads
+    description: 模型服务月资源ADS表
+    source_tables:
+      - t_mops_modelinstance_month_dws
+      - t_mops_gpu_month_dws
+    target_table: t_mops__modelinstance_server__month_ads
+    aggregation_interval: P1M
+    cron: "20 0 1 * *"
+    depends_on:
+      - task_model_instance_month_dws
+      - task_gpu_day_to_month_dws
+    sql_id: task_model_server_month_ads
+
   # ============================================================================
   # 5.2 模型指标实例DWS表 (DWD -> DWS -> DWS -> DWS -> DWS)
   # ============================================================================
@@ -414,11 +467,13 @@ convergence_rules:
     description: 模型指标实例5分钟ADS表
     source_tables:
       - t_mops__modelmetric_instance__5min_dws
+      - t_mops_modelinstance_5min_ads
     target_table: t_mops__modelmetric_instance__5min_ads
     aggregation_interval: PT5M
     cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
     depends_on:
       - task_model_metric_instance_5min_dws
+      - task_model_instance_5min_ads
     sql_id: task_model_metric_instance_5min_ads
 
   # 6.1.2 模型指标实小时ADS
@@ -426,11 +481,13 @@ convergence_rules:
     description: 模型指标实小时ADS表
     source_tables:
       - t_mops__modelmetric_instance__hour_dws
+      - t_mops_modelinstance_hour_ads
     target_table: t_mops__modelmetric_instance__hour_ads
     aggregation_interval: PT1H
     cron: "6 * * * *"
     depends_on:
       - task_model_metric_instance_hour_dws
+      - task_model_instance_hour_ads
     sql_id: task_model_metric_instance_hour_ads
 
   # 6.1.3 模型指标实例天ADS
@@ -438,11 +495,13 @@ convergence_rules:
     description: 模型指标实例天ADS表
     source_tables:
       - t_mops__modelmetric_instance__day_dws
+      - t_mops_modelinstance_day_ads
     target_table: t_mops__modelmetric_instance__day_ads
     aggregation_interval: P1D
     cron: "10 0 * * *"
     depends_on:
       - task_model_metric_instance_day_dws
+      - task_model_instance_day_ads
     sql_id: task_model_metric_instance_day_ads
 
   # 6.1.4 模型指标实例月ADS
@@ -450,11 +509,13 @@ convergence_rules:
     description: 模型指标实例月ADS表
     source_tables:
       - t_mops__modelmetric_instance__month_dws
+      - t_mops_modelinstance_month_ads
     target_table: t_mops__modelmetric_instance__month_ads
     aggregation_interval: P1M
     cron: "20 0 1 * *"
     depends_on:
       - task_model_metric_instance_month_dws
+      - task_model_instance_month_ads
     sql_id: task_model_metric_instance_month_ads
 
   # ============================================================================
