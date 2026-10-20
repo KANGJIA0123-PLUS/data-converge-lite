@@ -34,7 +34,7 @@ SQL 的 CAST **不会修改目标列的 DDL**。数据库由外部仓库维护�
 
 日、月新增忙时状态值沿用附件：`超负荷使用`（>80）、`常规使用`（15–80）、`低效使用`（0–<15），缺失值为 NULL。数据库枚举、字段可空性和报表展示应与之匹配。`allocated_npu_num` 按现有 GPU DWS 绑定键计数，新增 SQL 未按设备厂商进一步筛选。
 
-在与服务相同的 ClickHouse 入口，用查询工具执行 [metrics-schema-check.sql](metrics-schema-check.sql)。这是只读 SQL，列出缺失的表字段；新表不存在时会列出其全部必需字段。返回空集只表示列名齐全，仍需核对列类型、可空性、枚举、表引擎及各分片结构。检查包含 464 项“表、列”组合，既覆盖现有表新增字段，也覆盖四张新表的全部写入字段。它检查逻辑表的列名，实际底层本地表也须同步升级；请求 ADS 还须核实对应 `_local` 表及 `window_time` 列存在。
+在与服务相同的 ClickHouse 入口，用查询工具执行 [metrics-schema-check.sql](metrics-schema-check.sql)。这是只读 SQL，列出缺失的表字段；新表不存在时会列出其全部必需字段。返回空集只表示列名齐全，仍需核对列类型、可空性、枚举、表引擎及各分片结构。检查覆盖现有表新增字段及四张新表的全部写入字段；2026-10-21 新增的请求指标同时检查逻辑表与对应 `_local` 表。其他既有检查以逻辑表为主，实际底层本地表也须同步升级；请求 ADS 还须核实对应 `_local` 表及 `window_time` 列存在。
 
 另需核对既有的 `t_mops_modelinstance_<周期>_dws.dev_id`：实例 ADS 已经读取该列，但仓库上游 DWS 的 INSERT 列清单没有写入它，是否存在及如何取值由实际 DDL 决定。本次未修改这一既有逻辑，新增依赖会要求实例 ADS 成功后才能执行实例指标 ADS。
 
@@ -82,3 +82,28 @@ sha256sum \
 - 节点比率继续使用 `sum(source.<列名>)`。这里计算的是源数据总量，不是再次聚合前面的同名结果别名；显式源列限定已解决嵌套聚合。改用裸别名会依赖 `prefer_column_name_to_alias` 设置，在取值 1 时可能报 `NOT_AN_AGGREGATE`。回归测试在设置 0 和 1 下实际执行 SQL，核对 token／成功请求、请求成败率、E2E、TTFT、TPOT 的窗口总量与加权结果。
 - 保留 `coalesce(..., 0.0)` 的零分母返回 0 约定和 `Nullable(Float32)` 输出类型；不能用旧补丁移除已修正的零值处理。
 - 四周期服务卡数继续读取 `t_mops_modelinstance_<周期>_ads`，保留按实例去重、正确卡时公式、UInt32 时间参数及窗口边界。旧补丁中仅更换 FROM 表名的修改已被包含，无需覆盖当前子查询。
+
+## 请求指标与小时快照补丁（2026-10-21）
+
+本轮合并 `diff git (3).txt` 和 `diff git (4).txt`，涉及八个请求 SQL 和一个小时实例指标 SQL，保留 main 的应用时区筛选和已有可空转换。
+
+- 五分钟请求 DWS 按原始请求统计成功、失败次数；成功码为 `200`。状态码先转字符串，兼容数字 `200`、字符串 `'200'` 和非数字失败码。NULL 不计入成功或失败，但仍计入请求总数，因此存在未知状态时两个百分比之和可能小于 100%。
+- 小时、日、月 DWS 累加下层的 `request_failed_count`、`request_success_count`；原补丁复制的 `countIf(r.result_code ...)` 在这三层没有对应字段和表别名，会报 `UNKNOWN_IDENTIFIER`。
+- 四周期 Agent ADS 新增 11 项指标。成功率、失败率以百分比输出；输入输出 Token 比率为输入总量／输出总量；平均 Token 长度按请求数加权；QPS 和 Token 吞吐按实际窗口秒数计算。窗口参数统一为 UInt32 Unix 秒，经过秒数仍以 UTC `dateDiff` 计算。
+- 新增 E2E、TTFT、TPOT 按请求数平均并将毫秒除以 1000 转为秒。上游请求表定义 `prefill_time` 为首 Token 耗时（毫秒）、`decode_time_average` 为单个请求的输出 Token 平均耗时（毫秒）、`total_time` 为总耗时（毫秒）。TTFT 不除输入 Token 数，TPOT 不再次除输出 Token 数；这里的 TPOT 是按请求平均，不是按所有输出 Token 加权。原有 `prefill_time_*`、`decode_time_average_*`、`total_time_sum` 继续保留原单位及既有缺失值处理，新指标沿用补丁的零分母返回 0 策略。
+- 小时实例指标子查询显式输出 `orig_window_time`，外层 38 个 `argMax` 使用此字段，避免输出 `window_time` 别名与源窗口混淆。完整 SQL 在 ClickHouse 25.8 的旧 analyzer 下可复现基线 `Unknown identifier 'window_time'`；修复后新旧 analyzer 和两种别名优先设置均通过，最新快照及跨组增量均有回归覆盖。
+
+### 发布前必须补齐的请求表结构
+
+以下要求同时适用于逻辑表、对应 `_local` 表及相关分片。本仓库不执行生产 DDL，也不证明现场已经具备这些列。
+
+| 表 | 新增依赖／写入字段 |
+| --- | --- |
+| `t_mops_request_realtime_dwd` | `result_code`；源端须真实上报状态码，不能靠填入默认成功码补齐数据。 |
+| `t_mops_request_<周期>_dws` | `request_failed_count`、`request_success_count`，保存非负请求计数。 |
+| `t_mops_agent_<周期>_ads` | `request_failed_rate`、`request_success_rate`、`infer_input_output_token_rate`、`infer_e2e_request_latency_seconds_avg`、`time_per_output_token_seconds_avg`、`time_to_first_token_seconds_avg`，SQL 输出 `Nullable(Float32)`。 |
+| `t_mops_agent_<周期>_ads` | `infer_input_token_num_length_avg`、`infer_output_token_num_length_avg`、`infer_request_received_qps`、`prompt_tokens_per_s_avg`、`generation_tokens_per_s_avg`，SQL 输出 `Nullable(Float64)`。 |
+
+先执行上述只读字段检查，再按真实 DDL 核对类型及请求时延确为毫秒。旧表新增列的默认值不能代表历史真实成功、失败次数；历史指标需要从仍保留状态码的原始请求逐层回算，不能只重跑 Agent ADS。已有 UNKNOWN 仍须按 query_id 核实后处理。
+
+本轮还复现了小时实例指标 SQL 的两个既存口径问题：并发、队列和参考吞吐的五分钟均值被跨窗口直接累加；同一组同一时刻分布在多个节点时，内层 `argMax(node_id/node_ip, window_time)` 只保留一个节点。两者均早于此次补丁，修复需要明确时间加权及节点维度口径，本次不改变这些业务聚合规则。

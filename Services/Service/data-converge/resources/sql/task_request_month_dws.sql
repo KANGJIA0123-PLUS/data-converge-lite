@@ -27,6 +27,9 @@ INSERT INTO modelmate_metric.t_mops_request_month_dws (
     total_tokens_sum,
     total_time_sum,
     request_total_sum,
+    -- 补充字段
+    request_failed_count,
+    request_success_count,
     sync_flag
 )
 SELECT
@@ -95,6 +98,9 @@ SELECT
     toInt32(sum(d.total_tokens_sum))                    AS total_tokens_sum,
     sum(d.total_time_sum)                               AS total_time_sum,
     toUInt64(sum(d.request_total_sum))                  AS request_total_sum,
+    -- 补充指标计算
+    toUInt64(sum(d.request_failed_count))               AS request_failed_count,
+    toUInt64(sum(d.request_success_count))               AS request_success_count,
 
     -- 5. 标志位
     any(d.sync_flag)                                    AS sync_flag

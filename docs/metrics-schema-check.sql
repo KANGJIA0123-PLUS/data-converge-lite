@@ -1,7 +1,44 @@
--- Read-only deployment check for the 2026-10-20 metrics changes.
+-- Read-only deployment check for the 2026-10-20/21 metrics changes.
 -- Execute on the same ClickHouse endpoint/database used by data-converge.
 -- No rows means all required column names exist; types/engines still need review.
+-- Request metrics require columns on both logical and _local tables.
 WITH expected AS (
+    SELECT table_name, 'result_code' AS column_name
+    FROM (SELECT arrayJoin([
+        't_mops_request_realtime_dwd', 't_mops_request_realtime_dwd_local'
+    ]) AS table_name)
+    UNION ALL
+    SELECT table_name, arrayJoin([
+                'request_failed_count',
+                'request_success_count'
+           ]) AS column_name
+    FROM (SELECT arrayJoin([
+        't_mops_request_5min_dws', 't_mops_request_5min_dws_local',
+        't_mops_request_hour_dws', 't_mops_request_hour_dws_local',
+        't_mops_request_day_dws', 't_mops_request_day_dws_local',
+        't_mops_request_month_dws', 't_mops_request_month_dws_local'
+    ]) AS table_name)
+    UNION ALL
+    SELECT table_name, arrayJoin([
+                'request_failed_rate',
+                'request_success_rate',
+                'infer_input_output_token_rate',
+                'infer_e2e_request_latency_seconds_avg',
+                'infer_input_token_num_length_avg',
+                'infer_output_token_num_length_avg',
+                'infer_request_received_qps',
+                'time_per_output_token_seconds_avg',
+                'time_to_first_token_seconds_avg',
+                'prompt_tokens_per_s_avg',
+                'generation_tokens_per_s_avg'
+           ]) AS column_name
+    FROM (SELECT arrayJoin([
+        't_mops_agent_5min_ads', 't_mops_agent_5min_ads_local',
+        't_mops_agent_hour_ads', 't_mops_agent_hour_ads_local',
+        't_mops_agent_day_ads', 't_mops_agent_day_ads_local',
+        't_mops_agent_month_ads', 't_mops_agent_month_ads_local'
+    ]) AS table_name)
+    UNION ALL
     SELECT table_name, arrayJoin([
                 'allocated_npu_num'
            ]) AS column_name

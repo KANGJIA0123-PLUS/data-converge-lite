@@ -27,6 +27,9 @@ INSERT INTO modelmate_metric.t_mops_request_5min_dws (
     total_tokens_sum,
     total_time_sum,
     request_total_sum,
+    -- 补充字段
+    request_failed_count,
+    request_success_count,
     sync_flag
 )
 SELECT
@@ -75,6 +78,10 @@ SELECT
     toInt32(sum(r.total_tokens))                          AS total_tokens_sum,
     sum(r.total_time)                                     AS total_time_sum,
     toUInt64(count(*))                                    AS request_total_sum,
+
+    -- 成功码为 200；兼容数字/字符串状态码，NULL 不归入成功或失败
+    toUInt64(countIf(toString(r.result_code) != '200'))               AS request_failed_count,
+    toUInt64(countIf(toString(r.result_code) = '200'))               AS request_success_count,
 
     -- 5. 标志位
     any(r.sync_flag)                                      AS sync_flag

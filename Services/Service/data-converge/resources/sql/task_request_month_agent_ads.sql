@@ -24,6 +24,18 @@
     total_tokens_sum,
     total_time_sum,
     request_total_sum,
+    -- 补充指标字段列表
+    request_failed_rate,
+    request_success_rate,
+    infer_input_output_token_rate,
+    infer_e2e_request_latency_seconds_avg,
+    infer_input_token_num_length_avg,
+    infer_output_token_num_length_avg,
+    infer_request_received_qps,
+    time_per_output_token_seconds_avg,
+    time_to_first_token_seconds_avg,
+    prompt_tokens_per_s_avg,
+    generation_tokens_per_s_avg,
     sync_flag
 )
 SELECT
@@ -34,7 +46,7 @@ SELECT
     dws.agent_id,
     any(dws.agent_name) AS agent_name,
 
-    -- 3. 汇聚指标（跨天累加与加权平均计算）
+    -- 3. 基础平均与累加指标计算
     toFloat32(
         CASE WHEN coalesce(sum(dws.request_total_sum), 0) > 0
              THEN coalesce(sum(dws.prefill_time_sum), 0) / sum(dws.request_total_sum)
@@ -79,7 +91,74 @@ SELECT
     sum(dws.total_time_sum) AS total_time_sum,
     toUInt64(sum(dws.request_total_sum)) AS request_total_sum,
 
-    -- 4. 标识控制
+    -- 4. 补充指标计算
+    -- 请求失败率 (%)
+    CAST(coalesce(
+        sum(dws.request_failed_count) * 100.0 / nullIf(sum(dws.request_total_sum), 0),
+        0.0
+    ) AS Nullable(Float32)) AS request_failed_rate,
+
+    -- 请求成功率 (%)
+    CAST(coalesce(
+        sum(dws.request_success_count) * 100.0 / nullIf(sum(dws.request_total_sum), 0),
+        0.0
+    ) AS Nullable(Float32)) AS request_success_rate,
+
+    -- 输入/输出 Token 比率
+    CAST(coalesce(
+        sum(dws.input_tokens_sum) / nullIf(toFloat64(sum(dws.output_tokens_sum)), 0.0),
+        0.0
+    ) AS Nullable(Float32)) AS infer_input_output_token_rate,
+
+    -- 端到端请求延迟：毫秒总耗时按请求数平均，再转换为秒
+    CAST(coalesce(
+        sum(dws.total_time_sum) / nullIf(toFloat64(sum(dws.request_total_sum)), 0.0) / 1000.0,
+        0.0
+    ) AS Nullable(Float32)) AS infer_e2e_request_latency_seconds_avg,
+
+    -- 平均输入 Token 长度
+    CAST(coalesce(
+        sum(dws.input_tokens_sum) / nullIf(toFloat64(sum(dws.request_total_sum)), 0.0),
+        0.0
+    ) AS Nullable(Float64)) AS infer_input_token_num_length_avg,
+
+    -- 平均输出 Token 长度
+    CAST(coalesce(
+        sum(dws.output_tokens_sum) / nullIf(toFloat64(sum(dws.request_total_sum)), 0.0),
+        0.0
+    ) AS Nullable(Float64)) AS infer_output_token_num_length_avg,
+
+    -- 平均每秒请求数 (QPS)
+    CAST(coalesce(
+        sum(dws.request_total_sum) / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
+        0.0
+    ) AS Nullable(Float64)) AS infer_request_received_qps,
+
+    -- TPOT：源字段已是每请求的单 Token 平均耗时（毫秒），按请求数平均后转秒
+    CAST(coalesce(
+        sum(dws.decode_time_average_sum) / nullIf(toFloat64(sum(dws.request_total_sum)), 0.0) / 1000.0,
+        0.0
+    ) AS Nullable(Float32)) AS time_per_output_token_seconds_avg,
+
+    -- TTFT：首 Token 耗时（毫秒）按请求数平均后转秒，不按输入 Token 数相除
+    CAST(coalesce(
+        sum(dws.prefill_time_sum) / nullIf(toFloat64(sum(dws.request_total_sum)), 0.0) / 1000.0,
+        0.0
+    ) AS Nullable(Float32)) AS time_to_first_token_seconds_avg,
+
+    -- 平均每秒输入 Token 数 (tokens/s)
+    CAST(coalesce(
+        sum(dws.input_tokens_sum) / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
+        0.0
+    ) AS Nullable(Float64)) AS prompt_tokens_per_s_avg,
+
+    -- 平均每秒输出 Token 数 (tokens/s)
+    CAST(coalesce(
+        sum(dws.output_tokens_sum) / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
+        0.0
+    ) AS Nullable(Float64)) AS generation_tokens_per_s_avg,
+
+    -- 5. 标识控制
     any(dws.sync_flag) AS sync_flag
 
 FROM modelmate_metric.t_mops_request_month_dws AS dws

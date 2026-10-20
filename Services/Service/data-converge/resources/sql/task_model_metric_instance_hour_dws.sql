@@ -181,32 +181,32 @@ SELECT
     -- ============================================================================
     -- 2. 实例关联属性（锁住整小时内最后一个 5 分钟窗口的最新快照）
     -- ============================================================================
-    argMax(e.modelinstance_name, e.window_time)             AS modelinstance_name,
-    argMax(e.framework_type, e.window_time)                  AS framework_type,
-    argMax(e.framework_version, e.window_time)               AS framework_version,
-    argMax(e.deploy_info, e.window_time)                    AS deploy_info,
-    argMax(e.model_name, e.window_time)                     AS model_name,
-    argMax(e.model_id, e.window_time)                       AS model_id,
+    argMax(e.modelinstance_name, e.orig_window_time)             AS modelinstance_name,
+    argMax(e.framework_type, e.orig_window_time)                  AS framework_type,
+    argMax(e.framework_version, e.orig_window_time)               AS framework_version,
+    argMax(e.deploy_info, e.orig_window_time)                    AS deploy_info,
+    argMax(e.model_name, e.orig_window_time)                     AS model_name,
+    argMax(e.model_id, e.orig_window_time)                       AS model_id,
     arrayDistinct(groupArray(e.node_id))                  AS node_ids,
     arrayDistinct(groupArray(e.node_ip))                  AS node_ips,
-    argMax(e.node_name, e.window_time)                      AS node_name,
-    argMax(e.node_type, e.window_time)                      AS node_type,
-    argMax(e.dev_mfr, e.window_time)                        AS dev_mfr,
-    argMax(e.dev_model, e.window_time)                      AS dev_model,
-    argMax(e.dev_status_code, e.window_time)                AS dev_status_code,
-    argMax(e.dev_status_name, e.window_time)                AS dev_status_name,
+    argMax(e.node_name, e.orig_window_time)                      AS node_name,
+    argMax(e.node_type, e.orig_window_time)                      AS node_type,
+    argMax(e.dev_mfr, e.orig_window_time)                        AS dev_mfr,
+    argMax(e.dev_model, e.orig_window_time)                      AS dev_model,
+    argMax(e.dev_status_code, e.orig_window_time)                AS dev_status_code,
+    argMax(e.dev_status_name, e.orig_window_time)                AS dev_status_name,
 
     -- ============================================================================
     -- 3. Request Metrics: 跨 Group 物理累加 (`P1_Group` + `P2_Group`)
     -- ============================================================================
-    argMax(e.request_received_total_argMax, e.window_time)          AS request_received_total_argMax,
+    argMax(e.request_received_total_argMax, e.orig_window_time)          AS request_received_total_argMax,
     sum(e.group_request_received_delta)                           AS request_received_total_delta,
     cast(sum(e.group_request_received_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0) AS Nullable(Float32))   AS request_received_total_qpm_avg,
 
-    argMax(e.request_failed_total_argMax, e.window_time)            AS request_failed_total_argMax,
+    argMax(e.request_failed_total_argMax, e.orig_window_time)            AS request_failed_total_argMax,
     sum(e.group_request_failed_delta)                             AS request_failed_total_delta,
 
-    argMax(e.request_success_total_argMax, e.window_time)           AS request_success_total_argMax,
+    argMax(e.request_success_total_argMax, e.orig_window_time)           AS request_success_total_argMax,
     sum(e.group_request_received_delta - e.group_request_failed_delta) AS request_success_total_delta,
 
     cast((sum(e.group_request_received_delta - e.group_request_failed_delta))
@@ -222,16 +222,16 @@ SELECT
     sum(e.group_num_requests_waiting)                      AS num_requests_waiting_avg,
     sum(e.group_num_requests_swapped)                      AS num_requests_swapped_avg,
 
-    argMax(e.num_preemptions_total_argMax, e.window_time)           AS num_preemptions_total_argMax,
+    argMax(e.num_preemptions_total_argMax, e.orig_window_time)           AS num_preemptions_total_argMax,
     sum(e.group_num_preemptions_delta)                            AS num_preemptions_total_delta,
 
     -- ============================================================================
     -- 5. Token Totals & Throughput Rates: 跨 Group 物理累加
     -- ============================================================================
-    argMax(e.prompt_tokens_total_argMax, e.window_time)              AS prompt_tokens_total_argMax,
+    argMax(e.prompt_tokens_total_argMax, e.orig_window_time)              AS prompt_tokens_total_argMax,
     sum(e.group_prompt_tokens_delta)                              AS prompt_tokens_total_delta,
 
-    argMax(e.generation_tokens_total_argMax, e.window_time)          AS generation_tokens_total_argMax,
+    argMax(e.generation_tokens_total_argMax, e.orig_window_time)          AS generation_tokens_total_argMax,
     sum(e.group_generation_tokens_delta)                          AS generation_tokens_total_delta,
 
     cast(sum(e.group_prompt_tokens_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Nullable(Float32))    AS prompt_tokens_total_delta_rate_avg,
@@ -246,14 +246,14 @@ SELECT
     sum(e.group_avg_generation_throughput_delta)          AS avg_generation_throughput_toks_per_s_delta,
     max(e.avg_generation_throughput_toks_per_s_max)       AS avg_generation_throughput_toks_per_s_max,
 
-    argMax(e.time_to_first_token_seconds_argMax, e.window_time) AS time_to_first_token_seconds_argMax,
+    argMax(e.time_to_first_token_seconds_argMax, e.orig_window_time) AS time_to_first_token_seconds_argMax,
     cast(sum(e.group_ttft_sum_delta)
         / nullIf(sum(e.group_ttft_count_delta), 0) AS Nullable(Float32)) AS time_to_first_token_seconds_avg,
-    argMax(e.time_to_first_token_seconds_count_argMax, e.window_time) AS time_to_first_token_seconds_count_argMax,
+    argMax(e.time_to_first_token_seconds_count_argMax, e.orig_window_time) AS time_to_first_token_seconds_count_argMax,
     sum(e.group_ttft_count_delta) AS time_to_first_token_seconds_count_delta,
-    argMax(e.time_to_first_token_seconds_sum_argMax, e.window_time) AS time_to_first_token_seconds_sum_argMax,
+    argMax(e.time_to_first_token_seconds_sum_argMax, e.orig_window_time) AS time_to_first_token_seconds_sum_argMax,
     sum(e.group_ttft_sum_delta) AS time_to_first_token_seconds_sum_delta,
-    argMax(e.time_to_first_token_seconds_bucket_argMax,e.window_time) AS time_to_first_token_seconds_bucket_argMax,
+    argMax(e.time_to_first_token_seconds_bucket_argMax,e.orig_window_time) AS time_to_first_token_seconds_bucket_argMax,
     -- 不同 Group 处理不同请求，Bucket 样本需要物理累加
     mapFromArrays(
         sumMap(
@@ -270,14 +270,14 @@ SELECT
     -- ============================================================================
     -- 6. TPOT & E2E: 跨 Group 加权重算与分布地图叠加 (`sumMap`)
     -- ============================================================================
-    argMax(e.time_per_output_token_seconds_argMax, e.window_time)   AS time_per_output_token_seconds_argMax,
+    argMax(e.time_per_output_token_seconds_argMax, e.orig_window_time)   AS time_per_output_token_seconds_argMax,
     cast(sum(e.group_tpot_sum_delta)
         / nullIf(sum(e.group_tpot_count_delta), 0) AS Nullable(Float32))    AS time_per_output_token_seconds_avg,
-    argMax(e.time_per_output_token_seconds_count_argMax, e.window_time) AS time_per_output_token_seconds_count_argMax,
+    argMax(e.time_per_output_token_seconds_count_argMax, e.orig_window_time) AS time_per_output_token_seconds_count_argMax,
     sum(e.group_tpot_count_delta)                                  AS time_per_output_token_seconds_count_delta,
-    argMax(e.time_per_output_token_seconds_sum_argMax, e.window_time)   AS time_per_output_token_seconds_sum_argMax,
+    argMax(e.time_per_output_token_seconds_sum_argMax, e.orig_window_time)   AS time_per_output_token_seconds_sum_argMax,
     sum(e.group_tpot_sum_delta)                                   AS time_per_output_token_seconds_sum_delta,
-    argMax(e.time_per_output_token_seconds_bucket_argMax, e.window_time) AS time_per_output_token_seconds_bucket_argMax,
+    argMax(e.time_per_output_token_seconds_bucket_argMax, e.orig_window_time) AS time_per_output_token_seconds_bucket_argMax,
     -- 跨组的 Bucket Map 必须用 sumMap 叠加！
     mapFromArrays(
         sumMap(
@@ -290,15 +290,15 @@ SELECT
         ).2
     ) AS time_per_output_token_seconds_bucket_delta,
 
-    argMax(e.e2e_request_latency_seconds_argMax, e.window_time)     AS e2e_request_latency_seconds_argMax,
+    argMax(e.e2e_request_latency_seconds_argMax, e.orig_window_time)     AS e2e_request_latency_seconds_argMax,
     -- 加权重算 E2E
     cast(sum(e.group_e2e_sum_delta)
         / nullIf(sum(e.group_e2e_count_delta), 0) AS Nullable(Float32))     AS e2e_request_latency_seconds_avg,
-    argMax(e.e2e_request_latency_seconds_count_argMax, e.window_time)  AS e2e_request_latency_seconds_count_argMax,
+    argMax(e.e2e_request_latency_seconds_count_argMax, e.orig_window_time)  AS e2e_request_latency_seconds_count_argMax,
     sum(e.group_e2e_count_delta)                          AS e2e_request_latency_seconds_count_delta,
-    argMax(e.e2e_request_latency_seconds_sum_argMax, e.window_time)    AS e2e_request_latency_seconds_sum_argMax,
+    argMax(e.e2e_request_latency_seconds_sum_argMax, e.orig_window_time)    AS e2e_request_latency_seconds_sum_argMax,
     sum(e.group_e2e_sum_delta)                            AS e2e_request_latency_seconds_sum_delta,
-    argMax(e.e2e_request_latency_seconds_bucket_argMax, e.window_time) AS e2e_request_latency_seconds_bucket_argMax,
+    argMax(e.e2e_request_latency_seconds_bucket_argMax, e.orig_window_time) AS e2e_request_latency_seconds_bucket_argMax,
     -- 跨组的 Bucket Map 必须用 sumMap 叠加！
     mapFromArrays(
         sumMap(
@@ -323,15 +323,15 @@ SELECT
     -- ============================================================================
     -- 8. Prompt & Generation Tokens 分布
     -- ============================================================================
-    argMax(e.request_prompt_tokens_argMax, e.window_time)           AS request_prompt_tokens_argMax,
+    argMax(e.request_prompt_tokens_argMax, e.orig_window_time)           AS request_prompt_tokens_argMax,
     cast(sum(e.group_prompt_tok_sum_delta)
         / nullIf(sum(e.group_prompt_tok_cnt_delta), 0) AS Nullable(Float32)) AS request_prompt_tokens_avg,
     max(e.request_prompt_tokens_max)                              AS request_prompt_tokens_max,
-    argMax(e.request_prompt_tokens_count_argMax, e.window_time)     AS request_prompt_tokens_count_argMax,
+    argMax(e.request_prompt_tokens_count_argMax, e.orig_window_time)     AS request_prompt_tokens_count_argMax,
     sum(e.group_prompt_tok_cnt_delta)                             AS request_prompt_tokens_count_delta,
-    argMax(e.request_prompt_tokens_sum_argMax, e.window_time)       AS request_prompt_tokens_sum_argMax,
+    argMax(e.request_prompt_tokens_sum_argMax, e.orig_window_time)       AS request_prompt_tokens_sum_argMax,
     sum(e.group_prompt_tok_sum_delta)                             AS request_prompt_tokens_sum_delta,
-    argMax(e.request_prompt_tokens_bucket_argMax, e.window_time)    AS request_prompt_tokens_bucket_argMax,
+    argMax(e.request_prompt_tokens_bucket_argMax, e.orig_window_time)    AS request_prompt_tokens_bucket_argMax,
     mapFromArrays(
         sumMap(
             mapKeys(e.group_prompt_tok_bucket_delta),
@@ -343,15 +343,15 @@ SELECT
         ).2
     ) AS request_prompt_tokens_bucket_delta,
 
-    argMax(e.request_generation_tokens_argMax, e.window_time)       AS request_generation_tokens_argMax,
+    argMax(e.request_generation_tokens_argMax, e.orig_window_time)       AS request_generation_tokens_argMax,
     cast(sum(e.group_gen_tok_sum_delta)
         / nullIf(sum(e.group_gen_tok_cnt_delta), 0) AS Nullable(Float32))   AS request_generation_tokens_avg,
     max(e.request_generation_tokens_max)                          AS request_generation_tokens_max,
-    argMax(e.request_generation_tokens_count_argMax, e.window_time) AS request_generation_tokens_count_argMax,
+    argMax(e.request_generation_tokens_count_argMax, e.orig_window_time) AS request_generation_tokens_count_argMax,
     sum(e.group_gen_tok_cnt_delta)                                AS request_generation_tokens_count_delta,
-    argMax(e.request_generation_tokens_sum_argMax, e.window_time)   AS request_generation_tokens_sum_argMax,
+    argMax(e.request_generation_tokens_sum_argMax, e.orig_window_time)   AS request_generation_tokens_sum_argMax,
     sum(e.group_gen_tok_sum_delta)                                AS request_generation_tokens_sum_delta,
-    argMax(e.request_generation_tokens_bucket_argMax, e.window_time) AS request_generation_tokens_bucket_argMax,
+    argMax(e.request_generation_tokens_bucket_argMax, e.orig_window_time) AS request_generation_tokens_bucket_argMax,
     mapFromArrays(
         sumMap(
             mapKeys(e.group_gen_tok_bucket_delta),
@@ -372,7 +372,7 @@ FROM
 (
     -- 【子查询】：按 5 分钟 + group_id 聚合（组内多容器去重，锁住 Rank 0）
     SELECT
-        f.window_time,
+        f.window_time AS orig_window_time,
         f.server_name,
         f.modelinstance_id,
         f.process_role,
