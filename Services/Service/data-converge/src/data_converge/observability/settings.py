@@ -17,7 +17,7 @@ class LoggingSettings:
         for value in (self.max_bytes, self.backup_count, self.retention_days):
             if type(value) is not int or value <= 0:
                 raise ValueError('LOGGING_SETTING_INVALID')
-        if type(self.debug_enabled) is not bool:
+        if not isinstance(self.debug_enabled, bool):
             raise ValueError('LOGGING_SETTING_INVALID')
 
     @classmethod

@@ -30,7 +30,7 @@ def _serialize_plan(plan):
     if (not all(isinstance(value, str) and value for value in identities)
             or len(set(identities)) != len(identities)
             or not isinstance(plan.get('revision'), str)
-            or not plan['revision'] or type(plan.get('recompute')) is not bool
+            or not plan['revision'] or not isinstance(plan.get('recompute'), bool)
             or plan.get('total') != len(items)):
         raise BackfillQueueError('BACKFILL_PLAN_INVALID')
     payload = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -49,7 +49,7 @@ def _loaded_plan(raw):
     plan = json.loads(raw)
     if (not isinstance(plan, dict) or type(plan.get('schema_version')) is not int
             or plan['schema_version'] != 1 or not isinstance(plan.get('revision'), str)
-            or not plan['revision'] or type(plan.get('recompute')) is not bool
+            or not plan['revision'] or not isinstance(plan.get('recompute'), bool)
             or type(plan.get('total')) is not int or plan['total'] < 1
             or not isinstance(plan.get('items'), list) or len(plan['items']) != plan['total']):
         raise BackfillQueueError('BACKFILL_QUEUE_INVALID')
