@@ -115,8 +115,8 @@ SELECT
     any(source.sync_flag) AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_node__day_ads AS source
-WHERE source.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND source.window_time < toDateTime({end_time:UInt32}, 'UTC')
+WHERE source.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND source.window_time < toDateTime({end_time:UInt32}, {system_timezone:String})
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}), -- 使用本次调度窗口的起点
     source.node_id,

@@ -100,8 +100,8 @@ SELECT
     any(h.sync_flag)                                    AS sync_flag
 
 FROM modelmate_metric.t_mops_request_hour_dws AS h
-WHERE h.window_time >= toDateTime({start_time:UInt32}, 'UTC')  -- 调度时传入的天级时间范围（如当天的 00:00:00，左闭右开）
-  AND h.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE h.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})  -- 调度时传入的天级时间范围（如当天的 00:00:00，左闭右开）
+  AND h.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND h.sync_flag = 0
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

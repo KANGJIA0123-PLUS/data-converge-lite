@@ -469,8 +469,8 @@ FROM
         any(f.sync_flag)                                  AS sync_flag
 
     FROM modelmate_metric.t_mops__modelmetric_instance__5min_dws AS f
-    WHERE f.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-      AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+    WHERE f.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+      AND f.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
       AND f.sync_flag = 0
     -- 子查询按 group_id 聚集（组内去重）
     GROUP BY

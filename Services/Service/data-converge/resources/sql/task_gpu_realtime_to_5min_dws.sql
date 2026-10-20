@@ -139,8 +139,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_gpu_realtime_dwd AS r
 /* 增量计算时可解除注释添加时间范围约束*/
-WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, 'UTC')
-  AND r.metric_datetime <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND r.metric_datetime <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND r.sync_flag = 0 -- 只针对探针实时上报的数据做 5 分钟汇聚
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

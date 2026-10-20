@@ -160,8 +160,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_modelinstance_5min_dws AS f
 /* 增量计算时可解除注释添加时间范围约束*/
-WHERE f.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE f.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND f.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND f.sync_flag = 0 -- 只针对探针实时上报的数据做小时汇聚
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

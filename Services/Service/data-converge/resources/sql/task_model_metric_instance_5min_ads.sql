@@ -700,8 +700,8 @@ FROM
         avg(dws.npu_prefix_cache_hit_rate_avg) AS group_prefix_cache_hit_rate_avg
 
     FROM modelmate_metric.t_mops__modelmetric_instance__5min_dws AS dws
-    WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-      AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+    WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+      AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
       AND dws.sync_flag = 0
       AND dws.process_role != 'worker' -- 【关键新增】：彻底排除所有跨机/多卡的从属节点
     GROUP BY
@@ -725,8 +725,8 @@ LEFT JOIN
         resource.modelinstance_id,
         anyLast(resource.allocated_npu_num) AS allocated_npu_num
     FROM modelmate_metric.t_mops_modelinstance_5min_ads AS resource
-    WHERE resource.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-      AND resource.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+    WHERE resource.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+      AND resource.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
     GROUP BY resource.window_time, resource.server_name, resource.modelinstance_id
 ) AS m
 ON t.window_time = m.window_time

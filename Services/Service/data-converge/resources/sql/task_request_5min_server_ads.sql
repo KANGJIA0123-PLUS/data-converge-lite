@@ -82,8 +82,8 @@ SELECT
     any(dws.sync_flag)                                                    AS sync_flag
 
 FROM modelmate_metric.t_mops_request_5min_dws AS dws
-WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND dws.sync_flag = 0 -- 只针对探针实时上报的数据做汇聚
 GROUP BY
     dws.window_time,

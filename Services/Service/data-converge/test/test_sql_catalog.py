@@ -12,8 +12,10 @@ def test_all_company_sql_rules_have_matching_files_and_dynamic_windows():
     assert {rule["sql_id"] for rule in rules} == {p.stem for p in (RESOURCES_ROOT / "sql").glob("*.sql")}
     for rule in rules:
         sql = (RESOURCES_ROOT / "sql" / (rule["sql_id"] + ".sql")).read_text()
-        assert "toDateTime({start_time:UInt32}, 'UTC')" in sql, rule["taskname"]
-        assert "toDateTime({end_time:UInt32}, 'UTC')" in sql, rule["taskname"]
+        for operator, parameter in ((">=", "start_time"), ("<", "end_time")):
+            zones = re.findall(
+                rf"{operator}\s*toDateTime\(\{{{parameter}:UInt32\}},\s*([^)]+)\)", sql)
+            assert zones and set(zones) == {"{system_timezone:String}"}, rule["taskname"]
         assert not re.search(r"WHERE\s+\w+\.window_time\s*>=\s*'2026-", sql, re.I)
 
 
@@ -29,7 +31,10 @@ def test_sql_buckets_follow_the_exact_scheduled_window_at_offset_changes():
     for path in sorted((RESOURCES_ROOT / "sql").glob("*.sql")):
         sql = re.sub(r"--[^\n]*", "", path.read_text())
         assert not re.search(r"\btoStartOf\w+\s*\(", sql), path.name
-        if "toDateTime({start_time:UInt32}, {system_timezone:String})" in sql:
+        if re.search(
+            r"toDateTime\(\{start_time:UInt32\},\s*\{system_timezone:String\}\)"
+            r"\s+AS\s+window_time\b", sql, re.I,
+        ):
             # A window_time alias must not turn source filtering or argMax into a constant.
             assert not re.search(r"\b(?:WHERE|AND)\s+window_time\b", sql), path.name
             assert not re.search(r"\bargMax\([^)]*,\s*window_time\)", sql), path.name

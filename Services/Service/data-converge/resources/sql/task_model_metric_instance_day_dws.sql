@@ -317,8 +317,8 @@ SELECT
     any(h.sync_flag)                                      AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__hour_dws AS h
-WHERE h.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND h.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE h.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND h.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND h.sync_flag = 0
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

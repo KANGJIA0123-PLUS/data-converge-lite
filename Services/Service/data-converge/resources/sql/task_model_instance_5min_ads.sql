@@ -178,8 +178,8 @@ WITH
 
             argMax(dws.sync_flag, dws.window_time)          AS sync_flag
         FROM modelmate_metric.t_mops_modelinstance_5min_dws AS dws
-        WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-          AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+        WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+          AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
           AND dws.sync_flag = 0
         GROUP BY
             dws.window_time,
@@ -197,8 +197,8 @@ WITH
             dws.ai_card_id,
             dws.chip_id
         FROM modelmate_metric.t_mops_modelinstance_5min_dws AS dws
-        WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-          AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+        WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+          AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
           AND dws.sync_flag = 0
     ),
 
@@ -265,8 +265,8 @@ WITH
             AND r.node_ip     = c.node_ip
             AND r.ai_card_id = c.ai_card_index
             AND r.chip_id     = c.chip_id
-        WHERE c.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-          AND c.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+        WHERE c.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+          AND c.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
           AND c.sync_flag = 0
         GROUP BY
             r.window_time,

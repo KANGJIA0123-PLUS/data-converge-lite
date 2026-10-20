@@ -149,8 +149,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_node_5min_dws AS f
 -- 增量调度过滤条件示例：计算上一个已完成的整点小时（例如 10:00:00 ~ 11:00:00）
-WHERE f.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE f.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND f.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND f.sync_flag = 0
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

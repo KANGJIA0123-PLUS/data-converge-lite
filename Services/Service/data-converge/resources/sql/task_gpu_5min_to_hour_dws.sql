@@ -148,8 +148,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_gpu_5min_dws AS f
 /* 调度时按小时传入时间约束区间，例如按小时增量调度 */
-WHERE f.window_time >=  toDateTime({start_time:UInt32}, 'UTC')
-  AND f.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE f.window_time >=  toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND f.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND f.sync_flag = 0 -- 仅针对探针汇聚数据进行二次汇聚
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

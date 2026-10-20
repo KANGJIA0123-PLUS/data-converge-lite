@@ -80,8 +80,8 @@ SELECT
     any(r.sync_flag)                                      AS sync_flag
 
 FROM modelmate_metric.t_mops_request_realtime_dwd AS r
-WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, 'UTC')  -- 调度时传入的时间范围（左闭右开）
-  AND r.metric_datetime <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, {system_timezone:String})  -- 调度时传入的时间范围（左闭右开）
+  AND r.metric_datetime <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND r.sync_flag = 0
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

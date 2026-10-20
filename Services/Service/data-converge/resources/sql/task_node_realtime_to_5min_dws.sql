@@ -149,8 +149,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_node_realtime_dwd AS r
 -- 【动态化优化】使用外部传入的起止时间范围替代写死的 now()
-WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, 'UTC')
-  AND r.metric_datetime <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND r.metric_datetime <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND r.sync_flag = 0
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

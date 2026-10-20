@@ -174,8 +174,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_gpu_day_dws AS d
 /* 按月调度：通常在每月 1 号凌晨运行，处理上一个自然月全天的数据 */
-WHERE d.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND d.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE d.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND d.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND d.sync_flag = 0
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

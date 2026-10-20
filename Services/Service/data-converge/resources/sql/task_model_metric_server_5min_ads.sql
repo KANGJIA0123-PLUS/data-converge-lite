@@ -493,8 +493,8 @@ FROM
     0 AS sync_flag
 
   FROM modelmate_metric.t_mops__modelmetric_instance__5min_ads AS ins
-  WHERE ins.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-    AND ins.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+  WHERE ins.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+    AND ins.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
     AND ins.sync_flag = 0
   GROUP BY
       ins.window_time,
@@ -515,8 +515,8 @@ LEFT JOIN
             resource.modelinstance_id,
             anyLast(resource.allocated_npu_num) AS allocated_npu_num
         FROM modelmate_metric.t_mops_modelinstance_5min_ads AS resource
-        WHERE resource.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-          AND resource.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+        WHERE resource.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+          AND resource.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
         GROUP BY resource.window_time, resource.server_name, resource.modelinstance_id
     ) AS allocation
     GROUP BY allocation.window_time, allocation.server_name

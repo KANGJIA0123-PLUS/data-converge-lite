@@ -168,8 +168,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_gpu_hour_dws AS h
 /* 调度时按天传入时间约束区间，例如每日凌晨运行前一天的数据计算 */
-WHERE h.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND h.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE h.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND h.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND h.sync_flag = 0
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

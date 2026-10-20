@@ -148,8 +148,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_node_hour_dws AS h
 -- 【动态化优化】使用外部传入的起止时间范围替代固定死的时间计算
-WHERE h.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND h.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE h.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND h.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND h.sync_flag = 0
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

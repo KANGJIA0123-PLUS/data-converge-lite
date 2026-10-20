@@ -258,8 +258,8 @@ SELECT
 
 FROM modelmate_metric.t_mops_modelmetric_realtime_dwd AS r
 -- 建议按具体调度批次传入时间过滤条件，例如汇聚上个5分钟窗口的数据：
-WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, 'UTC')
-  AND r.metric_datetime <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE r.metric_datetime >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND r.metric_datetime <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND r.sync_flag = 0 -- 只针对探针实时上报的数据做 5 分钟汇聚
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),

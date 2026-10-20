@@ -539,8 +539,8 @@ FROM
     any(dws.sync_flag)                                                                                              AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__month_dws AS dws
-WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND dws.process_role != 'worker' -- 【关键过滤】：彻底丢弃 worker 数据
 GROUP BY
     toDateTime({start_time:UInt32}, {system_timezone:String}),
@@ -556,8 +556,8 @@ LEFT JOIN
         resource.modelinstance_id,
         anyLast(resource.allocated_npu_num) AS allocated_npu_num
     FROM modelmate_metric.t_mops_modelinstance_month_ads AS resource
-    WHERE resource.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-      AND resource.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+    WHERE resource.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+      AND resource.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
     GROUP BY resource.window_time, resource.server_name, resource.modelinstance_id
 ) AS m
 ON t.window_time = m.window_time

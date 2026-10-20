@@ -127,8 +127,8 @@ SELECT
     any(source.sync_flag) AS sync_flag
 
 FROM modelmate_metric.t_mops__modelmetric_instance__5min_dws AS source
-WHERE source.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND source.window_time < toDateTime({end_time:UInt32}, 'UTC')
+WHERE source.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND source.window_time < toDateTime({end_time:UInt32}, {system_timezone:String})
 GROUP BY
     source.window_time,
     source.node_id,

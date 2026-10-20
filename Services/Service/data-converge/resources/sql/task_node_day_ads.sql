@@ -197,8 +197,8 @@ WITH card_agg AS (
 
     FROM modelmate_metric.t_mops_gpu_day_dws AS dws  -- 源表别名 dws
     -- 改为动态时间范围传参
-    WHERE dws.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-      AND dws.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+    WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+      AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
       AND dws.sync_flag = 0
     GROUP BY dws.window_time, dws.node_id
 )
@@ -352,6 +352,6 @@ SELECT
 FROM modelmate_metric.t_mops_node_day_dws n
 LEFT JOIN card_agg c
     ON n.window_time = c.window_time AND n.node_id = c.node_id
-WHERE n.window_time >= toDateTime({start_time:UInt32}, 'UTC')
-  AND n.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+WHERE n.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
+  AND n.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
   AND n.sync_flag = 0;
