@@ -38,7 +38,7 @@ SELECT
     argMax(r.request_received_total, r.metric_datetime)     AS request_received_total_argMax,
     sum(r.request_received_total_delta)                  AS request_received_total_delta,
     -- 【动态化】：QPM 改为通过动态分钟数计算 (区间秒数 / 60.0)
-    cast(sum(r.request_received_total_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0) AS Float32) AS request_received_total_qpm_avg,
+    cast(sum(r.request_received_total_delta) / (dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0) AS Nullable(Float32)) AS request_received_total_qpm_avg,
 
     argMax(r.request_failed_total, r.metric_datetime)       AS request_failed_total_argMax,
     sum(r.request_failed_total_delta)                    AS request_failed_total_delta,
@@ -87,9 +87,9 @@ SELECT
     sum(r.generation_tokens_total_delta)                 AS generation_tokens_total_delta,
 
     -- 【动态化】：Token 速率分母改为动态秒数 (dateDiff)
-    cast(sum(r.prompt_tokens_total_delta) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32)     AS prompt_tokens_total_delta_rate_avg,
-    cast(sum(r.generation_tokens_total_delta) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS generation_tokens_total_delta_rate_avg,
-    cast((sum(r.prompt_tokens_total_delta) + sum(r.generation_tokens_total_delta)) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Float32) AS total_throughput_rate,
+    cast(sum(r.prompt_tokens_total_delta) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Nullable(Float32))     AS prompt_tokens_total_delta_rate_avg,
+    cast(sum(r.generation_tokens_total_delta) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Nullable(Float32)) AS generation_tokens_total_delta_rate_avg,
+    cast((sum(r.prompt_tokens_total_delta) + sum(r.generation_tokens_total_delta)) / toFloat32(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) AS Nullable(Float32)) AS total_throughput_rate,
 
     -- 引擎报出的参考吞吐率与增量
     avg(r.avg_prompt_throughput_toks_per_s)              AS avg_prompt_throughput_toks_per_s_avg,

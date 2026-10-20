@@ -130,9 +130,9 @@ SELECT
     sum(s.engine_generation_tokens_total_delta) AS engine_generation_tokens_total_delta,
 
     -- 使用传入的 {start_time} 与 {end_time} 动态计算总秒数作为分母，并用 nullIf 防止分母为 0
-    cast((sum(s.engine_prompt_tokens_total_delta) + sum(s.engine_generation_tokens_total_delta)) / toFloat64(nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0)) AS Float32) AS engine_total_throughput_rate,
-    cast(sum(s.engine_prompt_tokens_total_delta) / toFloat64(nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0)) AS Float32) AS engine_prompt_tokens_total_delta_rate_avg,
-    cast(sum(s.engine_generation_tokens_total_delta) / toFloat64(nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0)) AS Float32) AS engine_generation_tokens_total_delta_rate_avg,
+    cast((sum(s.engine_prompt_tokens_total_delta) + sum(s.engine_generation_tokens_total_delta)) / toFloat64(nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0)) AS Nullable(Float32)) AS engine_total_throughput_rate,
+    cast(sum(s.engine_prompt_tokens_total_delta) / toFloat64(nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0)) AS Nullable(Float32)) AS engine_prompt_tokens_total_delta_rate_avg,
+    cast(sum(s.engine_generation_tokens_total_delta) / toFloat64(nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0)) AS Nullable(Float32)) AS engine_generation_tokens_total_delta_rate_avg,
 
 
     avg(s.engine_avg_prompt_throughput_toks_per_s_avg) AS engine_avg_prompt_throughput_toks_per_s_avg,

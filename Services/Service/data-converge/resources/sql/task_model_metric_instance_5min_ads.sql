@@ -335,7 +335,7 @@ FROM
         sumIf(group_request_received_delta, process_role IN ('coordinator', 'single'))
         / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0, 0.0),
         0.0
-    ) AS Float32) AS coord_request_received_total_qpm_avg,
+    ) AS Nullable(Float32)) AS coord_request_received_total_qpm_avg,
 
     sumIf(group_request_failed_argMax,   process_role IN ('coordinator', 'single')) AS coord_request_failed_total_argMax,
     sumIf(group_request_failed_delta,    process_role IN ('coordinator', 'single')) AS coord_request_failed_total_delta,
@@ -347,12 +347,12 @@ FROM
         sumIf(group_request_success_delta, process_role IN ('coordinator', 'single')) * 100.0
         / nullIf(sumIf(group_request_received_delta, process_role IN ('coordinator', 'single')), 0),
         0.0
-    ) AS Float32) AS coord_request_success_rate_avg,
+    ) AS Nullable(Float32)) AS coord_request_success_rate_avg,
     CAST(coalesce(
         sumIf(group_request_failed_delta, process_role IN ('coordinator', 'single')) * 100.0
         / nullIf(sumIf(group_request_received_delta, process_role IN ('coordinator', 'single')), 0),
         0.0
-    ) AS Float32) AS coord_request_failed_rate_avg,
+    ) AS Nullable(Float32)) AS coord_request_failed_rate_avg,
 
     avgIf(group_num_requests_waiting_avg, process_role IN ('coordinator', 'single')) AS coord_num_requests_waiting_avg,
 
@@ -361,7 +361,7 @@ FROM
         sumIf(group_e2e_sum_delta, process_role IN ('coordinator', 'single'))
         / nullIf(sumIf(group_e2e_count_delta, process_role IN ('coordinator', 'single')), 0),
         0.0
-    ) AS Float32) AS coord_e2e_request_latency_seconds_avg,
+    ) AS Nullable(Float32)) AS coord_e2e_request_latency_seconds_avg,
     sumIf(group_e2e_count_argMax,        process_role IN ('coordinator', 'single')) AS coord_e2e_request_latency_seconds_count_argMax,
     sumIf(group_e2e_count_delta,         process_role IN ('coordinator', 'single')) AS coord_e2e_request_latency_seconds_count_delta,
     sumIf(group_e2e_sum_argMax,          process_role IN ('coordinator', 'single')) AS coord_e2e_request_latency_seconds_sum_argMax,
@@ -396,13 +396,13 @@ FROM
         sumIf(group_request_success_delta, process_role IN ('engine', 'prefill', 'decode', 'single')) * 100.0
         / nullIf(sumIf(group_request_received_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_request_success_rate_avg,
+    ) AS Nullable(Float32)) AS engine_request_success_rate_avg,
 
     CAST(coalesce(
         sumIf(group_request_failed_delta, process_role IN ('engine', 'prefill', 'decode', 'single')) * 100.0
         / nullIf(sumIf(group_request_received_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_request_failed_rate_avg,
+    ) AS Nullable(Float32)) AS engine_request_failed_rate_avg,
     sumIf(group_concurrent_requests_avg,  process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_inference_concurrent_requests_avg,
     sumIf(group_num_requests_running_avg, process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_num_requests_running_avg,
     sumIf(group_num_requests_waiting_avg, process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_num_requests_waiting_avg,
@@ -425,19 +425,19 @@ FROM
         sumIf(group_prompt_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
-    ) AS Float32) AS engine_prompt_tokens_total_delta_rate_avg,
+    ) AS Nullable(Float32)) AS engine_prompt_tokens_total_delta_rate_avg,
 
     CAST(coalesce(
         sumIf(group_generation_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
-    ) AS Float32) AS engine_generation_tokens_total_delta_rate_avg,
+    ) AS Nullable(Float32)) AS engine_generation_tokens_total_delta_rate_avg,
 
     CAST(coalesce(
         (sumIf(group_prompt_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
             + sumIf(group_generation_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single')))
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0), 0.0
-    ) AS Float32) AS engine_total_throughput_rate,
+    ) AS Nullable(Float32)) AS engine_total_throughput_rate,
     avgIf(group_prompt_throughput_avg,   process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_avg_prompt_throughput_toks_per_s_avg,
     sumIf(group_prompt_throughput_delta, process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_avg_prompt_throughput_toks_per_s_delta,
     maxIf(group_prompt_throughput_max,   process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_avg_prompt_throughput_toks_per_s_max,
@@ -454,7 +454,7 @@ FROM
         sumIf(group_ttft_sum_delta, process_role IN ('prefill', 'engine', 'single'))
         / nullIf(sumIf(group_ttft_count_delta, process_role IN ('prefill', 'engine', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_time_to_first_token_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_time_to_first_token_seconds_avg,
     sumIf(group_ttft_count_argMax, process_role IN ('prefill', 'engine', 'single')) AS engine_time_to_first_token_seconds_count_argMax,
     sumIf(group_ttft_count_delta,  process_role IN ('prefill', 'engine', 'single')) AS engine_time_to_first_token_seconds_count_delta,
     sumIf(group_ttft_sum_argMax,   process_role IN ('prefill', 'engine', 'single')) AS engine_time_to_first_token_seconds_sum_argMax,
@@ -478,7 +478,7 @@ FROM
         sumIf(group_tpot_sum_delta, process_role IN ('decode', 'engine', 'single'))
         / nullIf(sumIf(group_tpot_count_delta, process_role IN ('decode', 'engine', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_time_per_output_token_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_time_per_output_token_seconds_avg,
     sumIf(group_tpot_count_argMax, process_role IN ('decode', 'engine', 'single')) AS engine_time_per_output_token_seconds_count_argMax,
     sumIf(group_tpot_count_delta,  process_role IN ('decode', 'engine', 'single')) AS engine_time_per_output_token_seconds_count_delta,
     sumIf(group_tpot_sum_argMax,   process_role IN ('decode', 'engine', 'single')) AS engine_time_per_output_token_seconds_sum_argMax,
@@ -502,7 +502,7 @@ FROM
         sumIf(group_e2e_sum_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
         / nullIf(sumIf(group_e2e_count_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_e2e_request_latency_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_e2e_request_latency_seconds_avg,
     sumIf(group_e2e_count_argMax,  process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_e2e_request_latency_seconds_count_argMax,
     sumIf(group_e2e_count_delta,   process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_e2e_request_latency_seconds_count_delta,
     sumIf(group_e2e_sum_argMax,    process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_e2e_request_latency_seconds_sum_argMax,
@@ -536,7 +536,7 @@ FROM
         sumIf(group_prompt_tok_sum_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
         / nullIf(sumIf(group_prompt_tok_cnt_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_request_prompt_tokens_avg,
+    ) AS Nullable(Float32)) AS engine_request_prompt_tokens_avg,
     maxIf(group_prompt_tok_max,              process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_request_prompt_tokens_max,
     sumIf(group_prompt_tok_cnt_argMax,      process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_request_prompt_tokens_count_argMax,
     sumIf(group_prompt_tok_cnt_delta,        process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_request_prompt_tokens_count_delta,
@@ -560,7 +560,7 @@ FROM
         sumIf(group_gen_tok_sum_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
         / nullIf(sumIf(group_gen_tok_cnt_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_request_generation_tokens_avg,
+    ) AS Nullable(Float32)) AS engine_request_generation_tokens_avg,
     maxIf(group_gen_tok_max,              process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_request_generation_tokens_max,
     sumIf(group_gen_tok_cnt_argMax,      process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_request_generation_tokens_count_argMax,
     sumIf(group_gen_tok_cnt_delta,        process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_request_generation_tokens_count_delta,

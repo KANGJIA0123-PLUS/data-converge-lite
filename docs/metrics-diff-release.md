@@ -12,6 +12,13 @@
 - `unit_token_computepower_consumption` 按“卡时／百万 token”的注释口径计算：`卡数 × 窗口秒数 × 1,000,000 ÷ (3,600 × 总 token 数)`。输入、输出 token 均计入总量。这里的卡数是窗口内去重卡数，不代表精确按绑定时长积分；窗口内动态扩缩容时属于估算口径。
 - 四周期服务指标 ADS 从 `t_mops_modelinstance_<周期>_ads` 获取卡数，先按窗口、服务和实例去重，再汇总服务分配卡数；不再向未产出该列的指标实例表取卡数。服务指标公式与实例指标一致，时间参数沿用 UInt32 epoch。不同实例共享同一物理卡时，服务值表示实例分配卡数之和，不代表服务唯一物理卡数。
 - 请求 Agent／Server ADS 的八条规则已与实际 INSERT 目标对齐：`t_mops_agent_<周期>_ads`／`t_mops_server_<周期>_ads`，清理使用对应 `_local` 表。回归检查覆盖全部 60 个任务的清理目标与写入目标。
+- 合并《完整diff合并.txt》中 20 个 SQL 的 189 处 `Nullable(Float32)` 转换；附件中的 4 处 `anyLast` 大小写修复已存在。冲突处理保留现有系统时区参数、节点源字段限定、PD 成功请求分母、补零逻辑及卡时计算，仅迁移附件指定的类型修改。
+
+## 可空浮点的行为与发布条件
+
+小时、日、月实例指标 DWS 中，用 `nullIf(计数, 0)` 计算的比率和平均值在计数为零时可保留 NULL，避免在 CAST 阶段强转非空 Float32 失败；GPU 利用率缺失的比较结果也允许经过可空转换。已有 `coalesce(..., 0.0)` 的表达式仍输出 0，正常数值计算公式不变。本次不统一缺失值口径；`Nullable` 本身也不会把未保护的除零结果或空集合平均值变成有限数。
+
+SQL 的 CAST **不会修改目标列的 DDL**。数据库由外部仓库维护，发布前须核对受影响目标表及其 `_local` 表是否允许实际产生的 NULL，尤其是实例指标 DWS 的比率、时延和 Token 平均值。若目标列不可空，写入仍可能失败，或受 `insert_null_as_default` 影响转为默认值；不能仅凭本地计算通过就判定生产写入兼容。参见 [ClickHouse Nullable](https://clickhouse.com/docs/reference/data-types/nullable) 和 [INSERT 的 NULL 处理](https://clickhouse.com/docs/reference/statements/insert-into)。
 
 ## 数据库配套
 

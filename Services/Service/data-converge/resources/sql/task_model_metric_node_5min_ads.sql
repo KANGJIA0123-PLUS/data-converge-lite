@@ -93,36 +93,36 @@ SELECT
 
     -- 每请求平均生成 tokens 数 = 总生成 Token 增量 / 总成功请求数
     cast(coalesce(sumIf(source.generation_tokens_total_delta, source.process_role != 'prefill')
-         / nullIf(sumIf(source.request_received_total_delta, source.process_role != 'decode') - sum(source.request_failed_total_delta), 0), 0.0) AS Float32) AS generation_tokens_per_request_avg,
+         / nullIf(sumIf(source.request_received_total_delta, source.process_role != 'decode') - sum(source.request_failed_total_delta), 0), 0.0) AS Nullable(Float32)) AS generation_tokens_per_request_avg,
 
     -- 节点端到端平均时延 (E2E Latency)：跨实例加权平均 (总时延和 / 总请求数)
     cast(coalesce(sum(source.e2e_request_latency_seconds_sum_delta)
-         / nullIf(sum(source.e2e_request_latency_seconds_count_delta), 0), 0.0) AS Float32) AS e2e_latency_avg,
+         / nullIf(sum(source.e2e_request_latency_seconds_count_delta), 0), 0.0) AS Nullable(Float32)) AS e2e_latency_avg,
 
     -- 节点粒度每秒输入 tokens 数
     cast(sumIf(source.prompt_tokens_total_delta_rate_avg, source.process_role != 'decode') AS UInt64) AS prompt_tokens_per_s_avg,
 
     -- 请求失败率 (%) = 节点总失败请求数 / 节点总接收请求数 * 100
     cast(coalesce(sum(source.request_failed_total_delta)
-         / nullIf(sumIf(source.request_received_total_delta, source.process_role != 'decode'), 0) * 100.0, 0.0) AS Float32) AS request_failed_rate,
+         / nullIf(sumIf(source.request_received_total_delta, source.process_role != 'decode'), 0) * 100.0, 0.0) AS Nullable(Float32)) AS request_failed_rate,
 
     -- 请求成功率 (%) = 节点总成功请求数 / 节点总接收请求数 * 100
     cast(coalesce((sumIf(source.request_received_total_delta, source.process_role != 'decode') - sum(source.request_failed_total_delta))
-         / nullIf(sumIf(source.request_received_total_delta, source.process_role != 'decode'), 0) * 100.0, 0.0) AS Float32) AS request_success_rate,
+         / nullIf(sumIf(source.request_received_total_delta, source.process_role != 'decode'), 0) * 100.0, 0.0) AS Nullable(Float32)) AS request_success_rate,
 
     -- 每分钟请求数 (QPM)：节点内各实例 QPM 求和
     sumIf(source.request_received_total_qpm_avg, source.process_role != 'decode') AS request_received_total_qpm_avg,
 
     -- TTFT 加权平均值 (秒) = 汇总子实例的时延加和 / 汇总子实例的计数
     cast(coalesce(sum(source.time_to_first_token_seconds_sum_delta)
-         / nullIf(sum(source.time_to_first_token_seconds_count_delta), 0), 0.0) AS Float32) AS time_to_first_token_seconds_avg,
+         / nullIf(sum(source.time_to_first_token_seconds_count_delta), 0), 0.0) AS Nullable(Float32)) AS time_to_first_token_seconds_avg,
 
     -- TPOT 加权平均值 (秒) = 汇总子实例的 Decode 时延加和 / 汇总子实例的 Decode 计数
     cast(coalesce(sum(source.time_per_output_token_seconds_sum_delta)
-         / nullIf(sum(source.time_per_output_token_seconds_count_delta), 0), 0.0) AS Float32) AS time_per_output_token_seconds_avg,
+         / nullIf(sum(source.time_per_output_token_seconds_count_delta), 0), 0.0) AS Nullable(Float32)) AS time_per_output_token_seconds_avg,
 
     -- 平均每秒总 token 数 (Prompt 速率 + Generation 速率)
-    cast(sumIf(source.prompt_tokens_total_delta_rate_avg, source.process_role != 'decode') + sumIf(source.generation_tokens_total_delta_rate_avg, source.process_role != 'prefill') AS Float32) AS total_tokens_per_s_avg,
+    cast(sumIf(source.prompt_tokens_total_delta_rate_avg, source.process_role != 'decode') + sumIf(source.generation_tokens_total_delta_rate_avg, source.process_role != 'prefill') AS Nullable(Float32)) AS total_tokens_per_s_avg,
 
     any(source.sync_flag) AS sync_flag
 

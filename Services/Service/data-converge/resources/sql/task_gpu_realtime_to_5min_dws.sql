@@ -127,7 +127,7 @@ SELECT
     countIf(r.ai_card_used = 1)                                             AS ai_card_used_counter,
     countIf(r.ai_card_used != 1 OR r.ai_card_used IS NULL)                    AS ai_card_unused_counter,
     countIf(r.ai_card_used = 1 AND ai_core_util > 0)                        AS ai_card_used_active_counter,
-    avgIf(CAST(r.ai_core_util > 0 AS Float32), r.ai_card_used = 1)            AS ai_card_used_ratio_avg,
+    avgIf(CAST(r.ai_core_util > 0 AS Nullable(Float32)), r.ai_card_used = 1)            AS ai_card_used_ratio_avg,
     
     -- 7. 算力容量/分配累加指标
     argMax(r.ai_card_computing_power, r.metric_datetime)                      AS ai_card_computing_power_argMax,

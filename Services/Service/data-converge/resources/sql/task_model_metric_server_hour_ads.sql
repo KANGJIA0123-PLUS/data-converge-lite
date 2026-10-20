@@ -259,7 +259,7 @@ FROM
         sum(ins.coord_request_received_total_delta)
         / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0, 0.0),
         0.0
-    ) AS Float32) AS coord_request_received_total_qpm_avg,
+    ) AS Nullable(Float32)) AS coord_request_received_total_qpm_avg,
 
     max(ins.coord_request_failed_total_argMax)        AS coord_request_failed_total_argMax,
     sum(ins.coord_request_failed_total_delta)         AS coord_request_failed_total_delta,
@@ -271,12 +271,12 @@ FROM
         sum(ins.coord_request_success_total_delta) * 100.0
         / nullIf(sum(ins.coord_request_received_total_delta), 0),
         0.0
-    ) AS Float32) AS coord_request_success_rate_avg,
+    ) AS Nullable(Float32)) AS coord_request_success_rate_avg,
     CAST(coalesce(
         sum(ins.coord_request_failed_total_delta) * 100.0
         / nullIf(sum(ins.coord_request_received_total_delta), 0),
         0.0
-    ) AS Float32) AS coord_request_failed_rate_avg,
+    ) AS Nullable(Float32)) AS coord_request_failed_rate_avg,
 
     avg(ins.coord_num_requests_waiting_avg)           AS coord_num_requests_waiting_avg,
 
@@ -284,7 +284,7 @@ FROM
         sum(ins.coord_e2e_request_latency_seconds_sum_delta)
         / nullIf(sum(ins.coord_e2e_request_latency_seconds_count_delta), 0),
         0.0
-    ) AS Float32) AS coord_e2e_request_latency_seconds_avg,
+    ) AS Nullable(Float32)) AS coord_e2e_request_latency_seconds_avg,
     max(ins.coord_e2e_request_latency_seconds_count_argMax) AS coord_e2e_request_latency_seconds_count_argMax,
     sum(ins.coord_e2e_request_latency_seconds_count_delta)  AS coord_e2e_request_latency_seconds_count_delta,
     max(ins.coord_e2e_request_latency_seconds_sum_argMax)   AS coord_e2e_request_latency_seconds_sum_argMax,
@@ -317,12 +317,12 @@ FROM
         sum(ins.engine_request_success_total_delta) * 100.0
         / nullIf(sum(ins.engine_request_received_total_delta), 0),
         0.0
-    ) AS Float32) AS engine_request_success_rate_avg,
+    ) AS Nullable(Float32)) AS engine_request_success_rate_avg,
     CAST(coalesce(
         sum(ins.engine_request_failed_total_delta) * 100.0
         / nullIf(sum(ins.engine_request_received_total_delta), 0),
         0.0
-    ) AS Float32) AS engine_request_failed_rate_avg,
+    ) AS Nullable(Float32)) AS engine_request_failed_rate_avg,
 
     sum(ins.engine_inference_concurrent_requests_avg) AS engine_inference_concurrent_requests_avg,
     sum(ins.engine_num_requests_running_avg)           AS engine_num_requests_running_avg,
@@ -344,17 +344,17 @@ FROM
         sum(ins.engine_prompt_tokens_total_delta)
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
-    ) AS Float32) AS engine_prompt_tokens_total_delta_rate_avg,
+    ) AS Nullable(Float32)) AS engine_prompt_tokens_total_delta_rate_avg,
     CAST(coalesce(
         sum(ins.engine_generation_tokens_total_delta)
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
-    ) AS Float32) AS engine_generation_tokens_total_delta_rate_avg,
+    ) AS Nullable(Float32)) AS engine_generation_tokens_total_delta_rate_avg,
     CAST(coalesce(
         (sum(ins.engine_prompt_tokens_total_delta) + sum(ins.engine_generation_tokens_total_delta))
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
-    ) AS Float32) AS engine_total_throughput_rate,
+    ) AS Nullable(Float32)) AS engine_total_throughput_rate,
 
     sum(ins.engine_avg_prompt_throughput_toks_per_s_avg)              AS engine_avg_prompt_throughput_toks_per_s_avg,
     sum(ins.engine_avg_prompt_throughput_toks_per_s_delta)            AS engine_avg_prompt_throughput_toks_per_s_delta,
@@ -369,7 +369,7 @@ FROM
         sum(ins.engine_time_to_first_token_seconds_sum_delta)
         / nullIf(sum(ins.engine_time_to_first_token_seconds_count_delta), 0),
         0.0
-    ) AS Float32) AS engine_time_to_first_token_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_time_to_first_token_seconds_avg,
     max(ins.engine_time_to_first_token_seconds_count_argMax)          AS engine_time_to_first_token_seconds_count_argMax,
     sum(ins.engine_time_to_first_token_seconds_count_delta)           AS engine_time_to_first_token_seconds_count_delta,
     max(ins.engine_time_to_first_token_seconds_sum_argMax)            AS engine_time_to_first_token_seconds_sum_argMax,
@@ -389,7 +389,7 @@ FROM
         sum(ins.engine_time_per_output_token_seconds_sum_delta)
         / nullIf(sum(ins.engine_time_per_output_token_seconds_count_delta), 0),
         0.0
-    ) AS Float32) AS engine_time_per_output_token_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_time_per_output_token_seconds_avg,
     max(ins.engine_time_per_output_token_seconds_count_argMax)       AS engine_time_per_output_token_seconds_count_argMax,
     sum(ins.engine_time_per_output_token_seconds_count_delta)        AS engine_time_per_output_token_seconds_count_delta,
     max(ins.engine_time_per_output_token_seconds_sum_argMax)          AS engine_time_per_output_token_seconds_sum_argMax,
@@ -409,7 +409,7 @@ FROM
         sum(ins.engine_e2e_request_latency_seconds_sum_delta)
         / nullIf(sum(ins.engine_e2e_request_latency_seconds_count_delta), 0),
         0.0
-    ) AS Float32) AS engine_e2e_request_latency_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_e2e_request_latency_seconds_avg,
     max(ins.engine_e2e_request_latency_seconds_count_argMax) AS engine_e2e_request_latency_seconds_count_argMax,
     sum(ins.engine_e2e_request_latency_seconds_count_delta)  AS engine_e2e_request_latency_seconds_count_delta,
     max(ins.engine_e2e_request_latency_seconds_sum_argMax)    AS engine_e2e_request_latency_seconds_sum_argMax,
@@ -437,7 +437,7 @@ FROM
         sum(ins.engine_request_prompt_tokens_sum_delta)
         / nullIf(sum(ins.engine_request_prompt_tokens_count_delta), 0),
         0.0
-    ) AS Float32) AS engine_request_prompt_tokens_avg,
+    ) AS Nullable(Float32)) AS engine_request_prompt_tokens_avg,
     max(ins.engine_request_prompt_tokens_max)                          AS engine_request_prompt_tokens_max,
     max(ins.engine_request_prompt_tokens_count_argMax)                 AS engine_request_prompt_tokens_count_argMax,
     sum(ins.engine_request_prompt_tokens_count_delta)                  AS engine_request_prompt_tokens_count_delta,
@@ -458,7 +458,7 @@ FROM
         sum(ins.engine_request_generation_tokens_sum_delta)
         / nullIf(sum(ins.engine_request_generation_tokens_count_delta), 0),
         0.0
-    ) AS Float32) AS engine_request_generation_tokens_avg,
+    ) AS Nullable(Float32)) AS engine_request_generation_tokens_avg,
     max(ins.engine_request_generation_tokens_max)                      AS engine_request_generation_tokens_max,
     max(ins.engine_request_generation_tokens_count_argMax)             AS engine_request_generation_tokens_count_argMax,
     sum(ins.engine_request_generation_tokens_count_delta)              AS engine_request_generation_tokens_count_delta,

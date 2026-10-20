@@ -301,7 +301,7 @@ FROM
         sumIf(dws.request_received_total_delta, dws.process_role IN ('coordinator', 'single'))
         / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')) / 60.0, 0.0),
         0.0
-    ) AS Float32) AS coord_request_received_total_qpm_avg,
+    ) AS Nullable(Float32)) AS coord_request_received_total_qpm_avg,
 
     maxIf(dws.request_failed_total_argMax, dws.process_role IN ('coordinator', 'single'))        AS coord_request_failed_total_argMax,
     sumIf(dws.request_failed_total_delta, dws.process_role IN ('coordinator', 'single'))         AS coord_request_failed_total_delta,
@@ -313,12 +313,12 @@ FROM
         sumIf(dws.request_success_total_delta, dws.process_role IN ('coordinator', 'single')) * 100.0
         / nullIf(sumIf(dws.request_received_total_delta, dws.process_role IN ('coordinator', 'single')), 0),
         0.0
-    ) AS Float32) AS coord_request_success_rate_avg,
+    ) AS Nullable(Float32)) AS coord_request_success_rate_avg,
     CAST(coalesce(
         sumIf(dws.request_failed_total_delta, dws.process_role IN ('coordinator', 'single')) * 100.0
         / nullIf(sumIf(dws.request_received_total_delta, dws.process_role IN ('coordinator', 'single')), 0),
         0.0
-    ) AS Float32) AS coord_request_failed_rate_avg,
+    ) AS Nullable(Float32)) AS coord_request_failed_rate_avg,
 
 
 
@@ -328,7 +328,7 @@ FROM
         sumIf(dws.e2e_request_latency_seconds_sum_delta, dws.process_role IN ('coordinator', 'single'))
         / nullIf(sumIf(dws.e2e_request_latency_seconds_count_delta, dws.process_role IN ('coordinator', 'single')), 0),
         0.0
-    ) AS Float32) AS coord_e2e_request_latency_seconds_avg,
+    ) AS Nullable(Float32)) AS coord_e2e_request_latency_seconds_avg,
     maxIf(dws.e2e_request_latency_seconds_count_argMax, dws.process_role IN ('coordinator', 'single')) AS coord_e2e_request_latency_seconds_count_argMax,
     sumIf(dws.e2e_request_latency_seconds_count_delta, dws.process_role IN ('coordinator', 'single'))  AS coord_e2e_request_latency_seconds_count_delta,
     maxIf(dws.e2e_request_latency_seconds_sum_argMax, dws.process_role IN ('coordinator', 'single'))   AS coord_e2e_request_latency_seconds_sum_argMax,
@@ -364,12 +364,12 @@ FROM
         sumIf(dws.request_success_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')) * 100.0
         / nullIf(sumIf(dws.request_received_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_request_success_rate_avg,
+    ) AS Nullable(Float32)) AS engine_request_success_rate_avg,
     CAST(coalesce(
         sumIf(dws.request_failed_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')) * 100.0
         / nullIf(sumIf(dws.request_received_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_request_failed_rate_avg,
+    ) AS Nullable(Float32)) AS engine_request_failed_rate_avg,
 
     sumIf(dws.inference_concurrent_requests_avg, dws.process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_inference_concurrent_requests_avg,
     sumIf(dws.num_requests_running_avg, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))           AS engine_num_requests_running_avg,
@@ -391,17 +391,17 @@ FROM
         sumIf(dws.prompt_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
-    ) AS Float32) AS engine_prompt_tokens_total_delta_rate_avg,
+    ) AS Nullable(Float32)) AS engine_prompt_tokens_total_delta_rate_avg,
     CAST(coalesce(
         sumIf(dws.generation_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
-    ) AS Float32) AS engine_generation_tokens_total_delta_rate_avg,
+    ) AS Nullable(Float32)) AS engine_generation_tokens_total_delta_rate_avg,
     CAST(coalesce(
         (sumIf(dws.prompt_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')) + sumIf(dws.generation_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')))
         / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
-    ) AS Float32) AS engine_total_throughput_rate,
+    ) AS Nullable(Float32)) AS engine_total_throughput_rate,
 
     sumIf(dws.avg_prompt_throughput_toks_per_s_avg, dws.process_role IN ('prefill', 'engine', 'single'))              AS engine_avg_prompt_throughput_toks_per_s_avg,
     sumIf(dws.avg_prompt_throughput_toks_per_s_delta, dws.process_role IN ('prefill', 'engine', 'single'))            AS engine_avg_prompt_throughput_toks_per_s_delta,
@@ -416,7 +416,7 @@ FROM
         sumIf(dws.time_to_first_token_seconds_sum_delta, dws.process_role IN ('prefill', 'engine', 'single'))
         / nullIf(sumIf(dws.time_to_first_token_seconds_count_delta, dws.process_role IN ('prefill', 'engine', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_time_to_first_token_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_time_to_first_token_seconds_avg,
     maxIf(dws.time_to_first_token_seconds_count_argMax, dws.process_role IN ('prefill', 'engine', 'single'))          AS engine_time_to_first_token_seconds_count_argMax,
     sumIf(dws.time_to_first_token_seconds_count_delta, dws.process_role IN ('prefill', 'engine', 'single'))           AS engine_time_to_first_token_seconds_count_delta,
     maxIf(dws.time_to_first_token_seconds_sum_argMax, dws.process_role IN ('prefill', 'engine', 'single'))            AS engine_time_to_first_token_seconds_sum_argMax,
@@ -439,7 +439,7 @@ FROM
         sumIf(dws.time_per_output_token_seconds_sum_delta, dws.process_role IN ('decode', 'engine', 'single'))
         / nullIf(sumIf(dws.time_per_output_token_seconds_count_delta, dws.process_role IN ('decode', 'engine', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_time_per_output_token_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_time_per_output_token_seconds_avg,
     maxIf(dws.time_per_output_token_seconds_count_argMax, dws.process_role IN ('decode', 'engine', 'single'))       AS engine_time_per_output_token_seconds_count_argMax,
     sumIf(dws.time_per_output_token_seconds_count_delta, dws.process_role IN ('decode', 'engine', 'single'))        AS engine_time_per_output_token_seconds_count_delta,
     maxIf(dws.time_per_output_token_seconds_sum_argMax, dws.process_role IN ('decode', 'engine', 'single'))          AS engine_time_per_output_token_seconds_sum_argMax,
@@ -462,7 +462,7 @@ FROM
         sumIf(dws.e2e_request_latency_seconds_sum_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
         / nullIf(sumIf(dws.e2e_request_latency_seconds_count_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_e2e_request_latency_seconds_avg,
+    ) AS Nullable(Float32)) AS engine_e2e_request_latency_seconds_avg,
     maxIf(dws.e2e_request_latency_seconds_count_argMax, dws.process_role IN ('engine', 'prefill', 'decode', 'single')) AS engine_e2e_request_latency_seconds_count_argMax,
     sumIf(dws.e2e_request_latency_seconds_count_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))  AS engine_e2e_request_latency_seconds_count_delta,
     maxIf(dws.e2e_request_latency_seconds_sum_argMax, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))    AS engine_e2e_request_latency_seconds_sum_argMax,
@@ -493,7 +493,7 @@ FROM
         sumIf(dws.request_prompt_tokens_sum_delta, dws.process_role IN ('prefill', 'engine', 'single'))
         / nullIf(sumIf(dws.request_prompt_tokens_count_delta, dws.process_role IN ('prefill', 'engine', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_request_prompt_tokens_avg,
+    ) AS Nullable(Float32)) AS engine_request_prompt_tokens_avg,
     maxIf(dws.request_prompt_tokens_max, dws.process_role IN ('prefill', 'engine', 'single'))                          AS engine_request_prompt_tokens_max,
     maxIf(dws.request_prompt_tokens_count_argMax, dws.process_role IN ('prefill', 'engine', 'single'))                 AS engine_request_prompt_tokens_count_argMax,
     sumIf(dws.request_prompt_tokens_count_delta, dws.process_role IN ('prefill', 'engine', 'single'))                  AS engine_request_prompt_tokens_count_delta,
@@ -517,7 +517,7 @@ FROM
         sumIf(dws.request_generation_tokens_sum_delta, dws.process_role IN ('decode', 'engine', 'single'))
         / nullIf(sumIf(dws.request_generation_tokens_count_delta, dws.process_role IN ('decode', 'engine', 'single')), 0),
         0.0
-    ) AS Float32) AS engine_request_generation_tokens_avg,
+    ) AS Nullable(Float32)) AS engine_request_generation_tokens_avg,
     maxIf(dws.request_generation_tokens_max, dws.process_role IN ('decode', 'engine', 'single'))                      AS engine_request_generation_tokens_max,
     maxIf(dws.request_generation_tokens_count_argMax, dws.process_role IN ('decode', 'engine', 'single'))             AS engine_request_generation_tokens_count_argMax,
     sumIf(dws.request_generation_tokens_count_delta, dws.process_role IN ('decode', 'engine', 'single'))              AS engine_request_generation_tokens_count_delta,

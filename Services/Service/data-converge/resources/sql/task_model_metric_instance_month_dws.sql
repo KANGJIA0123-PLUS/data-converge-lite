@@ -151,7 +151,7 @@ SELECT
     sum(d.request_received_total_delta)                   AS request_received_total_delta,
     -- 动态范围 QPM：使用外部传入的 {start_time} 与 {end_time} 总分钟数作为分母
     cast(sum(d.request_received_total_delta)
-        / nullIf(dateDiff('minute', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Float32) AS request_received_total_qpm_avg,
+        / nullIf(dateDiff('minute', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Nullable(Float32)) AS request_received_total_qpm_avg,
 
     argMax(d.request_failed_total_argMax, d.window_time)   AS request_failed_total_argMax,
     sum(d.request_failed_total_delta)                     AS request_failed_total_delta,
@@ -161,9 +161,9 @@ SELECT
 
     -- 全月请求成功率与失败率 (%)
     cast(sum(d.request_success_total_delta)
-        / nullIf(sum(d.request_received_total_delta), 0) * 100.0 AS Float32) AS request_success_rate_avg,
+        / nullIf(sum(d.request_received_total_delta), 0) * 100.0 AS Nullable(Float32)) AS request_success_rate_avg,
     cast(sum(d.request_failed_total_delta)
-        / nullIf(sum(d.request_received_total_delta), 0) * 100.0 AS Float32) AS request_failed_rate_avg,
+        / nullIf(sum(d.request_received_total_delta), 0) * 100.0 AS Nullable(Float32)) AS request_failed_rate_avg,
 
     -- ============================================================================
     -- 4. Concurrency & Queue Metrics: 全月平均并发与排队
@@ -187,11 +187,11 @@ SELECT
 
     -- 动态范围物理吞吐率：使用外部传入的 {start_time} 与 {end_time} 总秒数作为分母
     cast(sum(d.prompt_tokens_total_delta)
-        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Float32) AS prompt_tokens_total_delta_rate_avg,
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Nullable(Float32)) AS prompt_tokens_total_delta_rate_avg,
     cast(sum(d.generation_tokens_total_delta)
-        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Float32) AS generation_tokens_total_delta_rate_avg,
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Nullable(Float32)) AS generation_tokens_total_delta_rate_avg,
     cast((sum(d.prompt_tokens_total_delta) + sum(d.generation_tokens_total_delta))
-        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Float32) AS total_throughput_rate,
+        / nullIf(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')), 0) AS Nullable(Float32)) AS total_throughput_rate,
 
     avg(d.avg_prompt_throughput_toks_per_s_avg)           AS avg_prompt_throughput_toks_per_s_avg,
     sum(d.avg_prompt_throughput_toks_per_s_delta)         AS avg_prompt_throughput_toks_per_s_delta,
@@ -206,7 +206,7 @@ SELECT
     -- ============================================================================
     argMax(d.time_to_first_token_seconds_argMax, d.window_time)       AS time_to_first_token_seconds_argMax,
     -- TTFT 全月加权重算
-    cast(sum(d.time_to_first_token_seconds_sum_delta) / nullIf(sum(d.time_to_first_token_seconds_count_delta), 0) AS Float32) AS time_to_first_token_seconds_avg,
+    cast(sum(d.time_to_first_token_seconds_sum_delta) / nullIf(sum(d.time_to_first_token_seconds_count_delta), 0) AS Nullable(Float32)) AS time_to_first_token_seconds_avg,
     argMax(d.time_to_first_token_seconds_count_argMax, d.window_time) AS time_to_first_token_seconds_count_argMax,
     sum(d.time_to_first_token_seconds_count_delta)             AS time_to_first_token_seconds_count_delta,
     argMax(d.time_to_first_token_seconds_sum_argMax, d.window_time)   AS time_to_first_token_seconds_sum_argMax,
@@ -229,7 +229,7 @@ SELECT
     argMax(d.time_per_output_token_seconds_argMax, d.window_time)   AS time_per_output_token_seconds_argMax,
     -- TPOT 全月加权重算
     cast(sum(d.time_per_output_token_seconds_sum_delta)
-        / nullIf(sum(d.time_per_output_token_seconds_count_delta), 0) AS Float32) AS time_per_output_token_seconds_avg,
+        / nullIf(sum(d.time_per_output_token_seconds_count_delta), 0) AS Nullable(Float32)) AS time_per_output_token_seconds_avg,
     argMax(d.time_per_output_token_seconds_count_argMax, d.window_time) AS time_per_output_token_seconds_count_argMax,
     sum(d.time_per_output_token_seconds_count_delta)              AS time_per_output_token_seconds_count_delta,
     argMax(d.time_per_output_token_seconds_sum_argMax, d.window_time)   AS time_per_output_token_seconds_sum_argMax,
@@ -249,7 +249,7 @@ SELECT
     argMax(d.e2e_request_latency_seconds_argMax, d.window_time)     AS e2e_request_latency_seconds_argMax,
     -- E2E 全月加权重算
     cast(sum(d.e2e_request_latency_seconds_sum_delta)
-        / nullIf(sum(d.e2e_request_latency_seconds_count_delta), 0) AS Float32) AS e2e_request_latency_seconds_avg,
+        / nullIf(sum(d.e2e_request_latency_seconds_count_delta), 0) AS Nullable(Float32)) AS e2e_request_latency_seconds_avg,
     argMax(d.e2e_request_latency_seconds_count_argMax, d.window_time)   AS e2e_request_latency_seconds_count_argMax,
     sum(d.e2e_request_latency_seconds_count_delta)                  AS e2e_request_latency_seconds_count_delta,
     argMax(d.e2e_request_latency_seconds_sum_argMax, d.window_time)     AS e2e_request_latency_seconds_sum_argMax,
@@ -280,7 +280,7 @@ SELECT
     -- ============================================================================
     argMax(d.request_prompt_tokens_argMax, d.window_time)           AS request_prompt_tokens_argMax,
     cast(sum(d.request_prompt_tokens_sum_delta)
-        / nullIf(sum(d.request_prompt_tokens_count_delta), 0) AS Float32) AS request_prompt_tokens_avg,
+        / nullIf(sum(d.request_prompt_tokens_count_delta), 0) AS Nullable(Float32)) AS request_prompt_tokens_avg,
     max(d.request_prompt_tokens_max)                              AS request_prompt_tokens_max,
     argMax(d.request_prompt_tokens_count_argMax, d.window_time)     AS request_prompt_tokens_count_argMax,
     sum(d.request_prompt_tokens_count_delta)                      AS request_prompt_tokens_count_delta,
@@ -300,7 +300,7 @@ SELECT
 
     argMax(d.request_generation_tokens_argMax, d.window_time)       AS request_generation_tokens_argMax,
     cast(sum(d.request_generation_tokens_sum_delta)
-        / nullIf(sum(d.request_generation_tokens_count_delta), 0) AS Float32) AS request_generation_tokens_avg,
+        / nullIf(sum(d.request_generation_tokens_count_delta), 0) AS Nullable(Float32)) AS request_generation_tokens_avg,
     max(d.request_generation_tokens_max)                          AS request_generation_tokens_max,
     argMax(d.request_generation_tokens_count_argMax, d.window_time) AS request_generation_tokens_count_argMax,
     sum(d.request_generation_tokens_count_delta)                  AS request_generation_tokens_count_delta,
