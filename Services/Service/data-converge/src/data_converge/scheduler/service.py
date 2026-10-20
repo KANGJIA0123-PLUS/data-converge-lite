@@ -73,6 +73,7 @@ class TaskScheduler:
         self.poll_interval_seconds = poll_interval_seconds
         self.catchup_limit = catchup_limit
         self.ready_poller = ready_poller
+        self.background_worker: Callable[[], None] | None = None
         self._stop_requested = False
         self.stop_check: Callable[[], bool] | None = None
         self._triggers: dict[str, CronTrigger] = {}
@@ -219,6 +220,8 @@ class TaskScheduler:
 
         while not self.stop_requested:
             self.tick()
+            if self.background_worker is not None and not self.stop_requested:
+                self.background_worker()
             deadline = time.monotonic() + self.poll_interval_seconds
             while not self.stop_requested:
                 remaining = deadline - time.monotonic()

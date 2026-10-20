@@ -24,6 +24,7 @@ from data_converge.state import StateStore
 from data_converge.coordination import create_leadership, GuardedRunner, GuardedSignalSource, WriterLease
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.archives.worker import ArchiveWorker
+from data_converge.backfill.worker import BackfillWorker
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,8 @@ def build_scheduler(definition: ApplicationDefinition, runner: TaskRunner,
         state_store=store, start_time=coverage_start,
         poll_interval_seconds=options.poll_interval_seconds, catchup_limit=options.catchup_limit,
     )
+    scheduler.background_worker = BackfillWorker(
+        definition, store, runner, stop_check=lambda: scheduler.stop_requested)
     return scheduler, executor
 
 

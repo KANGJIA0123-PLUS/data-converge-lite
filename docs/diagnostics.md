@@ -274,3 +274,9 @@ flowchart LR
 ```
 
 `diagnostics/cli.py`负责参数与分派；`service.py`组合检查；`checks.py`执行独立本地检查；`ledger.py`限制只读账本查询；`windows.py`解释就绪窗口；`connections.py`复用既有连接；`report.py`提供统一呈现。错误证据在`errors.py`白名单过滤，经执行器传入状态库，与任务完成一同提交。
+
+## 在线补算
+
+按时间段提交后台补算、预览和查询进度见 [在线补算说明](backfill.md)。
+入口为 `dconv --backfill` 与 `dconv --backfill-status`；服务保持运行，
+已成功窗口只有显式指定 `--recompute` 才重新汇聚。

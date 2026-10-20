@@ -14,7 +14,7 @@ from data_converge.errors import safe_diagnostic_details
 
 from .bootstrap import StateBootstrapError
 from .database import LedgerDatabase
-from . import checkpoints, configuration, events, history, retirement
+from . import backfill, checkpoints, configuration, events, history, retirement
 
 
 logger = logging.getLogger(__name__)
@@ -150,6 +150,14 @@ class StateStore:
     def get_instance(self, instance_id: str) -> dict | None:
         row = self._connection().execute("SELECT * FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()
         return dict(row) if row else None
+
+    def get_backfill(self, item_id: str) -> dict | None:
+        return backfill.get(self._connection(), item_id)
+
+    def begin_backfill(self, item_id: str, instance: TaskInstance, *,
+                       recompute: bool, now: datetime | None = None) -> dict:
+        return backfill.begin(self._connection(write=True), item_id, instance,
+                              recompute=recompute, now=now or datetime.now(timezone.utc))
 
     def get_status(self, instance_id: str) -> TaskStatus | None:
         if self.get_retirement(instance_id) is not None:
@@ -310,6 +318,7 @@ class StateStore:
             if diagnostic and status != TaskStatus.SUCCESS:
                 self._save_execution_diagnostic(conn, instance_id, diagnostic)
             history.record_finish(conn, instance_id, diagnostic)
+            backfill.record_finish(conn, instance_id)
             event = {TaskStatus.SUCCESS: "SUCCEEDED", TaskStatus.FAILED: "FAILED",
                      TaskStatus.UNKNOWN: "OUTCOME_UNKNOWN"}[status]
             events.append_event(conn, event, instance_id, now)
@@ -351,6 +360,7 @@ class StateStore:
         conn = self._connection(write=True)
         with conn:
             now = _stamp(datetime.now(timezone.utc))
+            backfill.recover_running(conn, datetime.fromisoformat(now))
             rows = checkpoints.classified_rows(conn, include_unknown=False)
 
             # 自动恢复所有 RUNNING 任务（包括 PREPARED 和 DISPATCHED）

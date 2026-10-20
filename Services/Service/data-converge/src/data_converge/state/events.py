@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 EVENT_TYPES = frozenset({
     'PREPARED', 'DISPATCHED', 'SUCCEEDED', 'FAILED', 'OUTCOME_UNKNOWN',
     'RECOVERED_UNSUBMITTED', 'RECOVERY_REQUIRED', 'RESOLVED_SUCCESS', 'RETRY_AUTHORIZED',
-    'IDEMPOTENT_RECOVERED',
+    'IDEMPOTENT_RECOVERED', 'BACKFILL_DISPATCHED',
 })
 _FIELDS = ('event_id', 'schema_version', 'occurred_at', 'event_type', 'instance_id',
            'taskname', 'query_id', 'attempt_number', 'status')

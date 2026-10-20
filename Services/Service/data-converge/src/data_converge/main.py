@@ -17,6 +17,7 @@ from data_converge.diagnostics import cli as diagnostics
 from data_converge.errors import safe_error_details
 from data_converge.cli_help import add_operation_arguments, create_parser
 from data_converge.configuration_migration import cli as configuration_migration
+from data_converge.backfill import cli as backfill
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,9 @@ def arguments(argv):
     diagnostics.add_arguments(parser, modes)
     add_operation_arguments(parser, modes)
     configuration_migration.add_arguments(parser, modes)
+    backfill.add_arguments(parser, modes)
     args = parser.parse_args(argv)
+    backfill.validate_arguments(parser, args)
     diagnostics.validate_arguments(parser, args)
     configuration_migration.validate_arguments(parser, args)
     if args.start_time is not None and not args.init_state:
@@ -74,6 +77,8 @@ def main(argv=None):
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     args = arguments(argv)
+    if backfill.is_command(args):
+        return backfill.run(args)
     if diagnostics.is_diagnostic(args):
         return diagnostics.run(args)
     stage = 'LOGGING'

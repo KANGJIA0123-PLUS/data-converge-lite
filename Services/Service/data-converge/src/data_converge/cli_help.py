@@ -18,6 +18,8 @@ DESCRIPTION = '''Data Converge Lite · 运行与故障定位
   想导出机器可读的执行事件         --events --format jsonl
   想追查某个任务为什么异常         --inspect-instance '实例ID'
   想查哪些 DWD 信号没到            --dwd-status
+  想手动汇聚过去一段时间的数据     --backfill --task 任务名 --from 起点 --to 终点
+  想查询后台补算进度               --backfill-status 补算任务号
   想看原始状态快照                 --status
 
 以下查询在 data-converge 容器内执行，启动辅助脚本会加载 Python 环境。
@@ -68,10 +70,16 @@ EXAMPLES = f'''可直接复制的查询示例：
   # 导出便于回传的结构化结果
   {LAUNCHER} --diagnose --online --format json
 
+  # 补算：正常服务继续运行，先预览，再去掉 --dry-run 提交后台请求
+  dconv --backfill --task task_model_instance_hour_dws --from '2026-10-19T10:00:00+08:00' --to '2026-10-19T12:00:00+08:00' --dry-run
+  # --all-tasks 代替 --task 任务名可选全部任务；只纳入范围内的完整窗口
+  # 默认跳过已成功窗口；补入迟到数据时显式加 --recompute
+  dconv --backfill-status JOB_ID --format json
+
 结果怎么看：
   PASS=该项通过；WARN=需要关注；FAIL=异常或检查未完成；SKIP=未检查。
   新诊断命令退出码：0=无 FAIL（可能有 WARN/SKIP），1=有 FAIL，2=参数错误。
-  --status 保持原 JSON；--format 仅用于诊断查询命令，默认 text。
+  --status 保持原 JSON；--format 用于诊断和补算命令，默认 text。
   --history 的 PASS 表示查询成功，历史失败不当作当前告警；当前异常请看 --failures。
   --inspect-instance 默认附带最近20次执行；--limit / --offset 只控制历史分页。
   旧版未记录的执行历史显示 SKIP，不生成或追补；人工说明只展示是否记录，不展示正文。
@@ -84,6 +92,10 @@ EXAMPLES = f'''可直接复制的查询示例：
 会改变运行状态的操作：
   原始启动入口不带命令会启动服务；dconv 无参仅显示帮助。
   --run-once / --run-task 会真正执行任务与 SQL、写账本。
+  --backfill 只写本地补算队列，由正常服务执行；QUEUED 不代表汇聚完成。
+  --dry-run 不写文件；--request-id 可避免同一计划重复提交；更改计划需使用新标识。
+  补算区间为 [from,to)，时间须带时区；指定任务需对齐其窗口边界。
+  --recompute 会重新汇聚已成功窗口；UNKNOWN 仍须先核实和人工处置。
   --run-once 可能补跑多个任务，不是预览；所有辅助参数应随对应主命令使用。
   --init-state 会初始化状态；--resolve-instance 会人工修改实例状态。
   --apply-config 取得租约和状态锁，先备份再事务迁移；不执行 SQL、不清零旧执行事实。

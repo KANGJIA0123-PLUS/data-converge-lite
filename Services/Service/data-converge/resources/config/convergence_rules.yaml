@@ -739,7 +739,7 @@ convergence_rules:
     description: 请求追踪Agent 5分钟ADS表
     source_tables:
       - t_mops_request_5min_dws
-    target_table: t_mops_request_5min_agent_ads
+    target_table: t_mops_agent_5min_ads
     aggregation_interval: PT5M
     cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
     depends_on:
@@ -751,7 +751,7 @@ convergence_rules:
     description: 请求追踪Server 5分钟ADS表
     source_tables:
       - t_mops_request_5min_dws
-    target_table: t_mops_request_5min_server_ads
+    target_table: t_mops_server_5min_ads
     aggregation_interval: PT5M
     cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
     depends_on:
@@ -767,7 +767,7 @@ convergence_rules:
     description: 请求追踪Agent小时ADS表
     source_tables:
       - t_mops_request_hour_dws
-    target_table: t_mops_request_hour_agent_ads
+    target_table: t_mops_agent_hour_ads
     aggregation_interval: PT1H
     cron: "6 * * * *"
     depends_on:
@@ -779,7 +779,7 @@ convergence_rules:
     description: 请求追踪Server小时ADS表
     source_tables:
       - t_mops_request_hour_dws
-    target_table: t_mops_request_hour_server_ads
+    target_table: t_mops_server_hour_ads
     aggregation_interval: PT1H
     cron: "6 * * * *"
     depends_on:
@@ -791,7 +791,7 @@ convergence_rules:
     description: 请求追踪Agent天ADS表
     source_tables:
       - t_mops_request_day_dws
-    target_table: t_mops_request_day_agent_ads
+    target_table: t_mops_agent_day_ads
     aggregation_interval: P1D
     cron: "10 0 * * *"
     depends_on:
@@ -803,7 +803,7 @@ convergence_rules:
     description: 请求追踪Server小时ADS表
     source_tables:
       - t_mops_request_day_dws
-    target_table: t_mops_request_day_server_ads
+    target_table: t_mops_server_day_ads
     aggregation_interval: P1D
     cron: "10 0 * * *"
     depends_on:
@@ -815,7 +815,7 @@ convergence_rules:
     description: 请求追踪Agent月ADS表
     source_tables:
       - t_mops_request_month_dws
-    target_table: t_mops_request_month_agent_ads
+    target_table: t_mops_agent_month_ads
     aggregation_interval: P1M
     cron: "20 0 1 * *"
     depends_on:
@@ -827,7 +827,7 @@ convergence_rules:
     description: 请求追踪Server月ADS表
     source_tables:
       - t_mops_request_month_dws
-    target_table: t_mops_request_month_server_ads
+    target_table: t_mops_server_month_ads
     aggregation_interval: P1M
     cron: "20 0 1 * *"
     depends_on:

@@ -15,7 +15,7 @@ def add_arguments(parser, modes):
     modes.add_argument('--inspect-instance', metavar='ID', help='查看一个实例的错误证据和当前依赖')
     modes.add_argument('--dwd-status', action='store_true', help='查询五分钟窗口的缺失信号')
     parser.add_argument('--online', action='store_true', help='仅与 --diagnose 使用，显式检查远端连接')
-    parser.add_argument('--task', help='与 --failures / --history 使用，按完整任务名筛选')
+    parser.add_argument('--task', help='查询 --failures / --history 时筛选任务；--backfill 时指定补算任务')
     parser.add_argument('--limit', type=int, help='查询条数或实例历史条数，默认20，最大100')
     parser.add_argument('--offset', type=int, help='--failures / --history / --inspect-instance 分页偏移，默认0')
     parser.add_argument('--after-event', type=int, help='仅与 --events 使用，读取该事件序号之后的记录')
@@ -33,19 +33,7 @@ def validate_arguments(parser, args):
     for value, option in ((args.inspect_instance, '--inspect-instance'), (args.task, '--task')):
         if value is not None and (not value.strip() or any(ord(char) < 32 for char in value)):
             parser.error(option + ' requires a nonempty value without control characters')
-    paginated = args.failures or args.history or args.recovery_plan or args.inspect_instance is not None
-    rules = [
-        (args.online, args.diagnose, '--online requires --diagnose'),
-        (args.task is not None, args.failures or args.history, '--task requires --failures or --history'),
-        (args.limit is not None, paginated or args.dwd_status or args.events,
-         '--limit requires a paginated diagnostic command'),
-        (args.offset is not None, paginated, '--offset requires --failures, --history or --inspect-instance'),
-        (args.window is not None, args.dwd_status, '--window requires --dwd-status'),
-        (args.format is not None, is_diagnostic(args), '--format requires a diagnostic command'),
-        (args.format == 'jsonl', args.events, '--format jsonl requires --events'),
-        (args.after_event is not None, args.events, '--after-event requires --events'),
-    ]
-    for supplied, allowed, message in rules:
+    for supplied, allowed, message in _option_rules(args):
         if supplied and not allowed:
             parser.error(message)
     if args.limit is not None and not 1 <= args.limit <= 100:
@@ -63,6 +51,26 @@ def validate_arguments(parser, args):
     args.offset = 0 if args.offset is None else args.offset
     args.after_event = 0 if args.after_event is None else args.after_event
     args.format = args.format or 'text'
+
+
+def _option_rules(args):
+    backfill = getattr(args, 'backfill', False)
+    backfill_status = getattr(args, 'backfill_status', None) is not None
+    paginated = (args.failures or args.history or args.recovery_plan
+                 or args.inspect_instance is not None or backfill_status)
+    return [
+        (args.online, args.diagnose, '--online requires --diagnose'),
+        (args.task is not None, args.failures or args.history or backfill,
+         '--task requires --failures, --history or --backfill'),
+        (args.limit is not None, paginated or args.dwd_status or args.events,
+         '--limit requires a paginated diagnostic command'),
+        (args.offset is not None, paginated, '--offset requires --failures, --history or --inspect-instance'),
+        (args.window is not None, args.dwd_status, '--window requires --dwd-status'),
+        (args.format is not None, is_diagnostic(args) or backfill or backfill_status,
+         '--format requires a diagnostic or backfill command'),
+        (args.format == 'jsonl', args.events, '--format jsonl requires --events'),
+        (args.after_event is not None, args.events, '--after-event requires --events'),
+    ]
 
 
 def run(args):
