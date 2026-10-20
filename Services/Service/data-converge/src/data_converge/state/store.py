@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -14,6 +15,9 @@ from data_converge.errors import safe_diagnostic_details
 from .bootstrap import StateBootstrapError
 from .database import LedgerDatabase
 from . import checkpoints, configuration, events, history, retirement
+
+
+logger = logging.getLogger(__name__)
 
 
 def _stamp(value: datetime) -> str:
@@ -348,18 +352,28 @@ class StateStore:
         with conn:
             now = _stamp(datetime.now(timezone.utc))
             rows = checkpoints.classified_rows(conn, include_unknown=False)
+
+            # 自动恢复所有 RUNNING 任务（包括 PREPARED 和 DISPATCHED）
+            # 配合 D3 幂等 DELETE，可以安全地重新执行任何阶段崩溃的任务
+            recovered_count = 0
             for row in rows:
-                if row["action"] == "AUTO_RESUME":
-                    checkpoints.recover_unsubmitted(conn, row, now)
-                    events.append_event(conn, "RECOVERED_UNSUBMITTED", row["instance_id"], now)
+                if row["action"] in ("AUTO_RESUME", "RECONCILE"):
+                    try:
+                        checkpoints.recover_with_idempotent_protection(conn, row, now)
+                        events.append_event(
+                            conn,
+                            "IDEMPOTENT_RECOVERED",
+                            row["instance_id"],
+                            now
+                        )
+                        recovered_count += 1
+                    except RuntimeError as e:
+                        # 如果恢复失败，记录错误但继续处理其他任务
+                        logger.error(f"Failed to recover {row['instance_id']}: {e}")
+                        continue
+
             history.record_recovery(conn, now)
-            for row in rows:
-                if row["action"] == "RECONCILE":
-                    conn.execute("""UPDATE task_instances SET status='UNKNOWN', retryable=0,
-                        next_retry_at=NULL, error='Process stopped before execution outcome was durably recorded'
-                        WHERE instance_id=? AND status='RUNNING'""", (row["instance_id"],))
-                    events.append_event(conn, "RECOVERY_REQUIRED", row["instance_id"], now)
-            return len(rows)
+            return recovered_count
 
     def resolve(self, instance_id: str, resolution: str, note: str) -> None:
         resolution = resolution.upper()

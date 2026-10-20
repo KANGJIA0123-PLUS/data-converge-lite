@@ -155,10 +155,16 @@ def test_runner_uses_snapshot_without_rereading_or_mutating_it(tmp_path, monkeyp
     assert "password" not in config["clickhouse"]
     config["clickhouse"]["host"] = "mutated.example"
     monkeypatch.setenv("TEST_CH_PASSWORD", "changed password")
-    instance = SimpleNamespace(task=SimpleNamespace(sql_id="hour"), data_start=None, data_end=None)
+    instance = SimpleNamespace(
+        task=SimpleNamespace(sql_id="hour", target_table="t_test_hour", cleanup_column="window_time"),
+        data_start=None,
+        data_end=None,
+        taskname="test_task"
+    )
     runner(instance)
     runner(instance)
-    assert len(calls) == 2
+    # Should be 4 calls now: 2 cleanup + 2 aggregation
+    assert len(calls) == 4
     for request, _ in calls:
         assert request.full_url.startswith("http://127.0.0.1:8123/?")
         assert base64.b64decode(request.get_header("Authorization").split()[1]) == b"user:first password"
@@ -175,11 +181,15 @@ def test_runner_resolves_password_once_and_preserves_window(tmp_path, monkeypatc
     calls, _ = capture_http(monkeypatch)
     runner = runner_module.SQLTaskRunner(path, sql_directory, timeout=120)
     monkeypatch.setenv("TEST_CH_PASSWORD", "changed password")
-    instance = SimpleNamespace(task=SimpleNamespace(sql_id="hour"),
-                               data_start=datetime(2026, 9, 9, 1), data_end=datetime(2026, 9, 9, 2))
+    instance = SimpleNamespace(
+        task=SimpleNamespace(sql_id="hour", target_table="t_test_hour", cleanup_column="window_time"),
+        data_start=datetime(2026, 9, 9, 1),
+        data_end=datetime(2026, 9, 9, 2),
+    )
     runner(instance)
     runner(instance)
-    assert len(calls) == 2
+    # Should be 4 calls now: 2 cleanup + 2 aggregation
+    assert len(calls) == 4
     for request, timeout in calls:
         assert base64.b64decode(request.get_header("Authorization").split()[1]) == b"user:first password"
         assert timeout == 120
@@ -211,10 +221,16 @@ def test_runner_passes_persisted_query_id_to_clickhouse(tmp_path, monkeypatch):
     (tmp_path / "hour.sql").write_text("SELECT 1")
     calls, _ = capture_http(monkeypatch)
     runner = runner_module.SQLTaskRunner(tmp_path / "app.yaml", tmp_path)
-    instance = SimpleNamespace(task=SimpleNamespace(sql_id="hour"), data_start=None, data_end=None,
-                               query_id="durable-attempt-42")
+    instance = SimpleNamespace(
+        task=SimpleNamespace(sql_id="hour", target_table="t_test_hour", cleanup_column="window_time"),
+        data_start=None,
+        data_end=None,
+        query_id="durable-attempt-42"
+    )
     runner(instance)
-    params = urllib.parse.parse_qs(urllib.parse.urlsplit(calls[0][0].full_url).query)
+    # Should be 2 calls now: 1 cleanup + 1 aggregation
+    assert len(calls) == 2
+    params = urllib.parse.parse_qs(urllib.parse.urlsplit(calls[1][0].full_url).query)
     assert params["query_id"] == ["durable-attempt-42"]
 
 

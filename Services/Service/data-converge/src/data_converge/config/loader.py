@@ -176,6 +176,11 @@ class ConfigLoader:
             if not sql_file.exists():
                 errors.append(f"Task '{taskname}': sql_id '{sql_id}' file not found: {sql_file}")
 
+        # cleanup_column可选，但提供时必须是非空字符串
+        cleanup_column = rule.get("cleanup_column", "window_time")
+        if not isinstance(cleanup_column, str) or not cleanup_column.strip():
+            errors.append(f"Task '{taskname}': 'cleanup_column' must be a non-empty string")
+
     def get_rule_by_taskname(self, taskname: str) -> Optional[Dict[str, Any]]:
         """根据任务名获取汇聚规则"""
         for rule in self.get_all_rules():
