@@ -66,10 +66,13 @@ def source_values(rows):
     return "values('" + definition + "', " + ", ".join(records) + ")"
 
 
-def node_query(period, rows):
+def node_query(period, rows, *, alias_preference=None):
     sql = re.sub(r"--[^\n]*", "", metric_sql("node", period))
     select = sql[sql.index("SELECT"):].rstrip().rstrip(";")
-    return re.sub(r"modelmate_metric\.\w+", source_values(rows), select, count=1) + " FORMAT JSONEachRow"
+    query = re.sub(r"modelmate_metric\.\w+", source_values(rows), select, count=1)
+    if alias_preference is not None:
+        query += f" SETTINGS prefer_column_name_to_alias={alias_preference}"
+    return query + " FORMAT JSONEachRow"
 
 
 @pytest.mark.parametrize("period", PERIODS)
@@ -80,8 +83,10 @@ def test_instance_window_parameters_keep_the_unsigned_epoch_contract(period):
 
 
 @pytest.mark.parametrize("period", PERIODS)
-def test_node_idle_windows_produce_zero_ratios(clickhouse_local, period):
-    row = run_query(clickhouse_local, node_query(period, [{}]))[0]
+@pytest.mark.parametrize("alias_preference", [0, 1])
+def test_node_idle_windows_produce_zero_ratios(clickhouse_local, period, alias_preference):
+    query = node_query(period, [{}], alias_preference=alias_preference)
+    row = run_query(clickhouse_local, query)[0]
     for name in ("generation_tokens_per_request_avg", "e2e_latency_avg",
                  "request_failed_rate", "request_success_rate",
                  "time_to_first_token_seconds_avg", "time_per_output_token_seconds_avg"):
@@ -104,21 +109,36 @@ def test_node_pd_success_denominator_includes_decode_failures(clickhouse_local):
 
 
 @pytest.mark.parametrize("period", ("hour", "day", "month"))
-def test_node_rollups_weight_latency_by_request_count(clickhouse_local, period):
+@pytest.mark.parametrize("alias_preference", [0, 1])
+def test_node_rollups_use_window_totals_for_ratios(clickhouse_local, period, alias_preference):
     rows = [
         {"request_received_total_delta": 10, "request_failed_total_delta": 1,
          "request_success_total_delta": 9, "generation_tokens_total_delta": 90,
          "e2e_request_latency_seconds_sum_delta": 20,
-         "e2e_request_latency_seconds_count_delta": 2},
-        {"request_received_total_delta": 20, "request_failed_total_delta": 2,
-         "request_success_total_delta": 18, "generation_tokens_total_delta": 180,
-         "e2e_request_latency_seconds_sum_delta": 60,
-         "e2e_request_latency_seconds_count_delta": 3},
+         "e2e_request_latency_seconds_count_delta": 2,
+         "time_to_first_token_seconds_sum_delta": 3,
+         "time_to_first_token_seconds_count_delta": 1,
+         "time_per_output_token_seconds_sum_delta": 8,
+         "time_per_output_token_seconds_count_delta": 2},
+        {"offset": 120, "request_received_total_delta": 30, "request_failed_total_delta": 9,
+         "request_success_total_delta": 21, "generation_tokens_total_delta": 810,
+         "e2e_request_latency_seconds_sum_delta": 180,
+         "e2e_request_latency_seconds_count_delta": 6,
+         "time_to_first_token_seconds_sum_delta": 21,
+         "time_to_first_token_seconds_count_delta": 3,
+         "time_per_output_token_seconds_sum_delta": 60,
+         "time_per_output_token_seconds_count_delta": 6},
     ]
-    row = run_query(clickhouse_local, node_query(period, rows))[0]
-    assert row["request_success_total_delta"] == 27
-    assert row["generation_tokens_per_request_avg"] == pytest.approx(10)
-    assert row["e2e_latency_avg"] == pytest.approx(16)
+    result = run_query(clickhouse_local, node_query(period, rows, alias_preference=alias_preference))
+    assert len(result) == 1
+    expected = {
+        "request_received_total_delta": 40, "request_failed_total_delta": 10,
+        "request_success_total_delta": 30, "generation_tokens_per_request_avg": 30,
+        "e2e_latency_avg": 25, "request_failed_rate": 25, "request_success_rate": 75,
+        "time_to_first_token_seconds_avg": 6, "time_per_output_token_seconds_avg": 8.5,
+    }
+    for name, value in expected.items():
+        assert result[0][name] == pytest.approx(value), name
 
 
 def instance_formula_query(period, tokens):
