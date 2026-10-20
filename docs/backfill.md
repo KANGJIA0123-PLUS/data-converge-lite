@@ -90,7 +90,8 @@ UNKNOWN 的人工处理沿用 `--inspect-instance`、`--resolve-instance` 流程
 
 服务日志使用 `BACKFILL_WINDOW_STARTED`、`BACKFILL_WINDOW_FINISHED` 和
 `BACKFILL_QUEUE_UNAVAILABLE` 事件，关联批次号、实例和 query_id。
-开启 `logging.debug_enabled: true` 并重启后，可同时看到具体清理/汇聚 SQL 和详细报错。
+开启 `logging.debug_enabled: true` 并重启后，仅打印失败的清理/汇聚 SQL 和详细报错；
+成功 SQL 不打印，任务与阶段信息仍保留。
 
 ## 调度和数据边界
 

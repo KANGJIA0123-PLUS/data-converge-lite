@@ -42,7 +42,7 @@ def test_disabled_debug_does_not_read_error_body_or_log_sql(monkeypatch, caplog,
     assert body.closed
 
 
-def test_debug_logs_both_actual_cleanup_and_aggregation_requests(tmp_path, monkeypatch, caplog):
+def test_debug_omits_successful_cleanup_and_aggregation_sql(tmp_path, monkeypatch, caplog):
     caplog.set_level(logging.DEBUG, logger="data_converge")
     monkeypatch.setattr(client, "system_timezone_name", lambda: "UTC")
     sql = "INSERT INTO metrics.hour SELECT {start_time:UInt32}"
@@ -54,14 +54,10 @@ def test_debug_logs_both_actual_cleanup_and_aggregation_requests(tmp_path, monke
         data_start="2026-09-09T01:00:00Z", data_end="2026-09-09T02:00:00Z")
     runner.SQLTaskRunner(tmp_path / "app.yaml", tmp_path, config=debug_config())(instance)
     records = [item for item in caplog.records if "SQL_REQUEST" in item.getMessage()]
-    assert len(records) == len(calls) == 2
-    for record, (request, _) in zip(records, calls):
-        assert record.levelno == logging.DEBUG
-        assert request.data.decode() in record.getMessage()
-        assert "attempt-debug" in record.getMessage()
-        assert "1788915600" in record.getMessage()
-        assert "1788919200" in record.getMessage()
-        assert "UTC" in record.getMessage()
+    assert len(calls) == 2
+    assert records == []
+    for request, _ in calls:
+        assert request.data.decode() not in caplog.text
     assert "private test password" not in caplog.text
 
 
@@ -78,6 +74,8 @@ def test_real_http_debug_contains_missing_table_without_changing_failure(
     assert "Table metrics.missing does not exist" in caplog.text
     assert "HTTPError" in caplog.text and "Traceback" in caplog.text
     assert "missing-table" in caplog.text
+    records = [item.getMessage() for item in caplog.records if "SQL_REQUEST" in item.getMessage()]
+    assert len(records) == 1 and "SELECT * FROM metrics.missing" in records[0]
     assert caught.value.outcome_unknown is unknown
     assert caught.value.retryable is False
     assert safe_error_details(caught.value)["http_status"] == status
@@ -95,6 +93,8 @@ def test_debug_transport_exception_includes_detail_but_exception_stays_safe(monk
     assert "Traceback" in caplog.text
     assert caught.value.outcome_unknown and not caught.value.retryable
     assert str(caught.value) == "CLICKHOUSE_OUTCOME_UNKNOWN"
+    records = [item.getMessage() for item in caplog.records if "SQL_REQUEST" in item.getMessage()]
+    assert len(records) == 1 and "SELECT 1" in records[0]
 
 
 def test_debug_records_exception_body_returned_with_http_200(localhost_clickhouse, caplog):
@@ -104,10 +104,12 @@ def test_debug_records_exception_body_returned_with_http_200(localhost_clickhous
         client.execute_sql(debug_config(port=localhost_clickhouse.port), "SELECT 1", timeout=2)
     assert "Table metrics.missing does not exist" in caplog.text
     assert caught.value.outcome_unknown and not caught.value.retryable
+    records = [item.getMessage() for item in caplog.records if "SQL_REQUEST" in item.getMessage()]
+    assert len(records) == 1 and "SELECT 1" in records[0]
 
 
 @pytest.mark.parametrize("debug_enabled", [False, True])
-def test_cli_writes_sql_to_service_log_only_when_enabled(
+def test_cli_success_never_writes_sql_to_service_log(
         local_http_app, monkeypatch, capsys, debug_enabled):
     path, requests = local_http_app
     monkeypatch.setenv("LOG_PATH", str(path.parent / "logs"))
@@ -123,9 +125,9 @@ def test_cli_writes_sql_to_service_log_only_when_enabled(
     assert payload["instances"][0]["status"] == "SUCCESS"
     assert len(requests) == 2
     text = (path.parent / "logs/data-converge.log").read_text()
-    assert ("SQL_REQUEST" in text) is debug_enabled
+    assert "SQL_REQUEST" not in text
     for _, sql in requests:
-        assert (sql in text) is debug_enabled
+        assert sql not in text
     assert "synthetic-integration-secret" not in text
 
 

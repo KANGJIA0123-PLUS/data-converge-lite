@@ -94,17 +94,21 @@ def execute_sql(config: dict[str, Any], sql: str, timeout: int = 300,
         raise ValueError("CLICKHOUSE_QUERY_ID_INVALID") from None
     request = _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, query_id)
     handlers = build_query_handlers(deadline, secure, verify)
-    debug.log_request(config, request)
-    body, remaining = _post_sql_request(config, request, handlers, deadline, timeout, query_id)
-    if deadline.expired:
-        error = SQLExecutionError("CLICKHOUSE_OUTCOME_UNKNOWN", outcome_unknown=True, query_id=query_id)
-        debug.log_error(config, query_id, error)
-        raise error from None
     try:
-        return _decode_query_response(body, remaining, query_id)
-    except SQLExecutionError as error:
-        debug.log_error(config, query_id, error,
-                        body=body if str(error) == "CLICKHOUSE_RESPONSE_INVALID" else None)
+        body, remaining = _post_sql_request(config, request, handlers, deadline, timeout, query_id)
+        if deadline.expired:
+            error = SQLExecutionError("CLICKHOUSE_OUTCOME_UNKNOWN", outcome_unknown=True, query_id=query_id)
+            debug.log_error(config, query_id, error)
+            raise error from None
+        try:
+            return _decode_query_response(body, remaining, query_id)
+        except SQLExecutionError as error:
+            debug.log_error(config, query_id, error,
+                            body=body if str(error) == "CLICKHOUSE_RESPONSE_INVALID" else None)
+            raise
+    except SQLExecutionError:
+        # Success stays quiet; retain only the failed operation's wire SQL.
+        debug.log_request(config, request)
         raise
 
 

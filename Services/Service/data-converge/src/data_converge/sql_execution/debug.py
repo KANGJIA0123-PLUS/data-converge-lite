@@ -57,7 +57,7 @@ def _redact(config, text):
 
 
 def log_request(config, request):
-    """Record the actual POST body and approved wire parameters, never headers."""
+    """Record a failed POST's body and approved wire parameters, never headers."""
     if not enabled(config):
         return
     parameters = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query,
