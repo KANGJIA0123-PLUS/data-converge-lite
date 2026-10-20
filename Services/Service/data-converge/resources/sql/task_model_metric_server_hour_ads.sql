@@ -210,14 +210,14 @@ SELECT
 
     -- (2) 总请求 QPS
     CAST(coalesce(
-        t.engine_request_received_total_delta / nullIf(toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        t.engine_request_received_total_delta / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Nullable(Float32)) AS request_received_total_qps,
 
-    -- (3) 产生百万 token 所用的卡时 (通过内层或左连接获取的小时级服务总 NPU 卡数)
+    -- (3) 百万 token 所用卡时 = 服务总卡数 × 窗口秒数 × 1,000,000 / (3,600 × 总 token 数)
     CAST(coalesce(
-        ((coalesce(t.engine_prompt_tokens_total_delta, 0) + coalesce(t.engine_generation_tokens_total_delta, 0)) * 3600.0 * coalesce(s.total_allocated_npu, 0))
-        / nullIf(1000000.0 * toFloat64(dateDiff('second', {start_time:DateTime}, {end_time:DateTime})), 0.0),
+        coalesce(s.total_allocated_npu, 0) * toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))) * 1000000.0
+        / nullIf(3600.0 * (coalesce(t.engine_prompt_tokens_total_delta, 0) + coalesce(t.engine_generation_tokens_total_delta, 0)), 0.0),
         0.0
     ) AS Nullable(Float32)) AS unit_token_computepower_consumption,
 
@@ -488,15 +488,24 @@ GROUP BY
 ) AS t
 LEFT JOIN
 (
-    -- 辅助子查询：通过小时级实例 ADS 汇总计算当前服务下所有实例的 NPU 卡总和
+    -- 资源实例 ADS 提供卡数；先按实例去重，再汇总服务卡数，避免重复行放大。
     SELECT
-        window_time,
-        server_name,
-        sum(allocated_npu_num) AS total_allocated_npu
-    FROM modelmate_metric.t_mops__modelmetric_instance__hour_ads
-    WHERE window_time >= {start_time:DateTime}
-      AND window_time <  {end_time:DateTime}
-    GROUP BY window_time, server_name
+        allocation.window_time,
+        allocation.server_name,
+        sum(allocation.allocated_npu_num) AS total_allocated_npu
+    FROM
+    (
+        SELECT
+            resource.window_time AS window_time,
+            resource.server_name,
+            resource.modelinstance_id,
+            anyLast(resource.allocated_npu_num) AS allocated_npu_num
+        FROM modelmate_metric.t_mops_modelinstance_hour_ads AS resource
+        WHERE resource.window_time >= toDateTime({start_time:UInt32}, 'UTC')
+          AND resource.window_time <  toDateTime({end_time:UInt32}, 'UTC')
+        GROUP BY resource.window_time, resource.server_name, resource.modelinstance_id
+    ) AS allocation
+    GROUP BY allocation.window_time, allocation.server_name
 ) AS s
 ON  t.window_time = s.window_time
 AND t.server_name = s.server_name;

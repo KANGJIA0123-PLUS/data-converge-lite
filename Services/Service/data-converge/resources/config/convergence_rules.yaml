@@ -528,6 +528,7 @@ convergence_rules:
     description: 模型指标服务器5分钟ADS表
     source_tables:
       - t_mops__modelmetric_instance__5min_ads
+      - t_mops_modelinstance_5min_ads
     target_table: t_mops__modelmetric_server__5min_ads
     aggregation_interval: PT5M
     cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
@@ -540,6 +541,7 @@ convergence_rules:
     description: 模型指标服务器小时ADS表
     source_tables:
       - t_mops__modelmetric_instance__hour_ads
+      - t_mops_modelinstance_hour_ads
     target_table: t_mops__modelmetric_server__hour_ads
     aggregation_interval: PT1H
     cron: "6 * * * *"
@@ -552,6 +554,7 @@ convergence_rules:
     description: 模型指标服务器天ADS表
     source_tables:
       - t_mops__modelmetric_instance__day_ads
+      - t_mops_modelinstance_day_ads
     target_table: t_mops__modelmetric_server__day_ads
     aggregation_interval: P1D
     cron: "10 0 * * *"
@@ -564,6 +567,7 @@ convergence_rules:
     description: 模型指标服务器月ADS表
     source_tables:
       - t_mops__modelmetric_instance__month_ads
+      - t_mops_modelinstance_month_ads
     target_table: t_mops__modelmetric_server__month_ads
     aggregation_interval: P1M
     cron: "20 0 1 * *"

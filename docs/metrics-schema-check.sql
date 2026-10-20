@@ -27,6 +27,13 @@ WITH expected AS (
     FROM (SELECT arrayJoin(['t_mops__modelmetric_instance__5min_ads', 't_mops__modelmetric_instance__hour_ads', 't_mops__modelmetric_instance__day_ads', 't_mops__modelmetric_instance__month_ads']) AS table_name)
     UNION ALL
     SELECT table_name, arrayJoin([
+                'input_output_token_rate',
+                'request_received_total_qps',
+                'unit_token_computepower_consumption'
+           ]) AS column_name
+    FROM (SELECT arrayJoin(['t_mops__modelmetric_server__5min_ads', 't_mops__modelmetric_server__hour_ads', 't_mops__modelmetric_server__day_ads', 't_mops__modelmetric_server__month_ads']) AS table_name)
+    UNION ALL
+    SELECT table_name, arrayJoin([
                 'request_success_total_delta',
                 'e2e_request_latency_seconds_sum_delta',
                 'e2e_request_latency_seconds_count_delta',
