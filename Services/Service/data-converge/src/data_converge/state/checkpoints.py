@@ -124,3 +124,31 @@ def recover_unsubmitted(conn, row, recovered_at):
     conn.execute("""UPDATE dispatch_checkpoints SET phase='NOT_SUBMITTED', recovered_at=?
         WHERE instance_id=? AND query_id=? AND phase='PREPARED'""",
         (recovered_at, row["instance_id"], row["query_id"]))
+
+
+def recover_with_idempotent_protection(conn, row, recovered_at):
+    """
+    配合 D3 幂等 DELETE 使用的全自动恢复函数。
+
+    与 recover_unsubmitted() 的区别：
+    - 不限制 phase（可以处理 PREPARED 和 DISPATCHED）
+    - 用于 D3+D4 场景，依赖 D3 的幂等性保证数据安全
+
+    当 D3 启用时，无论任务崩溃在哪个阶段，重启后都可以安全地重新执行，
+    因为 D3 会在每次执行前无条件 DELETE 目标窗口的数据。
+    """
+    # 恢复任务实例状态为 PENDING
+    result = conn.execute("""UPDATE task_instances
+        SET status='PENDING',
+            started_at=NULL,
+            finished_at=NULL,
+            retryable=0,
+            next_retry_at=NULL,
+            error=NULL
+        WHERE instance_id=?
+          AND query_id=?
+          AND status='RUNNING'
+    """, (row["instance_id"], row["query_id"]))
+
+    if result.rowcount != 1:
+        raise RuntimeError(f"Task instance changed during recovery: {row['instance_id']}")

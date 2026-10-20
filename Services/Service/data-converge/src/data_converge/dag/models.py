@@ -27,6 +27,7 @@ class TaskDefinition:
     cron: str
     depends_on: Tuple[str, ...]
     sql_id: str
+    cleanup_column: str = "window_time"  # D3: 用于幂等清理的时间列
 
     @classmethod
     def from_rule(cls, rule: Mapping[str, Any]) -> "TaskDefinition":
@@ -39,6 +40,7 @@ class TaskDefinition:
             cron=rule["cron"],
             depends_on=tuple(rule.get("depends_on", [])),
             sql_id=rule["sql_id"],
+            cleanup_column=rule.get("cleanup_column", "window_time"),
         )
 
 
