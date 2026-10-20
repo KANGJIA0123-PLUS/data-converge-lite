@@ -103,7 +103,8 @@ UNKNOWN 的人工处理沿用 `--inspect-instance`、`--resolve-instance` 流程
   源数据若已老化，SQL 成功也可能写入零行；SUCCESS 表示 SQL 执行成功，不保证业务行数。
 - 重算沿用现有“清理目标窗口、再 INSERT”的两阶段方式，二者不是数据库事务。
   中途失败可能暂时留下空窗口；中断或结果不确定时保留 UNKNOWN，待人工确认。
-- 现有清理作用于 `<target_table>_local`，没有跨分片 `ON CLUSTER`。
+- 清理表从实际 SQL 开头的 `INSERT INTO [TABLE] [库名.]表名` 推导：保留库名，只给表名加 `_local`，不依赖规则里的 `target_table`。支持前导注释及带引号的标识符；表函数、动态表名或其他无法识别的写入形式会在清理前报 `SQL_PREFLIGHT_FAILED`，不会提交 DELETE。该解析只检查写入目标，不验证整条 SQL。
+- 现有清理仍没有跨分片 `ON CLUSTER`，`_local` 表的命名约定和清理列配置仍须与实际表结构一致。
   使用 Distributed 多分片部署时，应先由数据库维护方确认此清理范围覆盖实际数据；
   `mutations_sync=2` 不能单独证明跨分片重复执行安全。本功能不创建或调整表结构。
 

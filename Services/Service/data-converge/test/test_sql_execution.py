@@ -149,7 +149,7 @@ def test_runner_uses_snapshot_without_rereading_or_mutating_it(tmp_path, monkeyp
         password_env="TEST_CH_PASSWORD")}, path, resolve_password=False)
     path.write_text("invalid replacement configuration")
     monkeypatch.setenv("TEST_CH_HOST", "replacement.example")
-    (tmp_path / "hour.sql").write_text("SELECT 1")
+    (tmp_path / "hour.sql").write_text("INSERT INTO t_test_hour SELECT 1")
     calls, _ = capture_http(monkeypatch)
     runner = runner_module.SQLTaskRunner(path, tmp_path, config=config)
     assert "password" not in config["clickhouse"]
