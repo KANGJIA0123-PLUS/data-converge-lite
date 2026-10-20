@@ -178,7 +178,7 @@ bash /opt/its/data-converge/bin/start_data_converge.sh \
   --backup-dir /srv/data-converge/migration-backups
 ```
 
-`--allow-backfill` 只允许过去的任务起点，不能越过 `coverage_start`、覆盖原记录窗口、绕过未确认执行结果或业务身份保护。已经恢复新窗口的账本，后续普通迁移也不能把任何任务起点移到恢复 `cutover` 之前，即使使用 `--allow-backfill`；计划中的 `recovery_cutover` 明示这一额外下限，违反时报告 `CONFIG_EFFECTIVE_BEFORE_COVERAGE`。它也不会让迁移命令立即执行 SQL；合法写服务随后启动时才按调度、依赖和 DWD 就绪条件处理窗口。回填新增下游所需的原上游窗口必须在当前执行范围内已有成功事实；迁移不会自动重算原上游。
+`--allow-backfill` 只允许过去的任务起点，不能越过 `coverage_start`、覆盖原记录窗口、绕过未确认执行结果或业务身份保护。已经恢复新窗口的账本，后续普通迁移也不能把任何任务起点移到恢复 `cutover` 之前，即使使用 `--allow-backfill`；计划中的 `recovery_cutover` 明示这一额外下限，违反时报告 `CONFIG_EFFECTIVE_BEFORE_COVERAGE`。它也不会让迁移命令立即执行 SQL；合法写服务随后启动时才按调度、依赖和 DWD 就绪条件处理窗口。回填新增下游时，同周期执行前置实例必须在当前执行范围内已有成功事实；跨周期上游只表示数据来源，下游按已有数据汇聚，不等待其历史实例全部成功。迁移不会自动重算原上游或已成功的下游窗口。
 
 Cron、DWD 事件入队、手动执行和待执行任务恢复均遵守任务起点。迟到的 DWD 通知不会使新增任务回到起点之前；旧账本没有每任务起点时，继续保持原有行为。
 

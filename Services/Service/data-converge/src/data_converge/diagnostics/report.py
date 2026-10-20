@@ -179,8 +179,10 @@ def _render_instance(data):
         lines.append('  SQL 文件: ' + data['sql_file'])
     if data.get('action'):
         lines.append('  建议: ' + data['action'])
+    if cross_period := data.get('lineage', {}).get('cross_period_tasks'):
+        lines.append('  跨周期数据来源（不作为执行前置条件）: ' + ', '.join(cross_period))
     if dependencies := data.get('dependencies'):
-        lines.append(f"  上游依赖: {dependencies['total']}，未成功: {dependencies['blocked_count']}")
+        lines.append(f"  同周期执行前置实例: {dependencies['total']}，未成功: {dependencies['blocked_count']}")
         lines.extend(f"    {item['status']}  {item['instance_id']}" for item in dependencies['blocked'])
         if dependencies['truncated']:
             lines.append('    仅展示前 100 个未成功依赖。')

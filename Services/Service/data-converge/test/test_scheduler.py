@@ -214,8 +214,8 @@ def test_five_minute_task_uses_aligned_data_window():
     assert instance.status == TaskStatus.SUCCESS
 
 
-def test_hour_task_stays_blocked_when_only_last_upstream_window_succeeded():
-    """最后一个5分钟成功不足以证明整小时上游完整。"""
+def test_hour_task_runs_when_only_last_upstream_window_succeeded():
+    """小时任务按时执行，不等待整小时内所有5分钟窗口成功。"""
     execution_order = []
 
     def runner(instance):
@@ -252,21 +252,22 @@ def test_hour_task_stays_blocked_when_only_last_upstream_window_succeeded():
     )
 
     assert len(parent_report.succeeded) == 1
-    assert len(child_report.blocked) == 1
+    assert len(child_report.succeeded) == 1
 
     assert execution_order == [
         "task_5min",
+        "task_hour",
     ]
 
     parent = parent_report.succeeded[0]
-    child = child_report.blocked[0]
+    child = child_report.succeeded[0]
 
     assert parent.batch_id == child.batch_id
-    assert parent.instance_id in child.upstream_instance_ids
+    assert child.upstream_instance_ids == ()
 
 
-def test_hour_task_is_blocked_when_upstream_has_not_succeeded():
-    """同批次上游尚未成功时，小时任务应被阻塞。"""
+def test_hour_task_runs_when_upstream_has_not_been_created():
+    """5分钟窗口尚未产生时，小时任务仍按时执行。"""
     executed_instances = []
 
     scheduler = build_scheduler(
@@ -285,21 +286,14 @@ def test_hour_task_is_blocked_when_upstream_has_not_succeeded():
         ),
     )
 
-    assert len(report.succeeded) == 0
+    assert len(report.succeeded) == 1
     assert len(report.failed) == 0
-    assert len(report.blocked) == 1
-
-    blocked = report.blocked[0]
-
-    assert blocked.taskname == "task_hour"
-    assert blocked.status == TaskStatus.BLOCKED
-
-    # 被阻塞的任务不能真正调用 SQL runner。
-    assert executed_instances == []
+    assert len(report.blocked) == 0
+    assert [instance.taskname for instance in executed_instances] == ["task_hour"]
 
 
-def test_upstream_sql_failure_blocks_hour_task(caplog):
-    """上游执行失败后，同批次小时任务应被阻塞。"""
+def test_unknown_upstream_sql_outcome_does_not_block_hour_task(caplog):
+    """5分钟任务结果未知时，小时任务仍按时执行。"""
     def failing_runner(instance):
         if instance.taskname == "task_5min":
             raise RuntimeError("模拟上游 SQL 执行失败")
@@ -334,8 +328,8 @@ def test_upstream_sql_failure_blocks_hour_task(caplog):
     assert parent_report.unknown[0].error == "UNEXPECTED_RUNNER_ERROR:RuntimeError"
     assert "status=UNKNOWN" in caplog.text
 
-    assert len(child_report.blocked) == 1
-    assert child_report.blocked[0].status == TaskStatus.BLOCKED
+    assert len(child_report.succeeded) == 1
+    assert child_report.blocked == []
 
 
 def test_invalid_cron_expression_is_rejected():
@@ -364,11 +358,12 @@ def test_invalid_cron_expression_is_rejected():
         scheduler.register_jobs()
 
 
-def persistent_scheduler(tmp_path, calls, coverage_start, *, create=True, catchup_limit=100):
+def persistent_scheduler(tmp_path, calls, coverage_start, *, create=True, catchup_limit=100,
+                         rules=None):
     from data_converge.state import StateStore
     store = StateStore(tmp_path / "state.db", create=create)
     store.acquire_lock()
-    builder = DAGBuilder(FakeConfigLoader(make_rules()))
+    builder = DAGBuilder(FakeConfigLoader(make_rules() if rules is None else rules))
     dag = builder.build()
     executor = DAGExecutor(dag, lambda i: calls.append(i.instance_id), state_store=store)
     scheduler = TaskScheduler(dag, builder, executor, state_store=store,
@@ -454,7 +449,10 @@ def test_bounded_catchup_continues_without_advancing_over_unplanned_windows(tmp_
 def test_old_blocked_window_does_not_starve_new_ready_work(tmp_path):
     coverage = datetime(2026, 10, 12, 10, 0, tzinfo=SHANGHAI)
     calls = []
-    scheduler, store = persistent_scheduler(tmp_path, calls, coverage, catchup_limit=1)
+    rules = make_rules()
+    rules[1]["aggregation_interval"] = "PT5M"
+    scheduler, store = persistent_scheduler(tmp_path, calls, coverage, catchup_limit=1,
+                                           rules=rules)
     try:
         missing = scheduler.dag_builder.create_instance(scheduler.dag, "task_hour", coverage + timedelta(hours=1, minutes=3))
         store.enqueue_and_advance([missing], {})
@@ -466,7 +464,7 @@ def test_old_blocked_window_does_not_starve_new_ready_work(tmp_path):
         store.close()
 
 
-def test_hour_waits_for_all_persisted_upstream_windows(tmp_path):
+def test_all_due_windows_are_persisted_and_executed(tmp_path):
     coverage = datetime(2026, 10, 12, 10, 0, tzinfo=SHANGHAI)
     calls = []
     scheduler, store = persistent_scheduler(tmp_path, calls, coverage)

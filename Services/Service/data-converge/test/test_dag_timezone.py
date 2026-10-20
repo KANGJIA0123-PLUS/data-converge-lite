@@ -42,32 +42,37 @@ def test_windows_preserve_elapsed_durations_and_local_calendar_boundaries(
     assert actual_end.timestamp() - actual_start.timestamp() == seconds
 
 
-@pytest.mark.parametrize("scheduled, count, first, last", [
-    ("2026-03-09T00:20:00-04:00", 23, "2026-03-08T01:00:00-05:00",
-     "2026-03-09T00:00:00-04:00"),
-    ("2026-11-02T00:20:00-05:00", 25, "2026-11-01T01:00:00-04:00",
-     "2026-11-02T00:00:00-05:00"),
+@pytest.mark.parametrize("scheduled, start, end, hours", [
+    ("2026-03-09T00:20:00-04:00", "2026-03-08T00:00:00-05:00",
+     "2026-03-09T00:00:00-04:00", 23),
+    ("2026-11-02T00:20:00-05:00", "2026-11-01T00:00:00-04:00",
+     "2026-11-02T00:00:00-05:00", 25),
 ])
-def test_natural_day_requires_every_elapsed_hour(scheduled, count, first, last):
+def test_natural_day_keeps_dst_window_without_waiting_for_hourly_successes(
+        scheduled, start, end, hours):
     rules = make_rules()
     rules[0]["aggregation_interval"] = "PT1H"
     rules[1]["aggregation_interval"] = "P1D"
     builder = DAGBuilder(FakeConfigLoader(rules))
     instance = builder.create_instance(builder.build(), "task_hour", local_time(scheduled))
-    assert len(instance.upstream_instance_ids) == count
-    assert instance.upstream_instance_ids[0] == f"task_5min@{first}"
-    assert instance.upstream_instance_ids[-1] == f"task_5min@{last}"
-    if count == 25:
-        assert instance.upstream_instance_ids[1] == "task_5min@2026-11-01T01:00:00-05:00"
+    assert instance.data_start.isoformat() == start
+    assert instance.data_end.isoformat() == end
+    assert instance.data_end.timestamp() - instance.data_start.timestamp() == hours * 3600
+    assert instance.upstream_instance_ids == ()
 
 
-def test_repeated_hour_requires_all_twelve_five_minute_windows():
-    builder = DAGBuilder(FakeConfigLoader(make_rules()))
+@pytest.mark.parametrize("scheduled, upstream_id", [
+    ("2026-11-01T01:03:00-04:00", "task_5min@2026-11-01T01:00:00-04:00"),
+    ("2026-11-01T01:03:00-05:00", "task_5min@2026-11-01T01:00:00-05:00"),
+])
+def test_same_period_dependencies_distinguish_repeated_hour_boundaries(
+        scheduled, upstream_id):
+    rules = make_rules()
+    rules[0]["aggregation_interval"] = "PT1H"
+    builder = DAGBuilder(FakeConfigLoader(rules))
     instance = builder.create_instance(
-        builder.build(), "task_hour", local_time("2026-11-01T01:03:00-05:00"))
-    assert len(instance.upstream_instance_ids) == 12
-    assert instance.upstream_instance_ids[0] == "task_5min@2026-11-01T01:05:00-04:00"
-    assert instance.upstream_instance_ids[-1] == "task_5min@2026-11-01T01:00:00-05:00"
+        builder.build(), "task_hour", local_time(scheduled))
+    assert instance.upstream_instance_ids == (upstream_id,)
 
 
 @pytest.mark.parametrize("scheduled, start, end", [
@@ -84,26 +89,29 @@ def test_half_hour_clock_changes_keep_hour_windows_contiguous(scheduled, start, 
     assert actual_end.timestamp() - actual_start.timestamp() == 90 * 60
 
 
-@pytest.mark.parametrize("scheduled, count, expected_boundary", [
-    ("2026-04-06T00:10:00+10:30", 24, "task_5min@2026-04-05T02:00:00+10:30"),
-    ("2026-10-05T00:10:00+11:00", 23, "task_5min@2026-10-04T03:00:00+11:00"),
+@pytest.mark.parametrize("scheduled, start, end, minutes", [
+    ("2026-04-06T00:10:00+10:30", "2026-04-05T00:00:00+11:00",
+     "2026-04-06T00:00:00+10:30", 24 * 60 + 30),
+    ("2026-10-05T00:10:00+11:00", "2026-10-04T00:00:00+10:30",
+     "2026-10-05T00:00:00+11:00", 23 * 60 + 30),
 ])
-def test_half_hour_clock_change_day_depends_on_existing_hour_boundaries(
-        scheduled, count, expected_boundary):
+def test_half_hour_clock_change_day_keeps_calendar_window_without_waiting_for_hours(
+        scheduled, start, end, minutes):
     rules = make_rules()
     rules[0]["aggregation_interval"] = "PT1H"
     rules[1]["aggregation_interval"] = "P1D"
     builder = DAGBuilder(FakeConfigLoader(rules))
     instant = datetime.fromisoformat(scheduled).astimezone(ZoneInfo("Australia/Lord_Howe"))
     instance = builder.create_instance(builder.build(), "task_hour", instant)
-    assert len(instance.upstream_instance_ids) == count
-    assert expected_boundary in instance.upstream_instance_ids
-    assert all(":30:00" not in value for value in instance.upstream_instance_ids)
+    assert instance.data_start.isoformat() == start
+    assert instance.data_end.isoformat() == end
+    assert instance.data_end.timestamp() - instance.data_start.timestamp() == minutes * 60
+    assert instance.upstream_instance_ids == ()
 
 
 def test_nonexistent_midnight_uses_canonical_boundary_and_upstream_identity():
     rules = make_rules()
-    rules[0]["aggregation_interval"] = "PT1H"
+    rules[0]["aggregation_interval"] = "P1D"
     rules[1]["aggregation_interval"] = "P1D"
     builder = DAGBuilder(FakeConfigLoader(rules))
     zone = ZoneInfo("America/Santiago")
@@ -111,19 +119,20 @@ def test_nonexistent_midnight_uses_canonical_boundary_and_upstream_identity():
         builder.build(), "task_hour", datetime(2026, 9, 6, 1, 10, tzinfo=zone))
     assert instance.instance_id == "task_hour@2026-09-06T01:00:00-03:00"
     assert instance.data_start.isoformat() == "2026-09-05T00:00:00-04:00"
-    assert instance.upstream_instance_ids[-1] == "task_5min@2026-09-06T01:00:00-03:00"
-    assert len(instance.upstream_instance_ids) == 24
+    assert instance.upstream_instance_ids == ("task_5min@2026-09-06T01:00:00-03:00",)
 
 
-def test_month_depends_on_canonical_days_when_midnight_is_skipped():
+def test_month_keeps_calendar_window_with_skipped_midnight_without_waiting_for_days():
     rules = make_rules()
     rules[0]["aggregation_interval"] = "P1D"
     rules[1]["aggregation_interval"] = "P1M"
     builder = DAGBuilder(FakeConfigLoader(rules))
     instance = builder.create_instance(
         builder.build(), "task_hour", datetime(2026, 10, 1, 0, 20, tzinfo=ZoneInfo("America/Santiago")))
-    assert len(instance.upstream_instance_ids) == 30
-    assert instance.upstream_instance_ids[4] == "task_5min@2026-09-06T01:00:00-03:00"
+    assert instance.data_start.isoformat() == "2026-09-01T00:00:00-04:00"
+    assert instance.data_end.isoformat() == "2026-10-01T00:00:00-03:00"
+    assert instance.data_end.timestamp() - instance.data_start.timestamp() == (30 * 24 - 1) * 3600
+    assert instance.upstream_instance_ids == ()
 
 
 @pytest.mark.parametrize("interval, expected", [
@@ -149,15 +158,21 @@ def test_calendar_window_moves_back_past_a_wholly_skipped_local_date():
     assert end.timestamp() - start.timestamp() == 24 * 3600
 
 
-@pytest.mark.parametrize("scheduled", [
-    "2026-04-05T02:06:00+10:30", "2026-10-04T03:06:00+11:00",
+@pytest.mark.parametrize("scheduled, start, end", [
+    ("2026-04-05T02:06:00+10:30", "2026-04-05T01:00:00+11:00",
+     "2026-04-05T02:00:00+10:30"),
+    ("2026-10-04T03:06:00+11:00", "2026-10-04T01:00:00+10:30",
+     "2026-10-04T03:00:00+11:00"),
 ])
-def test_transition_hour_requires_all_eighteen_five_minute_windows(scheduled):
+def test_transition_hour_keeps_full_window_without_waiting_for_five_minute_successes(
+        scheduled, start, end):
     builder = DAGBuilder(FakeConfigLoader(make_rules()))
     instant = datetime.fromisoformat(scheduled).astimezone(ZoneInfo("Australia/Lord_Howe"))
     instance = builder.create_instance(builder.build(), "task_hour", instant)
-    assert len(instance.upstream_instance_ids) == 18
-    assert instance.upstream_instance_ids[-1] == "task_5min@" + instance.data_end.isoformat()
+    assert instance.data_start.isoformat() == start
+    assert instance.data_end.isoformat() == end
+    assert instance.data_end.timestamp() - instance.data_start.timestamp() == 90 * 60
+    assert instance.upstream_instance_ids == ()
 
 
 def test_two_hour_rollback_selects_the_immediately_preceding_real_hour():

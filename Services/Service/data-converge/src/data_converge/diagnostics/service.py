@@ -224,10 +224,15 @@ def _inspect_dependencies(store, definition, row, data):
             blocked.append(dict(instance_id=name, status=status.value if status else 'NOT_FOUND'))
     data['dependencies'] = dict(total=len(expected.upstream_instance_ids), blocked_count=len(blocked),
                                 blocked=blocked[:100], truncated=len(blocked) > 100)
+    data['lineage'] = dict(
+        upstream_tasks=list(expected.task.depends_on),
+        cross_period_tasks=[name for name in expected.task.depends_on
+                            if definition.dag.tasks[name].aggregation_interval
+                            != expected.task.aggregation_interval])
     ready = definition.config['dwd_ready']
     if ready['enabled'] and expected.task.aggregation_interval == 'PT5M':
         data['windows'] = list_windows(store, ready, selected=expected.data_start)
     data['sql_file'] = str(definition.sql_dir / f'{expected.task.sql_id}.sql')
-    return [check('dependencies', 'WARN' if blocked else 'PASS', '当前依赖状态',
+    return [check('dependencies', 'WARN' if blocked else 'PASS', '当前同周期执行前置条件',
                   {'total': len(expected.upstream_instance_ids), 'blocked': len(blocked)},
                   '按 blocked 中的 instance_id 继续 --inspect-instance；历史阻断原因可能已解除。' if blocked else '')]
