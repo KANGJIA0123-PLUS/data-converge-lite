@@ -265,7 +265,7 @@ class Application:
             return report_result(runtime.run_once(parse_time(now) if now else None))
 
     def serve(self) -> CommandResult:
-        logger.info('SYSTEM_TIMEZONE_SELECTED: timezone=%s source=system', self.definition.options.timezone)
+        logger.info('SYSTEM_TIMEZONE_SELECTED: timezone=%s', self.definition.options.timezone)
         dependencies = self.dependencies or RuntimeDependencies()
         with (
             service_heartbeat(self.definition, self.directory, dependencies) as heartbeat,

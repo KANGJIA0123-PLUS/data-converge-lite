@@ -186,6 +186,8 @@ DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号�
 
 每项检查固定包含 `id`、`status`、`summary`、`evidence`、`action`。JSON 顶层包含 `schema_version=1`、命令、检查时间、有效系统时区 `timezone`、汇总状态和数据。检查时间使用该时区及当前 UTC 偏移；容器可通过 `TZ` 指定 IANA 时区，改变时区需重启进程。
 
+系统时区无法读取或识别时，使用 `Asia/Shanghai` 并记录一次 `SYSTEM_TIMEZONE_FALLBACK` 告警。告警只含最终时区和异常类型；启动日志及诊断报告均显示实际采用的时区。明确配置的 UTC 不触发回退。
+
 - `PASS`：该项检查通过，仅代表其声明的检查范围。
 - `WARN`：存在需要关注的阻断/信号等待/配置提示。
 - `FAIL`：已知错误、结果未确认的任务，或检查无法完成。

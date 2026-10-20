@@ -42,6 +42,7 @@ print(json.dumps({
 @pytest.mark.parametrize('zone, expected', [
     ('UTC', '2026-10-20T00:00:00+00:00'),
     ('Asia/Tokyo', '2026-10-20T09:00:00+09:00'),
+    ('invalid-private-zone', '2026-10-20T08:00:00+08:00'),
 ])
 def test_initialization_records_system_local_coverage(app, zone, expected):
     actual = run_in_timezone(zone, """
@@ -53,17 +54,21 @@ print(json.dumps(application.initialize('2026-10-20T00:00:00+00:00').payload))
     assert actual == {'status': 'INITIALIZED', 'coverage_start': expected}
 
 
-def test_invalid_system_timezone_is_reported_without_mislabeling_input_time():
+def test_invalid_system_timezone_uses_shanghai_and_logs_a_safe_warning_once():
     actual = run_in_timezone('invalid-private-zone', """
-import json
+import io, json
+from contextlib import redirect_stderr
 from data_converge.application import parse_time
-from data_converge.errors import safe_error_details
-try:
-    parse_time('2026-10-20T00:00:00+00:00')
-except ValueError as error:
-    print(json.dumps(safe_error_details(error)))
+from data_converge.config.application import settings
+stream = io.StringIO()
+with redirect_stderr(stream):
+    instant = parse_time('2026-10-20T00:00:00+00:00')
+    zone = settings({}).timezone
+print(json.dumps({'instant': instant.isoformat(), 'timezone': zone, 'log': stream.getvalue()}))
 """)
-    assert actual['error_code'] == 'SYSTEM_TIMEZONE_UNRESOLVED'
+    assert actual['instant'] == '2026-10-20T08:00:00+08:00'
+    assert actual['timezone'] == 'Asia/Shanghai'
+    assert actual['log'].count('SYSTEM_TIMEZONE_FALLBACK') == 1
     assert 'private' not in json.dumps(actual)
 
 
