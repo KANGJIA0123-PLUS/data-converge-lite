@@ -19,7 +19,7 @@ def configuration_evidence(definition, taskname, manifest=None, *, recovery_cove
     return evidence
 
 
-def recovery_coverage(store, instance, now):
+def _recovery_coverage(store, instance, now):
     if instance.task.aggregation_interval == 'P1M':
         return store.preaggregate_recovery_coverage(instance, now)
     effective = store.get_task_effective_starts().get(instance.taskname)
@@ -53,7 +53,7 @@ def validate_eligibility(definition, store, instance, now, item=None):
     if store is None or store.get_meta('coverage_start') is None:
         raise ValueError('BACKFILL_PREAGGREGATE_COVERAGE_MISSING')
     coverage = datetime.fromisoformat(store.get_meta('coverage_start'))
-    recovery = recovery_coverage(store, instance, now)
+    recovery = _recovery_coverage(store, instance, now)
     if timeline_time(instance.data_start) < timeline_time(coverage) and recovery is None:
         raise ValueError('BACKFILL_PREAGGREGATE_BEFORE_COVERAGE')
     effective = store.get_task_effective_starts().get(instance.taskname)
@@ -91,7 +91,7 @@ def classify_plan(definition, store, items, now):
             due = validate_eligibility(definition, store, instance, now)
             item.update(execution_kind='PREAGGREGATE', formal_scheduled_time=due.isoformat(),
                         config_evidence=configuration_evidence(definition, instance.taskname, manifest,
-                            recovery_coverage=recovery_coverage(store, instance, now)))
+                            recovery_coverage=_recovery_coverage(store, instance, now)))
         selected.append(item)
     if not selected:
         raise ValueError('BACKFILL_EMPTY_RANGE')

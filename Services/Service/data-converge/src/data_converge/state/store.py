@@ -4,7 +4,7 @@ import json
 import logging
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone as datetime_timezone
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -32,7 +32,7 @@ def _window_key(value: datetime) -> str:
     _stamp(value)
     if value.minute % 5 or value.second or value.microsecond:
         raise ValueError("DWD window_start must align to a five-minute boundary")
-    return _stamp(value.astimezone(timezone.utc))
+    return _stamp(value.astimezone(datetime_timezone.utc))
 
 
 class StateStore:
@@ -176,7 +176,7 @@ class StateStore:
     def begin_backfill(self, item_id: str, instance: TaskInstance, *,
                        recompute: bool, now: datetime | None = None) -> dict:
         return backfill.begin(self._connection(write=True), item_id, instance,
-                              recompute=recompute, now=now or datetime.now(timezone.utc))
+                              recompute=recompute, now=now or datetime.now(datetime_timezone.utc))
 
     def validate_preaggregate_configuration(self, manifest, task_starts, coverage, *,
                                             timezone=None, cleanup_columns=None) -> None:
@@ -198,7 +198,7 @@ class StateStore:
     def begin_preaggregate(self, item: dict, instance: TaskInstance,
                            now: datetime | None = None) -> dict:
         return preaggregate.begin(self._connection(write=True), item, instance,
-                                  now or datetime.now(timezone.utc))
+                                  now or datetime.now(datetime_timezone.utc))
 
     def finish_preaggregate(self, item_id: str, status, error=None,
                             diagnostic=None, now: datetime | None = None) -> None:
@@ -216,14 +216,14 @@ class StateStore:
 
     def resolve_preaggregate(self, item_id: str, resolution: str, note: str) -> None:
         preaggregate.resolve(self._connection(write=True), item_id, resolution, note,
-                             datetime.now(timezone.utc))
+                             datetime.now(datetime_timezone.utc))
 
     def preaggregate_blocker(self, instance_id: str) -> str | None:
         return preaggregate.blocker(self._connection(), instance_id)
 
     def preaggregate_formal_blocker(self, instance_id: str, now: datetime | None = None) -> str | None:
         return preaggregate_protection.formal_blocker(
-            self._connection(), instance_id, now or datetime.now(timezone.utc))
+            self._connection(), instance_id, now or datetime.now(datetime_timezone.utc))
 
     def preaggregate_schedule_blocker(self, scheduled_until: datetime, now: datetime) -> str | None:
         return preaggregate_protection.schedule_blocker(self._connection(), scheduled_until, now)
@@ -279,7 +279,7 @@ class StateStore:
             raise ValueError("dwd_type must be non-empty")
         key = _window_key(window_start)
         _stamp(received_at)
-        observed = _stamp(received_at.astimezone(timezone.utc))
+        observed = _stamp(received_at.astimezone(datetime_timezone.utc))
         conn = self._connection(write=True)
         with conn:
             conn.execute("INSERT OR IGNORE INTO dwd_ready_signals VALUES (?, ?, ?)", (key, dwd_type, observed))
@@ -305,7 +305,7 @@ class StateStore:
         return [dict(row) | {"types": sorted(self.get_dwd_types(datetime.fromisoformat(row["window_start"])))} for row in rows]
 
     def claim(self, instance_id: str, *, now: datetime | None = None, max_attempts: int = 3) -> bool:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(datetime_timezone.utc)
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
         if preaggregate_protection.formal_blocker(conn, instance_id, now):
@@ -333,7 +333,7 @@ class StateStore:
     def prepare_attempt(self, instance_id: str, *, now: datetime | None = None,
                         max_attempts: int = 3) -> bool:
         """Reserve an eligible instance without allowing external execution yet."""
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(datetime_timezone.utc)
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
         if preaggregate_protection.formal_blocker(conn, instance_id, now):
@@ -360,7 +360,7 @@ class StateStore:
 
     def mark_dispatched(self, instance_id: str, query_id: str, *, now: datetime | None = None) -> None:
         """Commit dispatch intent and its attempt before the runner can be called."""
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(datetime_timezone.utc)
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
         preaggregate_protection.assert_formal_allowed(conn, instance_id, now)
@@ -380,7 +380,7 @@ class StateStore:
                now: datetime | None = None, diagnostic: dict | None = None) -> None:
         if status not in (TaskStatus.SUCCESS, TaskStatus.FAILED, TaskStatus.UNKNOWN):
             raise ValueError("finish requires SUCCESS, FAILED or UNKNOWN")
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(datetime_timezone.utc)
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
         if status == TaskStatus.SUCCESS:
@@ -440,7 +440,7 @@ class StateStore:
     def recover_running(self) -> int:
         conn = self._connection(write=True)
         with conn:
-            now = _stamp(datetime.now(timezone.utc))
+            now = _stamp(datetime.now(datetime_timezone.utc))
             backfill.recover_running(conn, datetime.fromisoformat(now))
             preaggregate.recover_running(conn, datetime.fromisoformat(now))
             rows = checkpoints.classified_rows(conn, include_unknown=False)
@@ -473,7 +473,7 @@ class StateStore:
             raise ValueError("resolution must be SUCCESS or PENDING")
         if not note.strip():
             raise ValueError("A non-empty operator note is required")
-        now = _stamp(datetime.now(timezone.utc))
+        now = _stamp(datetime.now(datetime_timezone.utc))
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
         preaggregate.assert_unblocked(conn, instance_id)
