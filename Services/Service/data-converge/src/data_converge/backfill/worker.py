@@ -9,17 +9,19 @@ from data_converge.dag import DAGExecutor, TaskStatus
 from data_converge.errors import safe_error_details
 from .plan import plan_revision
 from .queue import Queue
+from .preaggregate import validate_eligibility
 
 logger = logging.getLogger(__name__)
 
 
 class BackfillWorker:
-    def __init__(self, definition, store, runner, *, stop_check=lambda: False):
+    def __init__(self, definition, store, runner, *, stop_check=lambda: False, clock=None):
         self.definition = definition
         self.store = store
         self.runner = runner
         self.stop_check = stop_check
         self.timezone = ZoneInfo(definition.options.timezone)
+        self.clock = clock or (lambda: datetime.now(self.timezone))
         self.revision = plan_revision(definition)
         self.path = store.path.parent / "backfill.sqlite3"
 
@@ -42,7 +44,7 @@ class BackfillWorker:
         item = self._queue_operation(queue.next_item, tolerate_queue_errors)
         if item is None:
             return
-        previous = self.store.get_backfill(item["item_id"])
+        previous = self._receipt(item)
         if previous is None:
             result = self._process(queue, item, tolerate_queue_errors)
         elif previous["status"] == "RUNNING":
@@ -55,28 +57,28 @@ class BackfillWorker:
             lambda: queue.complete(item["item_id"], result["status"],
                                    query_id=result.get("query_id"), error=result.get("error")),
             tolerate_queue_errors)
-        logger.info("BACKFILL_WINDOW_FINISHED job_id=%s instance=%s status=%s query_id=%s error=%s",
-                    item["job_id"], item["instance_id"], result["status"],
+        logger.info("BACKFILL_WINDOW_FINISHED execution_kind=%s job_id=%s instance=%s status=%s query_id=%s error=%s",
+                    item["execution_kind"], item["job_id"], item["instance_id"], result["status"],
                     result.get("query_id"), result.get("error"))
 
     def _process(self, queue, item, tolerate):
-        if item["revision"] != self.revision:
+        if item["execution_kind"] == "BACKFILL" and item["revision"] != self.revision:
             return self._blocked("BACKFILL_CONFIGURATION_CHANGED")
         try:
             instance = self._instance(item)
         except (KeyError, ValueError, TypeError):
             return self._blocked("BACKFILL_WINDOW_CHANGED")
+        if item["execution_kind"] == "PREAGGREGATE":
+            return self._process_preaggregate(queue, item, instance, tolerate)
         if self.store.get_status(instance.instance_id) == TaskStatus.SUCCESS and not item["recompute"]:
             return self.store.begin_backfill(item["item_id"], instance, recompute=False)
         dependencies = self._queue_operation(
-            lambda: {upstream: queue.item_status(item["job_id"], upstream)
+            lambda: {upstream: queue.item_result(item["job_id"], upstream)
                      for upstream in instance.upstream_instance_ids}, tolerate)
         if dependencies is None:
             return None
-        for upstream, selected in dependencies.items():
-            if (selected is not None and selected not in ("SUCCESS", "SKIPPED")
-                    or selected is None and self.store.get_status(upstream) != TaskStatus.SUCCESS):
-                return self._blocked("BACKFILL_UPSTREAM_NOT_SUCCESSFUL")
+        if not self._dependencies_successful(item, dependencies):
+            return self._blocked("BACKFILL_UPSTREAM_NOT_SUCCESSFUL")
         if self.stop_check():
             # Keep queued; no claim or SQL when leadership/shutdown changed.
             return None
@@ -97,13 +99,16 @@ class BackfillWorker:
                 raise ValueError("BACKFILL_WINDOW_CHANGED")
         if list(instance.upstream_instance_ids) != item["upstream_instance_ids"]:
             raise ValueError("BACKFILL_WINDOW_CHANGED")
-        if instance.data_end.timestamp() > datetime.now(self.timezone).timestamp():
+        if (item["execution_kind"] == "BACKFILL"
+                and instance.data_end.timestamp() > self.clock().timestamp()):
             raise ValueError("BACKFILL_END_IN_FUTURE")
         return instance
 
     def _execute(self, instance, item):
-        logger.info("BACKFILL_WINDOW_STARTED job_id=%s instance=%s query_id=%s",
-                    item["job_id"], instance.instance_id, instance.query_id)
+        logger.info("BACKFILL_WINDOW_STARTED execution_kind=%s job_id=%s instance=%s "
+                    "query_id=%s window=[%s,%s) formal_scheduled_time=%s",
+                    item["execution_kind"], item["job_id"], instance.instance_id, instance.query_id,
+                    instance.data_start, instance.data_end, item.get("formal_scheduled_time"))
         diagnostic = None
         try:
             self.runner(instance)
@@ -113,8 +118,72 @@ class BackfillWorker:
         else:
             status, reason = TaskStatus.SUCCESS, None
         # Explicit requests never spill into the ordinary automatic retry queue.
-        self.store.finish(instance.instance_id, status, error=reason, retryable=False,
-                          diagnostic=diagnostic)
+        if item["execution_kind"] == "PREAGGREGATE":
+            self.store.finish_preaggregate(item["item_id"], status, error=reason,
+                                           diagnostic=diagnostic, now=self.clock())
+        else:
+            self.store.finish(instance.instance_id, status, error=reason, retryable=False,
+                              diagnostic=diagnostic)
+
+    def _receipt(self, item):
+        getter = (self.store.get_preaggregate if item["execution_kind"] == "PREAGGREGATE"
+                  else self.store.get_backfill)
+        return getter(item["item_id"])
+
+    def _process_preaggregate(self, queue, item, instance, tolerate):
+        now = self.clock()
+        if instance.data_end.timestamp() <= now.timestamp():
+            return self.store.begin_preaggregate(item, instance, now=now)
+        if item["revision"] != self.revision:
+            return self._blocked("BACKFILL_CONFIGURATION_CHANGED")
+        try:
+            validate_eligibility(self.definition, self.store, instance, now, item)
+        except ValueError as error:
+            return self._blocked(str(error))
+        dependencies = self._queue_operation(
+            lambda: {upstream: queue.item_result(item["job_id"], upstream)
+                     for upstream in instance.upstream_instance_ids}, tolerate)
+        if dependencies is None:
+            return None
+        if not self._dependencies_successful(item, dependencies):
+            return self._blocked("BACKFILL_UPSTREAM_NOT_SUCCESSFUL")
+        if self.stop_check():
+            return None
+        # Repeat using the actual dispatch clock: queue reads may cross data_end.
+        now = self.clock()
+        if instance.data_end.timestamp() > now.timestamp():
+            try:
+                validate_eligibility(self.definition, self.store, instance, now, item)
+            except ValueError as error:
+                return self._blocked(str(error))
+        result = self.store.begin_preaggregate(item, instance, now=now)
+        if result["status"] != "RUNNING":
+            return result
+        instance.query_id = result["query_id"]
+        self._execute(instance, item)
+        return self.store.get_preaggregate(item["item_id"])
+
+    def _dependencies_successful(self, item, dependencies):
+        for upstream, selected in dependencies.items():
+            formal = self.store.get_status(upstream) == TaskStatus.SUCCESS
+            if selected is not None:
+                if selected["status"] == "SUCCESS":
+                    continue
+                if (selected["status"] == "SKIPPED"
+                        and selected["execution_kind"] == "BACKFILL" and formal):
+                    continue
+                return False
+            if self.store.preaggregate_blocker(upstream):
+                return False
+            if formal:
+                continue
+            if item["execution_kind"] != "PREAGGREGATE":
+                return False
+            latest = self.store.latest_preaggregate(upstream)
+            if (latest is None or latest["revision"] != item["revision"]
+                    or latest.get("effective_status", latest["status"]) != "SUCCESS"):
+                return False
+        return True
 
     @staticmethod
     def _blocked(reason):

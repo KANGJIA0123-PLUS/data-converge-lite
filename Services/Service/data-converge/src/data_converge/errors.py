@@ -24,7 +24,8 @@ _PUBLIC_CODES = frozenset("""
     LOGGING_SETTING_INVALID TIME_REQUIRES_ISO8601_WITH_TIMEZONE STATE_DEPLOYMENT_BINDING_CHANGED
     STATE_START_CANNOT_BE_CHANGED START_TIME_MUST_BE_A_FIVE_MINUTE_BOUNDARY
     STATE_DEPLOYMENT_BINDING_CHANGED_OR_UNINITIALIZED WINDOW_PRECEDES_COVERAGE_START
-    SCHEDULER_SETTING_INVALID SQL_TIMEOUT_MUST_NOT_EXCEED_300_SECONDS
+    SCHEDULER_SETTING_INVALID SQL_TIMEOUT_MUST_NOT_EXCEED_300_SECONDS CROSS_PERIOD_WAIT_TASK_UNKNOWN
+    PREAGGREGATE_FORMAL_WINDOW_NOT_ENDED
     CONFIG_PATH_INVALID CONFIG_PATH_ENV_MISSING NO_TASKS_CONFIGURED DWD_READY_REQUIRES_FIVE_MINUTE_ROOT_TASKS
     STATE_DATABASE_INVALID STATE_DATABASE_MISSING STATE_DIRECTORY_NOT_EMPTY STATE_NOT_INITIALIZED
     LEADERSHIP_BUSY LEADERSHIP_LOST LEADERSHIP_REDIS_FAILED LEADERSHIP_LEDGER_MISMATCH
@@ -45,6 +46,13 @@ _PUBLIC_CODES = frozenset("""
     ARCHIVE_CANCELLED ARCHIVE_TIMEOUT ARCHIVE_DIRECTORY_INVALID ARCHIVE_BUSY ARCHIVE_FAILED
     ARCHIVE_STATUS_INVALID ARCHIVE_STATUS_WRITE_FAILED
     ARCHIVE_TIMESTAMP_INVALID ARCHIVE_LOCK_INVALID ARCHIVE_MAINTENANCE_FAILED
+""".split())
+_PREAGGREGATE_CODES = frozenset("""
+    PREAGGREGATE_COVERAGE_TASK_CHANGED PREAGGREGATE_COVERAGE_DATASET_CHANGED
+    PREAGGREGATE_COVERAGE_TIMEZONE_CHANGED PREAGGREGATE_COVERAGE_CLEANUP_CHANGED
+    PREAGGREGATE_COVERAGE_START_CHANGED PREAGGREGATE_COVERAGE_EFFECTIVE_CHANGED
+    PREAGGREGATE_COVERAGE_RETIRED PREAGGREGATE_COVERAGE_CURSOR_PASSED
+    PREAGGREGATE_NOT_UNKNOWN PREAGGREGATE_UNRESOLVED
 """.split())
 _TEXT_FIELDS = {"error_code": r"[A-Z][A-Z0-9_]{0,127}",
                 "error_type": r"[A-Za-z_][A-Za-z0-9_]{0,63}",
@@ -77,6 +85,18 @@ def _http_error_details(error: urllib.error.HTTPError) -> dict:
     return safe_diagnostic_details(details)
 
 
+def _public_error_code(exc):
+    if len(exc.args) != 1 or not isinstance(exc.args[0], str):
+        return None
+    message = exc.args[0]
+    if message in _PUBLIC_CODES:
+        return message
+    code, _, identifier = message.partition(':')
+    if code in _PREAGGREGATE_CODES and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', identifier):
+        return code
+    return None
+
+
 def safe_error_details(exc: BaseException) -> dict:
     """Describe failures without generic exception messages, SQL or credentials."""
     reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
@@ -91,8 +111,8 @@ def safe_error_details(exc: BaseException) -> dict:
     if isinstance(exc, TaskExecutionError):
         details.update(safe_diagnostic_details(exc.diagnostic))
         details.update(error_code=str(exc), query_id=exc.query_id)
-    elif len(exc.args) == 1 and isinstance(exc.args[0], str) and exc.args[0] in _PUBLIC_CODES:
-        details["error_code"] = exc.args[0]
+    elif code := _public_error_code(exc):
+        details["error_code"] = code
     return safe_diagnostic_details(details)
 
 

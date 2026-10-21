@@ -13,6 +13,8 @@ from .checks import (credential_files, definition_check, failure, heartbeat_chec
 from .ledger import DiagnosticLedger
 from .report import attempt_record, check, evidence_action, legacy_resolution_record, report, task_record
 from .windows import list_windows, parse_window
+from .aggregation import (attach_current_wait, attach_instance_extras, inspect_preaggregate,
+                          preaggregate_checks, preaggregate_page)
 
 
 def _read_context(path):
@@ -78,6 +80,7 @@ def failures(path, *, task=None, limit=20, offset=0):
         with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
             counts, rows = store.problems(task=task, limit=limit, offset=offset)
             historical = historical_check(store)
+            early = preaggregate_page(store, task=task, limit=limit, offset=offset, problems_only=True)
         total = sum(counts.values())
         data = dict(total=total, limit=limit, offset=offset, task=task,
                     has_more=offset + len(rows) < total, instances=[task_record(row) for row in rows])
@@ -85,7 +88,9 @@ def failures(path, *, task=None, limit=20, offset=0):
         result['evidence'].update(total=total, shown=len(rows), offset=offset, has_more=data['has_more'])
         if historical is not None:
             data['historical_counts'] = historical['evidence']['counts']
-        return report('failures', [result] + ([historical] if historical is not None else []), data)
+        data['preaggregate'] = early
+        checks = [result] + preaggregate_checks(early, 'failures')
+        return report('failures', checks + ([historical] if historical is not None else []), data)
     except Exception as error:
         return report('failures', [failure('state', error, '异常任务查询失败', '先运行 --diagnose。')])
 
@@ -114,9 +119,9 @@ def inspect_instance(path, instance_id, *, limit=20, offset=0):
         with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
             row = store.get_instance(instance_id)
             if row is None:
-                return report('inspect-instance', [check('instance', 'FAIL', '未找到任务实例',
-                              {'instance_id': instance_id}, '从 --failures 或 --status 复制完整 instance_id。')])
+                return inspect_preaggregate(store, instance_id, limit=limit, offset=offset)
             data, checks = _instance_context(store, row)
+            attach_instance_extras(store, row, data, checks, limit=limit, offset=offset)
             _inspect_history(store, instance_id, data, checks, limit=limit, offset=offset)
             try:
                 data['diagnostic'] = store.get_execution_diagnostic(instance_id)
@@ -187,7 +192,8 @@ def history(path, *, task=None, limit=20, offset=0):
         _, directory = _read_context(path)
         with closing(DiagnosticLedger(directory / 'state.sqlite3')) as store:
             data, result = _history_page(store, task=task, limit=limit, offset=offset)
-        return report('history', [result], data)
+            data['preaggregate'] = preaggregate_page(store, task=task, limit=limit, offset=offset)
+        return report('history', [result] + preaggregate_checks(data['preaggregate'], 'history'), data)
     except Exception as error:
         return report('history', [failure('execution-history', error, '执行历史查询失败', '先运行 --diagnose。')])
 
@@ -229,6 +235,7 @@ def _inspect_dependencies(store, definition, row, data):
         cross_period_tasks=[name for name in expected.task.depends_on
                             if definition.dag.tasks[name].aggregation_interval
                             != expected.task.aggregation_interval])
+    attach_current_wait(store, definition, expected, data)
     ready = definition.config['dwd_ready']
     if ready['enabled'] and expected.task.aggregation_interval == 'PT5M':
         data['windows'] = list_windows(store, ready, selected=expected.data_start)

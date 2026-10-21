@@ -33,6 +33,10 @@ def _serialize_plan(plan):
             or not plan['revision'] or not isinstance(plan.get('recompute'), bool)
             or plan.get('total') != len(items)):
         raise BackfillQueueError('BACKFILL_PLAN_INVALID')
+    try:
+        _validate_execution_kinds(plan)
+    except BackfillQueueError:
+        raise BackfillQueueError('BACKFILL_PLAN_INVALID') from None
     payload = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return payload, hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
@@ -48,12 +52,28 @@ def _job_status(counts):
 def _loaded_plan(raw):
     plan = json.loads(raw)
     if (not isinstance(plan, dict) or type(plan.get('schema_version')) is not int
-            or plan['schema_version'] != 1 or not isinstance(plan.get('revision'), str)
+            or plan['schema_version'] not in (1, 2) or not isinstance(plan.get('revision'), str)
             or not plan['revision'] or not isinstance(plan.get('recompute'), bool)
             or type(plan.get('total')) is not int or plan['total'] < 1
             or not isinstance(plan.get('items'), list) or len(plan['items']) != plan['total']):
         raise BackfillQueueError('BACKFILL_QUEUE_INVALID')
+    _validate_execution_kinds(plan)
     return plan
+
+
+def _validate_execution_kinds(plan):
+    version = plan.get('schema_version')
+    if not isinstance(version, int) or isinstance(version, bool) or version not in (1, 2):
+        raise BackfillQueueError('BACKFILL_QUEUE_INVALID')
+    for item in plan['items']:
+        if not isinstance(item, dict):
+            raise BackfillQueueError('BACKFILL_QUEUE_INVALID')
+        kind = item.get('execution_kind', 'BACKFILL' if version == 1 else None)
+        if kind not in ('BACKFILL', 'PREAGGREGATE') or version == 1 and kind != 'BACKFILL':
+            raise BackfillQueueError('BACKFILL_QUEUE_INVALID')
+        if kind == 'PREAGGREGATE' and (not isinstance(item.get('config_evidence'), dict)
+                or not isinstance(item.get('formal_scheduled_time'), str)):
+            raise BackfillQueueError('BACKFILL_QUEUE_INVALID')
 
 
 def _loaded_item(raw):
@@ -78,7 +98,8 @@ def _pending_row(row):
                 or row['item_id'] != f"{row['job_id']}:{ordinal}"):
             raise BackfillQueueError('BACKFILL_QUEUE_INVALID')
         return dict(item, job_id=row['job_id'], item_id=row['item_id'],
-                    ordinal=ordinal, revision=plan['revision'], recompute=plan['recompute'])
+                    ordinal=ordinal, revision=plan['revision'], recompute=plan['recompute'],
+                    execution_kind=item.get('execution_kind', 'BACKFILL'))
     except (KeyError, IndexError, TypeError, ValueError, RecursionError):
         raise BackfillQueueError('BACKFILL_QUEUE_INVALID') from None
 
@@ -195,6 +216,12 @@ class Queue:
             (job_id, instance_id)).fetchone()
         return row['status'] if row else None
 
+    def item_result(self, job_id, instance_id):
+        row = self.connection.execute(
+            'SELECT * FROM backfill_items WHERE job_id=? AND instance_id=?',
+            (job_id, instance_id)).fetchone()
+        return self._public_item(row) if row else None
+
     def status(self, job_id, limit=20, offset=0):
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or offset < 0:
             raise BackfillQueueError('BACKFILL_PAGINATION_INVALID')
@@ -220,7 +247,9 @@ class Queue:
 
     @staticmethod
     def _public_item(row):
-        return dict(json.loads(row['payload']), item_id=row['item_id'], ordinal=row['ordinal'],
+        payload = json.loads(row['payload'])
+        payload.setdefault('execution_kind', 'BACKFILL')
+        return dict(payload, item_id=row['item_id'], ordinal=row['ordinal'],
                     status=row['status'], query_id=row['query_id'], error=row['error'],
                     finished_at=row['finished_at'])
 

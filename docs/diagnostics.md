@@ -122,16 +122,20 @@ bash /opt/its/data-converge/bin/start_data_converge.sh --diagnose --online --for
 | `--diagnose --online` | 追加ClickHouse凭据解析与固定`SELECT 1`；Redis凭据/PSM客户端创建与`PING`、两个队列的`TYPE`/`LLEN`；启用选主时只读观察临时租约持有者是否存在及TTL |
 | `--failures` | 全历史异常总数、分页结果、任务/窗口、尝试次数、query_id、固定错误码及处理建议 |
 | `--history` | 按 query_id 保存的历次执行、真实结果、安全错误证据及人工处置；可筛选任务和分页 |
-| `--inspect-instance` | 单个实例、当前及历次尝试的安全错误证据、SQL文件路径、当前未成功的同周期前置实例、跨周期数据来源、对应五分钟DWD状态；未成功前置实例最多显示100条并标明截断 |
+| `--inspect-instance` | 单个实例、历次尝试和提前执行记录、安全错误证据、SQL文件路径、同周期前置实例、跨周期等待截止及缺失快照、对应五分钟DWD状态；未成功前置实例最多显示100条并标明截断 |
 | `--dwd-status` | 每个窗口的已收到/缺失类型、等待时长、最后接收时间、收齐延迟；包括一条信号也没收到的完整窗口 |
 
 `--inspect-instance` 比较当前配置与状态库绑定，再按已记录的调度时间重建依赖。配置不一致时不猜测历史依赖；配置、依赖或附加错误证据损坏，也保留能够读取的实例基本信息。
 
 JSON 中的 `data.dependencies` 只统计当前同周期执行前置实例；`total` 为数量，`blocked` 与 `blocked_count` 表示其中未成功的实例。`data.lineage.upstream_tasks` 保留配置中的直接上游任务，`cross_period_tasks` 列出其中不同汇聚周期的任务，仅用于说明数据来源，不纳入阻塞数量。配置不匹配、历史窗口已隔离或早于当前任务生效起点时，继续显示 SKIP，不按当前规则解释历史。
 
-小时、日、月等跨周期任务按配置的计划时间汇聚已有数据，不再要求覆盖窗口内的上游实例全部成功。因此依赖检查 PASS 只说明当前同周期前置条件已满足，不能据此认定所有历史来源数据已齐。旧 `BLOCKED` 原始状态及错误证据会保留，未隔离且仍符合任务窗口与重试条件的实例由下一轮调度重新判断；诊断命令本身不改变状态。
+小时、日、月等跨周期任务默认从 Cron 计划时间额外等待最多 5 分钟，超时后允许按已有数据汇聚。因此同周期依赖检查 PASS 不能证明跨周期来源已齐。`data.cross_period_wait` 显示持久化决策：`scheduled_due_at` 为原计划时间，`deadline_at` 为截止，`status` 为 WAITING / READY / TIMED_OUT，`missing_count` 与 `missing_samples` 是该决策的缺失证据。TIMED_OUT 在执行成功后仍保留，不能把正式 SUCCESS 当作来源完整；旧实例没有可信截止记录时不补造等待。诊断命令不会启动 SQL 或修改等待状态。
 
-迟到数据留待后续人工补算，不触发已成功窗口自动重算。现有手动运行会跳过相同的 `SUCCESS` 实例，`--resolve-instance` 仅支持核实 UNKNOWN 成功，或授权 UNKNOWN/FAILED 重试；它不支持重置成功实例。本次未增加成功窗口的人工补算入口。
+迟到数据不触发已成功窗口自动重算，需要显式 `--backfill --recompute`。`--resolve-instance` 仅支持核实 UNKNOWN 成功，或授权 UNKNOWN/FAILED 重试，不用于重置成功实例。
+
+`data.preaggregate.attempts` 单独展示提前执行；`status` 保留原始执行事实，`effective_status` 反映人工核查，`formal_scheduled_time` 是预计正式到期时间，`covered_at` 仅在正式 SQL 实际成功后记录。正式实例尚未入账时，`--inspect-instance` 仍能查询提前记录，并明确 `formal_instance_registered=false`。`--history` 的正式历史和提前历史独立分页；`--failures` 展示尚未正式覆盖、尚未人工核查的提前异常，`--recovery-plan` 展示未确认的提前写入。提前 UNKNOWN 使用 `--resolve-preaggregate ITEM_ID --resolution success|retry --note 核查依据`，不会标记正式完成。
+
+即使是正式 UNKNOWN，经 `--resolve-instance ... --resolution success` 核查后也不写 `covered_at`；若还需解除配置覆盖保护，保留原配置显式 `--backfill --recompute`，以实际成功完成覆盖。`cross_period_wait.current_missing` 是按当前匹配配置重新读取的缺失情况，`enabled_now` 是当前配置开关；它们不覆盖原决策证据，也不会修改账本。
 
 任务的 `retryable` 只是原执行策略中的标记，仍需结合最大尝试次数及 `next_retry_at` 判断，不代表命令会发起重试。UNKNOWN 表示结果未确认，必须先凭 `query_id` 核实 ClickHouse 结果，再按原人工解决流程处理，不能直接重跑。
 

@@ -4,7 +4,7 @@ from datetime import datetime
 import uuid
 
 from data_converge.dag.builder import timeline_time
-from . import checkpoints, events, history, retirement
+from . import checkpoints, events, history, retirement, preaggregate_protection
 
 
 def available(conn):
@@ -27,7 +27,10 @@ def _create_schema(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS backfill_attempts_query ON backfill_attempts(query_id)")
 
 
-def _existing_decision(conn, instance, recompute):
+def _existing_decision(conn, instance, recompute, now):
+    reason = preaggregate_protection.formal_blocker(conn, instance.instance_id, now)
+    if reason:
+        return "BLOCKED", reason
     if retirement.get(conn, instance.instance_id) is not None:
         return "BLOCKED", "BACKFILL_RETIRED_INSTANCE"
     row = conn.execute("SELECT * FROM task_instances WHERE instance_id=?",
@@ -52,7 +55,7 @@ def begin(conn, item_id, instance, *, recompute, now):
     _create_schema(conn)
     stamp = now.isoformat(timespec="microseconds")
     with conn:
-        decision = _existing_decision(conn, instance, recompute)
+        decision = _existing_decision(conn, instance, recompute, now)
         query_id = None
         status, error = decision or ("RUNNING", None)
         if decision is None:

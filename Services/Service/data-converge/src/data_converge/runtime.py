@@ -137,6 +137,9 @@ def build_scheduler(definition: ApplicationDefinition, runner: TaskRunner,
         definition.dag, definition.builder, executor, timezone=options.timezone,
         state_store=store, start_time=coverage_start,
         poll_interval_seconds=options.poll_interval_seconds, catchup_limit=options.catchup_limit,
+        cross_period_wait_enabled=options.cross_period_wait_enabled,
+        cross_period_wait_seconds=options.cross_period_wait_seconds,
+        cross_period_wait_overrides=options.cross_period_wait_overrides,
     )
     scheduler.background_worker = BackfillWorker(
         definition, store, runner, stop_check=lambda: scheduler.stop_requested)

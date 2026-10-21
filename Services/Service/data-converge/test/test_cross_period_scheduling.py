@@ -95,10 +95,11 @@ def test_old_cross_period_blocked_window_resumes_after_restart(
         store.close()
 
 
-def test_hour_waits_for_its_cron_but_not_blocked_five_minute_windows(tmp_path):
+def test_disabled_wait_policy_runs_at_cron_despite_blocked_five_minute_windows(tmp_path):
     coverage = datetime(2026, 10, 12, 10, 0, tzinfo=SHANGHAI)
     calls = []
     scheduler, store = persistent_scheduler(tmp_path, calls, coverage)
+    scheduler.cross_period_wait.enabled = False
     scheduler.dag_executor.readiness_check = lambda instance, now: (
         "WAITING_DWD" if instance.taskname == "task_5min" else None)
     try:

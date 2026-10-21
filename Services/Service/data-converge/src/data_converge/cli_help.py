@@ -19,6 +19,7 @@ DESCRIPTION = '''Data Converge Lite · 运行与故障定位
   想追查某个任务为什么异常         --inspect-instance '实例ID'
   想查哪些 DWD 信号没到            --dwd-status
   想手动汇聚过去一段时间的数据     --backfill --task 任务名 --from 起点 --to 终点
+  想提前汇聚当前未结束窗口做测试   --backfill --preaggregate --task 任务名 --from 起点 --to 终点
   想查询后台补算进度               --backfill-status 补算任务号
   想看原始状态快照                 --status
 
@@ -75,6 +76,8 @@ EXAMPLES = f'''可直接复制的查询示例：
   # --all-tasks 代替 --task 任务名可选全部任务；只纳入范围内的完整窗口
   # 默认跳过已成功窗口；补入迟到数据时显式加 --recompute
   dconv --backfill-status JOB_ID --format json
+  # 提前测试仍写原表；正式到期会重新汇聚覆盖，提前成功不代表正式完成
+  # 在普通补算参数上加 --preaggregate，先用 --dry-run 查看提前窗口和自动正式触发时间
 
 结果怎么看：
   PASS=该项通过；WARN=需要关注；FAIL=异常或检查未完成；SKIP=未检查。
@@ -96,6 +99,12 @@ EXAMPLES = f'''可直接复制的查询示例：
   --dry-run 不写文件；--request-id 可避免同一计划重复提交；更改计划需使用新标识。
   补算区间为 [from,to)，时间须带时区；指定任务需对齐其窗口边界。
   --recompute 会重新汇聚已成功窗口；UNKNOWN 仍须先核实和人工处置。
+  --preaggregate 允许当前已开始未结束的窗口提前写原表，不创建未来业务数据。
+  --resolve-preaggregate ITEM_ID --resolution success|retry --note 核查依据：
+    先确认清理和汇聚均已结束；只核查提前结果，不标记正式成功，也不立即重跑。
+  跨周期默认开启最多额外等待300秒；scheduler.cross_period_wait_enabled=false 可关闭。
+  cross_period_wait_seconds 设置全局秒数，cross_period_wait_overrides 按任务覆盖。
+  等待截止基于原Cron触发时间；上游齐全立即放行，超时按已有数据执行并告警。
   --run-once 可能补跑多个任务，不是预览；所有辅助参数应随对应主命令使用。
   --init-state 会初始化状态；--resolve-instance 会人工修改实例状态。
   --apply-config 取得租约和状态锁，先备份再事务迁移；不执行 SQL、不清零旧执行事实。
@@ -131,9 +140,11 @@ def add_operation_arguments(parser, modes):
     modes.add_argument('--run-once', action='store_true', help='运行一次调度，会消费信号并执行符合条件的 SQL')
     modes.add_argument('--run-task', metavar='TASK', help='执行指定任务，必须同时指定 --scheduled-time')
     modes.add_argument('--resolve-instance', metavar='ID', help='人工修改实例状态，必须指定 --resolution 和 --note')
+    modes.add_argument('--resolve-preaggregate', metavar='ITEM_ID',
+                       help='核查提前执行的未知结果，不改变正式成功状态；需 --resolution 和 --note')
     parser.add_argument('--start-time', metavar='TIME', help='首次覆盖起点，仅配合 --init-state；带时区并对齐五分钟')
     parser.add_argument('--scheduled-time', metavar='TIME', help='--run-task 的调度时间，必须为带时区的 ISO8601 时间')
     parser.add_argument('--now', metavar='TIME', help='仅配合 --run-once，指定评估时间，必须带时区')
     parser.add_argument('--resolution', choices=['success', 'retry'],
-                        help='配合 --resolve-instance：确认成功，或将实例置为等待重试；先核实远端结果')
-    parser.add_argument('--note', metavar='TEXT', help='配合 --resolve-instance，记录人工处理依据，不能为空')
+                        help='配合人工核查命令：确认成功或允许后续重算；先核实远端结果')
+    parser.add_argument('--note', metavar='TEXT', help='配合人工核查命令记录处理依据，不能为空')

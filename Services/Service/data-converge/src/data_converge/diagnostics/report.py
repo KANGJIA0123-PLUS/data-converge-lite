@@ -77,6 +77,8 @@ def legacy_resolution_record(row):
 
 
 def render_text(value):
+    from .aggregation import render_aggregation
+
     lines = [f"{value['command']}  {value['status']}  {value['checked_at']}  ({value['timezone']})"]
     for item in value['checks']:
         lines.append(f"[{item['status']}] {item['id']}: {item['summary']}")
@@ -102,6 +104,7 @@ def render_text(value):
         lines.extend(_render_recovery(data))
     if value['command'] == 'events':
         lines.extend(_render_events(data))
+    lines.extend(render_aggregation(data))
     return '\n'.join(lines)
 
 
@@ -180,7 +183,7 @@ def _render_instance(data):
     if data.get('action'):
         lines.append('  建议: ' + data['action'])
     if cross_period := data.get('lineage', {}).get('cross_period_tasks'):
-        lines.append('  跨周期数据来源（不作为执行前置条件）: ' + ', '.join(cross_period))
+        lines.append('  跨周期数据来源（按配置限时等待）: ' + ', '.join(cross_period))
     if dependencies := data.get('dependencies'):
         lines.append(f"  同周期执行前置实例: {dependencies['total']}，未成功: {dependencies['blocked_count']}")
         lines.extend(f"    {item['status']}  {item['instance_id']}" for item in dependencies['blocked'])

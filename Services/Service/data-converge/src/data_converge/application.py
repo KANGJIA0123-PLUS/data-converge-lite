@@ -171,10 +171,12 @@ class Application:
         if snapshot is None:
             if store.get_meta('configuration_required') is not None:
                 raise StartupError('CONFIG_STATE_INVALID')
+            self._validate_preaggregate_configuration(store)
             return
         coverage_value = store.get_meta('coverage_start')
         coverage = parse_time(coverage_value) if coverage_value else None
-        previous, previous_revision, _ = validate_configuration_snapshot(snapshot, coverage)
+        previous, previous_revision, starts = validate_configuration_snapshot(snapshot, coverage)
+        self._validate_preaggregate_configuration(store, task_starts=starts)
         current_revision = manifest_digest(self.manifest)
         if current_revision != previous_revision:
             diagnostic = dict(previous_revision=previous_revision, current_revision=current_revision,
@@ -182,6 +184,16 @@ class Application:
                               configuration_enforced=False, issue='DC-STATE-002')
             logger.warning('CONFIGURATION_CHECK_DISABLED diagnostic=%s',
                            json.dumps(diagnostic, ensure_ascii=True))
+
+    def _validate_preaggregate_configuration(self, store: StateStore, *, task_starts=None) -> None:
+        starts = store.get_task_effective_starts() if task_starts is None else task_starts
+        cleanup = {name: task.cleanup_column for name, task in self.definition.dag.tasks.items()}
+        try:
+            store.validate_preaggregate_configuration(
+                self.manifest, starts, store.get_meta('coverage_start'),
+                timezone=self.definition.options.timezone, cleanup_columns=cleanup)
+        except ValueError as exc:
+            raise StartupError(str(exc)) from None
 
     @contextmanager
     def _active_state(self, *, bootstrap: bool = False):
@@ -243,6 +255,14 @@ class Application:
             store.resolve(instance_id, 'SUCCESS' if resolution == 'success' else 'PENDING', note)
         return CommandResult(payload={'status': 'RESOLVED', 'instance_id': instance_id})
 
+    def resolve_preaggregate(self, item_id: str, resolution: str, note: str) -> CommandResult:
+        with self._active_state() as (store, lease):
+            if lease is not None:
+                lease.assert_owned()
+            store.resolve_preaggregate(item_id, resolution, note)
+        return CommandResult(payload={'status': 'RESOLVED', 'item_id': item_id,
+                                      'execution_kind': 'PREAGGREGATE', 'resolution': resolution})
+
     def _runtime(self, store: StateStore, lease=None, heartbeat=None):
         optional = {} if self.dependencies is None else {'dependencies': self.dependencies}
         if lease is not None:
@@ -263,12 +283,21 @@ class Application:
             task_start = store.get_task_effective_starts().get(taskname)
             if task_start is not None and timeline_time(candidate.data_start) < timeline_time(task_start):
                 raise StartupError('TASK_WINDOW_BEFORE_EFFECTIVE_START')
+            reason = store.preaggregate_formal_blocker(candidate.instance_id, datetime.now(system_timezone()))
+            if reason:
+                raise StartupError(reason)
             with self._runtime(store, lease) as runtime:
                 return report_result(runtime.run_task(taskname, scheduled))
 
     def run_once(self, now: str | None = None) -> CommandResult:
-        with self._active_state() as (store, lease), self._runtime(store, lease) as runtime:
-            return report_result(runtime.run_once(parse_time(now) if now else None))
+        with self._active_state() as (store, lease):
+            requested = parse_time(now) if now else None
+            if requested is not None:
+                reason = store.preaggregate_schedule_blocker(requested, datetime.now(system_timezone()))
+                if reason:
+                    raise StartupError(reason)
+            with self._runtime(store, lease) as runtime:
+                return report_result(runtime.run_once(requested))
 
     def serve(self) -> CommandResult:
         logger.info('SYSTEM_TIMEZONE_SELECTED: timezone=%s', self.definition.options.timezone)

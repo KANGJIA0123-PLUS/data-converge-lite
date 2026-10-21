@@ -152,11 +152,17 @@ def hour_boundary(value: datetime, *, inclusive: bool) -> datetime:
 
 def required_upstream_ids(dag: DAG, task: TaskDefinition,
                           data_start: datetime, data_end: datetime) -> Tuple[str, ...]:
-    """Validate window coverage; only same-period parents gate execution.
+    """Validate coverage and retain only same-period hard dependencies."""
+    return _required_ids(dag, task, data_start, data_end, cross_period=False)
 
-    Cross-period parents remain in the static DAG as data lineage. Their
-    historical success records do not delay a child's scheduled aggregation.
-    """
+
+def required_cross_period_ids(dag: DAG, task: TaskDefinition,
+                              data_start: datetime, data_end: datetime) -> Tuple[str, ...]:
+    """Enumerate direct cross-period parents separately from hard dependencies."""
+    return _required_ids(dag, task, data_start, data_end, cross_period=True)
+
+
+def _required_ids(dag, task, data_start, data_end, *, cross_period):
     result = []
     for parent_name in task.depends_on:
         parent = dag.get_task(parent_name)
@@ -171,7 +177,7 @@ def required_upstream_ids(dag: DAG, task: TaskDefinition,
             cursor = subtract_interval(cursor, interval)
         if timeline_time(cursor) != timeline_time(data_start):
             raise ValueError(f"Parent windows do not cover {task.taskname}: {parent_name}")
-        if interval == task.aggregation_interval:
+        if (interval != task.aggregation_interval) == cross_period:
             result.extend(make_instance_id(parent_name, make_batch_id(end)) for end in reversed(ends))
     return tuple(result)
 

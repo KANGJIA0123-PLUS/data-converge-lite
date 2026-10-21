@@ -13,8 +13,9 @@ from data_converge.dag.retry import can_start_attempt
 from data_converge.errors import safe_diagnostic_details
 
 from .bootstrap import StateBootstrapError
+from . import cross_period_waits as wait_ledger
 from .database import LedgerDatabase
-from . import backfill, checkpoints, configuration, events, history, retirement
+from . import backfill, checkpoints, configuration, events, history, retirement, preaggregate, preaggregate_protection
 
 
 logger = logging.getLogger(__name__)
@@ -129,23 +130,37 @@ class StateStore:
         row = self._connection().execute("SELECT next_fire_time FROM schedule_cursors WHERE taskname=?", (taskname,)).fetchone()
         return datetime.fromisoformat(row[0]) if row else None
 
-    def enqueue_and_advance(self, instances: Iterable[TaskInstance], next_cursors: Mapping[str, datetime]) -> None:
+    def enqueue_and_advance(self, instances: Iterable[TaskInstance], next_cursors: Mapping[str, datetime],
+                            *, cross_period_waits=()) -> None:
         conn = self._connection(write=True)
         prepared = list(instances)
         for instance in prepared:
             retirement.assert_active(conn, instance.instance_id)
         configuration.validate_windows(prepared, self.get_task_effective_starts())
         with conn:
+            inserted_ids = set()
             for instance in prepared:
-                conn.execute("""INSERT OR IGNORE INTO task_instances
+                inserted = conn.execute("""INSERT OR IGNORE INTO task_instances
                     (instance_id, taskname, scheduled_time, data_start, data_end, status)
                     VALUES (?, ?, ?, ?, ?, ?)""",
                     (instance.instance_id, instance.taskname, _stamp(instance.scheduled_time),
                      _stamp(instance.data_start), _stamp(instance.data_end), TaskStatus.PENDING.value))
+                if inserted.rowcount == 1:
+                    inserted_ids.add(instance.instance_id)
+            wait_ledger.register(conn, (row for row in cross_period_waits if row['instance_id'] in inserted_ids))
             for taskname, next_fire_time in next_cursors.items():
                 conn.execute("""INSERT INTO schedule_cursors VALUES (?, ?)
                     ON CONFLICT(taskname) DO UPDATE SET next_fire_time=excluded.next_fire_time""",
                     (taskname, _stamp(next_fire_time)))
+            preaggregate_protection.validate_cursors(conn)
+
+    def get_cross_period_wait(self, instance_id: str) -> dict | None:
+        return wait_ledger.get(self._connection(), instance_id)
+
+    def record_cross_period_wait(self, instance_id: str, *, status, missing, now) -> bool:
+        conn = self._connection(write=True)
+        with conn:
+            return wait_ledger.decide(conn, instance_id, status=status, missing=missing, now=now)
 
     def get_instance(self, instance_id: str) -> dict | None:
         row = self._connection().execute("SELECT * FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()
@@ -158,6 +173,47 @@ class StateStore:
                        recompute: bool, now: datetime | None = None) -> dict:
         return backfill.begin(self._connection(write=True), item_id, instance,
                               recompute=recompute, now=now or datetime.now(timezone.utc))
+
+    def validate_preaggregate_configuration(self, manifest, task_starts, coverage, *,
+                                            timezone=None, cleanup_columns=None) -> None:
+        preaggregate_protection.validate(self._connection(), manifest, task_starts, coverage,
+                                         timezone=timezone, cleanup_columns=cleanup_columns)
+
+    def get_preaggregate(self, item_id: str) -> dict | None:
+        return preaggregate.get(self._connection(), item_id)
+
+    def begin_preaggregate(self, item: dict, instance: TaskInstance,
+                           now: datetime | None = None) -> dict:
+        return preaggregate.begin(self._connection(write=True), item, instance,
+                                  now or datetime.now(timezone.utc))
+
+    def finish_preaggregate(self, item_id: str, status, error=None,
+                            diagnostic=None, now: datetime | None = None) -> None:
+        preaggregate.finish(self._connection(write=True), item_id, status,
+                            error=error, diagnostic=diagnostic, now=now)
+
+    def latest_preaggregate(self, instance_id: str) -> dict | None:
+        return preaggregate.latest(self._connection(), instance_id)
+
+    def list_preaggregates(self, instance_id=None, limit=20, offset=0, *,
+                           taskname=None, only_unresolved=False, problems_only=False) -> list[dict]:
+        return preaggregate.list_attempts(self._connection(), instance_id, limit, offset,
+                                         taskname=taskname, only_unresolved=only_unresolved,
+                                         problems_only=problems_only)
+
+    def resolve_preaggregate(self, item_id: str, resolution: str, note: str) -> None:
+        preaggregate.resolve(self._connection(write=True), item_id, resolution, note,
+                             datetime.now(timezone.utc))
+
+    def preaggregate_blocker(self, instance_id: str) -> str | None:
+        return preaggregate.blocker(self._connection(), instance_id)
+
+    def preaggregate_formal_blocker(self, instance_id: str, now: datetime | None = None) -> str | None:
+        return preaggregate_protection.formal_blocker(
+            self._connection(), instance_id, now or datetime.now(timezone.utc))
+
+    def preaggregate_schedule_blocker(self, scheduled_until: datetime, now: datetime) -> str | None:
+        return preaggregate_protection.schedule_blocker(self._connection(), scheduled_until, now)
 
     def get_status(self, instance_id: str) -> TaskStatus | None:
         if self.get_retirement(instance_id) is not None:
@@ -239,6 +295,8 @@ class StateStore:
         now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
+        if preaggregate_protection.formal_blocker(conn, instance_id, now):
+            return False
         with conn:
             row = conn.execute("SELECT * FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()
             if not row:
@@ -254,6 +312,8 @@ class StateStore:
                 (_stamp(now), str(uuid.uuid4()), instance_id, status.value))
             if updated.rowcount == 1:
                 history.record_claim(conn, instance_id)
+                query_id = self.get_instance(instance_id)['query_id']
+                wait_ledger.attach_query(conn, instance_id, query_id)
                 events.append_event(conn, "DISPATCHED", instance_id, now)
             return updated.rowcount == 1
 
@@ -263,6 +323,8 @@ class StateStore:
         now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
+        if preaggregate_protection.formal_blocker(conn, instance_id, now):
+            return False
         with conn:
             row = conn.execute("SELECT * FROM task_instances WHERE instance_id=?", (instance_id,)).fetchone()
             if row is None:
@@ -288,6 +350,7 @@ class StateStore:
         now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
+        preaggregate_protection.assert_formal_allowed(conn, instance_id, now)
         with conn:
             checkpoints.mark_dispatched(conn, instance_id, query_id, _stamp(now))
             result = conn.execute("""UPDATE task_instances SET attempts=attempts+1, started_at=?
@@ -296,6 +359,7 @@ class StateStore:
             if result.rowcount != 1:
                 raise RuntimeError(f"Prepared reservation changed: {instance_id}")
             history.record_claim(conn, instance_id)
+            wait_ledger.attach_query(conn, instance_id, query_id)
             events.append_event(conn, "DISPATCHED", instance_id, now)
 
     def finish(self, instance_id: str, status: TaskStatus, *, error: str | None = None,
@@ -306,6 +370,8 @@ class StateStore:
         now = now or datetime.now(timezone.utc)
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
+        if status == TaskStatus.SUCCESS:
+            preaggregate_protection.assert_formal_allowed(conn, instance_id, now)
         with conn:
             checkpoints.assert_finish_allowed(conn, instance_id)
             result = conn.execute("""UPDATE task_instances SET status=?, error=?,
@@ -319,6 +385,8 @@ class StateStore:
                 self._save_execution_diagnostic(conn, instance_id, diagnostic)
             history.record_finish(conn, instance_id, diagnostic)
             backfill.record_finish(conn, instance_id)
+            if status == TaskStatus.SUCCESS:
+                preaggregate.mark_covered(conn, instance_id, now)
             event = {TaskStatus.SUCCESS: "SUCCEEDED", TaskStatus.FAILED: "FAILED",
                      TaskStatus.UNKNOWN: "OUTCOME_UNKNOWN"}[status]
             events.append_event(conn, event, instance_id, now)
@@ -361,6 +429,7 @@ class StateStore:
         with conn:
             now = _stamp(datetime.now(timezone.utc))
             backfill.recover_running(conn, datetime.fromisoformat(now))
+            preaggregate.recover_running(conn, datetime.fromisoformat(now))
             rows = checkpoints.classified_rows(conn, include_unknown=False)
 
             # 自动恢复所有 RUNNING 任务（包括 PREPARED 和 DISPATCHED）
@@ -394,6 +463,9 @@ class StateStore:
         now = _stamp(datetime.now(timezone.utc))
         conn = self._connection(write=True)
         retirement.assert_active(conn, instance_id)
+        preaggregate.assert_unblocked(conn, instance_id)
+        if resolution == "SUCCESS":
+            preaggregate_protection.assert_formal_allowed(conn, instance_id, datetime.fromisoformat(now))
         with conn:
             result = conn.execute("""UPDATE task_instances SET status=?, retryable=0,
                 next_retry_at=NULL, resolution_note=?, resolved_at=?, error=NULL,

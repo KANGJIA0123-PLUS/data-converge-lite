@@ -103,6 +103,7 @@ def _backup(application, store, plan_id, backup_dir):
 
 def _commit(application, store, lease, plan, backup_dir, now):
     plan_id = plan.public['plan_id']
+    application._validate_preaggregate_configuration(store, task_starts=plan.task_starts)
     backup_path = _backup(application, store, plan_id, backup_dir)
     _assert_files_unchanged(application)
     if lease is not None:

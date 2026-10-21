@@ -21,6 +21,7 @@ from data_converge.dag import (
 from data_converge.dag.builder import shift_elapsed, timeline_time
 from data_converge.time_policy import system_timezone
 from .cron import next_fire_time
+from .cross_period_wait import CrossPeriodWait
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,9 @@ class TaskScheduler:
         poll_interval_seconds: float = 5,
         catchup_limit: int = 100,
         ready_poller: Callable[[datetime], Iterable[datetime]] | None = None,
+        cross_period_wait_enabled: bool = True,
+        cross_period_wait_seconds: int = 300,
+        cross_period_wait_overrides: Mapping[str, int] | None = None,
     ):
         self.dag = dag
         self.dag_builder = dag_builder
@@ -81,6 +85,11 @@ class TaskScheduler:
         self._jobs: tuple[CronGroup, ...] = ()
         self._registered = False
         self._skipped_records: set[tuple[str, str]] = set()
+        self.cross_period_wait = CrossPeriodWait(
+            dag, self.state_store, enabled=cross_period_wait_enabled,
+            seconds=cross_period_wait_seconds, overrides=cross_period_wait_overrides)
+        if self.state_store is not None:
+            self.dag_executor.cross_period_check = self.cross_period_wait.reason
 
     def register_jobs(self) -> None:
         """Compile cron metadata for inspection and durable cursor planning."""
@@ -241,7 +250,9 @@ class TaskScheduler:
             for taskname in self.dag.topological_order
         }
         plan = self._plan_due(cursors, now)
-        self.state_store.enqueue_and_advance(plan.instances, plan.next_cursors)
+        self.state_store.enqueue_and_advance(
+            plan.instances, plan.next_cursors,
+            cross_period_waits=self.cross_period_wait.records(plan.instances))
         return self.run_pending(now=now)
 
     def _plan_due(self, cursors: Mapping[str, datetime | None], now: datetime) -> SchedulePlan:

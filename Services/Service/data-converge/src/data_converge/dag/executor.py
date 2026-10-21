@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import time
 from typing import Callable, Dict, Iterable, List, Mapping, Optional
 
 from data_converge.errors import TaskExecutionError, safe_error_details
@@ -53,6 +54,7 @@ class DAGExecutor:
         self.max_attempts = max_attempts
         self.retry_delay_seconds = retry_delay_seconds
         self.readiness_check = readiness_check
+        self.cross_period_check = None
         memory = InMemoryExecutionRepository(self.known_statuses)
         self.repository: ExecutionRepository = state_store if state_store is not None else memory
         self.checkpoints = self.repository if isinstance(self.repository, CheckpointRepository) else None
@@ -75,19 +77,18 @@ class DAGExecutor:
         order = {name: index for index, name in enumerate(self.dag.topological_order)}
         instance_list.sort(key=lambda i: (timeline_time(i.data_end), order[i.taskname]))
         attempted: set[str] = set()
+        started = time.monotonic()
+        initial_now = now
         budget = max_executions if max_executions is not None else len(instance_list)
         while len(attempted) < budget:
             if should_stop and should_stop():
                 break
+            now = shift_elapsed(initial_now, timedelta(seconds=max(0.0, time.monotonic() - started)))
             ready = []
             for instance in instance_list:
                 if instance.instance_id in attempted or not self._eligible(instance, now):
                     continue
-                reason = self.readiness_check(instance, now) if self.readiness_check else None
-                if reason is not None:
-                    self._mark_blocked(instance, reason)
-                    continue
-                if self._upstreams_succeeded(instance, by_id):
+                if self._ready(instance, by_id, now):
                     ready.append(instance)
             ready = ready[:min(self.max_concurrent_tasks, budget - len(attempted))]
             if not ready:
@@ -103,6 +104,16 @@ class DAGExecutor:
             if not self._upstreams_succeeded(instance, by_id):
                 self._mark_blocked(instance, self._build_blocked_reason(instance, by_id))
         return ExecutionReport(by_id)
+
+    def _ready(self, instance, by_id, now):
+        if not self._upstreams_succeeded(instance, by_id):
+            return False
+        for check in (self.readiness_check, self.cross_period_check):
+            reason = check(instance, now) if check is not None else None
+            if reason is not None:
+                self._mark_blocked(instance, reason)
+                return False
+        return True
 
     def _mark_blocked(self, instance: TaskInstance, reason: str) -> None:
         instance.status = TaskStatus.BLOCKED

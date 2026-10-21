@@ -8,7 +8,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from . import retirement
+from . import retirement, preaggregate_protection
 
 
 SNAPSHOT_KEY = "configuration_snapshot"
@@ -172,6 +172,8 @@ def apply(conn, *, expected_binding, expected_revision, manifest, revision,
         conn.execute("BEGIN IMMEDIATE")
         _assert_expected(conn, expected_binding, expected_revision)
         retirement.validate(conn)
+        coverage = conn.execute("SELECT value FROM metadata WHERE key='coverage_start'").fetchone()
+        preaggregate_protection.validate(conn, manifest, task_starts, coverage[0] if coverage else None)
         _configure_retirement(conn, current, retire_existing, recovery, expected_revision, record, expected_binding, binding)
         _create_history(conn)
         _write_metadata(conn, "configuration_required", "1")

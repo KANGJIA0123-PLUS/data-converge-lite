@@ -40,15 +40,15 @@ def _parse_time(value: str, zone: ZoneInfo) -> datetime:
         raise ValueError('BACKFILL_TIME_INVALID') from None
 
 
-def _range(definition, start: str, end: str, now: datetime | None):
+def _range(definition, start: str, end: str, now: datetime, preaggregate=False):
     zone = ZoneInfo(definition.options.timezone)
     lower, upper = _parse_time(start, zone), _parse_time(end, zone)
-    current = datetime.now(zone) if now is None else now
+    current = now
     if not isinstance(current, datetime) or current.utcoffset() is None:
         raise ValueError('BACKFILL_TIMEZONE_REQUIRED')
     if timeline_time(lower) >= timeline_time(upper):
         raise ValueError('BACKFILL_RANGE_INVALID')
-    if timeline_time(upper) > timeline_time(current):
+    if not preaggregate and timeline_time(upper) > timeline_time(current):
         raise ValueError('BACKFILL_END_IN_FUTURE')
     return lower, upper
 
@@ -118,19 +118,28 @@ def _items(definition, selected: list[str], start: datetime, end: datetime):
 def build_plan(
     definition: ApplicationDefinition, start: str, end: str, *,
     task: str | None = None, all_tasks: bool = False, recompute: bool = False,
-    now: datetime | None = None,
+    now: datetime | None = None, preaggregate: bool = False, store=None,
 ) -> dict:
     """Select complete windows in [start, end), never widening the request."""
-    lower, upper = _range(definition, start, end, now)
+    now = datetime.now(ZoneInfo(definition.options.timezone)) if now is None else now
+    lower, upper = _range(definition, start, end, now, preaggregate)
     selected = _selection(definition, task, all_tasks)
     if task is not None:
         _check_alignment(definition, task, lower, upper)
     items, counts = _items(definition, selected, lower, upper)
-    return {
-        'schema_version': 1,
+    omitted = []
+    if preaggregate:
+        from .preaggregate import classify_plan
+        items, omitted = classify_plan(definition, store, items, now)
+        counts = {name: sum(item['taskname'] == name for item in items) for name in selected}
+    result = {
+        'schema_version': 2 if preaggregate else 1,
         'revision': plan_revision(definition),
         'start': lower.isoformat(), 'end': upper.isoformat(),
         'recompute': recompute, 'selected_tasks': selected,
         'omitted_tasks': [name for name in selected if counts[name] == 0],
         'counts': counts, 'total': len(items), 'items': items,
     }
+    if preaggregate:
+        result.update(preaggregate=True, omitted_future_count=len(omitted), omitted_future=omitted)
+    return result

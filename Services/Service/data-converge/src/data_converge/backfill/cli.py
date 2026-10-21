@@ -1,5 +1,6 @@
 """Explicit background backfill submission and read-only progress commands."""
 from datetime import datetime
+from contextlib import closing
 import json
 import re
 
@@ -14,6 +15,7 @@ def add_arguments(parser, modes):
     parser.add_argument('--all-tasks', action='store_true', help='配合 --backfill，选择当前配置的全部任务')
     parser.add_argument('--from', dest='from_time', metavar='TIME', help='补算数据范围起点（含），带时区')
     parser.add_argument('--to', dest='to_time', metavar='TIME', help='补算数据范围终点（不含），带时区')
+    parser.add_argument('--preaggregate', action='store_true', help='配合 --backfill，提前测试已开始的未结束窗口；正式到期仍覆盖')
     parser.add_argument('--recompute', action='store_true', help='配合 --backfill，明确重新汇聚已成功窗口')
     parser.add_argument('--dry-run', action='store_true', help='配合 --backfill，只预览完整窗口，不创建或提交请求')
     parser.add_argument('--request-id', metavar='ID', help='补算提交幂等标识；重复提交相同计划返回同一任务号')
@@ -24,7 +26,7 @@ def is_command(args):
 
 
 def validate_arguments(parser, args):
-    for name in ('all_tasks', 'from_time', 'to_time', 'recompute', 'dry_run', 'request_id'):
+    for name in ('all_tasks', 'from_time', 'to_time', 'recompute', 'preaggregate', 'dry_run', 'request_id'):
         value = getattr(args, name)
         if value is not None and value is not False and not args.backfill:
             option = {'from_time': 'from', 'to_time': 'to'}.get(name, name.replace('_', '-'))
@@ -64,10 +66,7 @@ def run(args):
 
 
 def _submit(args, application):
-    from .plan import build_plan
-
-    plan = build_plan(application.definition, args.from_time, args.to_time,
-                      task=args.task, all_tasks=args.all_tasks, recompute=args.recompute)
+    plan = _build_plan(args, application)
     if args.dry_run:
         return {'schema_version': 1, 'command': 'backfill', 'status': 'PREVIEW', 'data': plan}
     if not (application.directory / 'state.sqlite3').is_file():
@@ -76,6 +75,22 @@ def _submit(args, application):
         job_id = queue.submit(plan, request_id=args.request_id)
         result = queue.status(job_id)
     return {'schema_version': 1, 'command': 'backfill', 'status': result['status'], 'data': result}
+
+
+def _build_plan(args, application):
+    from data_converge.state import StateStore
+    from .plan import build_plan
+
+    options = dict(task=args.task, all_tasks=args.all_tasks, recompute=args.recompute)
+    if not args.preaggregate:
+        return build_plan(application.definition, args.from_time, args.to_time, **options)
+    path = application.directory / 'state.sqlite3'
+    if not path.is_file():
+        raise BackfillQueueError('BACKFILL_STATE_MISSING')
+    with closing(StateStore(path)) as store:
+        store._connection().execute('BEGIN')
+        return build_plan(application.definition, args.from_time, args.to_time,
+                          preaggregate=True, store=store, **options)
 
 
 def _status(args, application):
@@ -105,8 +120,12 @@ def _render(value):
                  '执行结果：' + json.dumps(data['counts'], ensure_ascii=False),
                  '由正常服务后台串行处理；QUEUED 包含尚未落盘的当前执行项，提交成功不代表汇聚完成。',
                  f"查询：dconv --backfill-status {data['job_id']}"]
+    metadata = data if value['status'] == 'PREVIEW' else data.get('metadata', {})
+    if metadata.get('preaggregate'):
+        lines.append('PREAGGREGATE 为提前测试，成功不代表正式完成；到期正式汇聚仍将覆盖。')
+        lines.append(f"省略尚未开始窗口：{metadata.get('omitted_future_count', 0)} 个；不创建写入条目。")
     for item in data.get('items', []):
-        lines.append(f"  {item.get('status', 'PLANNED')}  {item['instance_id']}"
+        lines.append(f"  {item.get('execution_kind', 'BACKFILL')}  {item.get('status', 'PLANNED')}  {item['instance_id']}"
                      f"  query_id={item.get('query_id') or '-'}  error={item.get('error') or '-'}")
     if data.get('has_more'):
         lines.append(f"下一页：--backfill-status {data['job_id']} --limit {data['limit']}"

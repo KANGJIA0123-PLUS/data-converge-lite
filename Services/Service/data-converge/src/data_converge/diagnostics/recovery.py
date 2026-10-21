@@ -6,6 +6,7 @@ from data_converge.config.application import load_app_config, state_directory
 from .checks import failure, historical_check
 from .ledger import DiagnosticLedger
 from .report import check, report
+from .aggregation import preaggregate_checks, preaggregate_page
 
 
 def _open_ledger(path):
@@ -19,6 +20,7 @@ def recovery_plan(path, *, limit=20, offset=0):
             counts = ledger.recovery_counts()
             rows = ledger.list_recovery_candidates(limit=limit, offset=offset)
             historical = historical_check(ledger)
+            early = preaggregate_page(ledger, limit=limit, offset=offset, only_unresolved=True)
         total = sum(counts.values())
         data = dict(counts=counts, total=total, limit=limit, offset=offset,
                     has_more=offset + len(rows) < total, candidates=rows)
@@ -28,7 +30,9 @@ def recovery_plan(path, *, limit=20, offset=0):
                        '运行中的任务也可能在此快照后完成，不应据此直接重跑。')
         if historical is not None:
             data['historical_counts'] = historical['evidence']['counts']
-        return report('recovery-plan', [result] + ([historical] if historical is not None else []), data)
+        data['preaggregate'] = early
+        checks = [result] + preaggregate_checks(early, 'recovery')
+        return report('recovery-plan', checks + ([historical] if historical is not None else []), data)
     except Exception as error:
         return report('recovery-plan', [failure('state', error, '恢复计划查询失败',
                                                '先运行 --diagnose；本命令不会创建或修复账本。')])

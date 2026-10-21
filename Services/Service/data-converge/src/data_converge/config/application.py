@@ -42,16 +42,30 @@ class SchedulerSettings:
     catchup_limit: int = 100
     max_attempts: int = 3
     retry_delay_seconds: int = 30
+    cross_period_wait_enabled: bool = True
+    cross_period_wait_seconds: int = 300
+    cross_period_wait_overrides: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for option in fields(self):
-            if option.name == 'timezone':
+            if option.name == 'timezone' or option.name.startswith('cross_period_wait_'):
                 continue
             value = getattr(self, option.name)
             if type(value) is not int or value <= 0:
                 raise StartupError('SCHEDULER_SETTING_INVALID')
+        self._validate_cross_period_wait()
         if self.default_timeout_seconds > 300:
             raise StartupError('SQL_TIMEOUT_MUST_NOT_EXCEED_300_SECONDS')
+
+    def _validate_cross_period_wait(self) -> None:
+        values = self.cross_period_wait_overrides
+        if not isinstance(self.cross_period_wait_enabled, bool) or not isinstance(values, dict):
+            raise StartupError('SCHEDULER_SETTING_INVALID')
+        if any(not isinstance(name, str) or not name for name in values):
+            raise StartupError('SCHEDULER_SETTING_INVALID')
+        for value in (self.cross_period_wait_seconds, *values.values()):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise StartupError('SCHEDULER_SETTING_INVALID')
 
 
 @dataclass(frozen=True)
@@ -122,6 +136,8 @@ def load_definition(config_path: Path, *, raw_config: dict[str, Any] | None = No
     sql_dir = asset_path(section.get('sql_directory'), 'sql', config_path)
     builder = DAGBuilder(ConfigLoader(rules, sql_dir=sql_dir))
     dag = builder.build()
+    if options.cross_period_wait_overrides.keys() - dag.tasks.keys():
+        raise StartupError('CROSS_PERIOD_WAIT_TASK_UNKNOWN')
     if not dag.tasks:
         raise StartupError('NO_TASKS_CONFIGURED')
     if config['dwd_ready']['enabled'] and any(

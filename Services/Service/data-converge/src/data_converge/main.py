@@ -5,6 +5,7 @@ from contextlib import ExitStack
 import json
 import logging
 import os
+import re
 
 from data_converge.application import Application, CommandResult
 from data_converge.config.application import (
@@ -41,11 +42,19 @@ def arguments(argv):
         parser.error('--run-task requires --scheduled-time')
     if args.scheduled_time is not None and not args.run_task:
         parser.error('--scheduled-time requires --run-task')
-    if (args.resolution is not None or args.note is not None) and not args.resolve_instance:
-        parser.error('--resolution and --note require --resolve-instance')
-    if args.resolve_instance and (not args.resolution or not args.note):
-        parser.error('--resolve-instance requires --resolution and --note')
+    _validate_resolution(parser, args)
     return args
+
+
+def _validate_resolution(parser, args):
+    selected = args.resolve_instance or args.resolve_preaggregate
+    if (args.resolution is not None or args.note is not None) and not selected:
+        parser.error('--resolution and --note require --resolve-instance or --resolve-preaggregate')
+    if selected and (not args.resolution or not args.note or not args.note.strip()):
+        parser.error('resolution commands require --resolution and a nonempty --note')
+    if (args.resolve_preaggregate is not None and
+            re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', args.resolve_preaggregate) is None):
+        parser.error('--resolve-preaggregate requires a valid item ID')
 
 
 def output(value):
@@ -66,6 +75,8 @@ def run(args, *, raw_config=None) -> CommandResult:
         return application.initialize(args.start_time)
     if args.resolve_instance:
         return application.resolve(args.resolve_instance, args.resolution, args.note)
+    if args.resolve_preaggregate:
+        return application.resolve_preaggregate(args.resolve_preaggregate, args.resolution, args.note)
     if args.run_task:
         return application.run_task(args.run_task, args.scheduled_time)
     if args.run_once:

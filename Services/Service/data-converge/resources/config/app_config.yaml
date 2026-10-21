@@ -68,6 +68,11 @@ scheduler:
   catchup_limit: 100
   max_attempts: 3
   retry_delay_seconds: 30
+  # 正常 Cron 到期后额外等待跨周期上游；0 秒表示不等待。
+  cross_period_wait_enabled: true
+  cross_period_wait_seconds: 300
+  # 任务名到非负整数秒数的覆盖；未列出的任务继承全局值。
+  cross_period_wait_overrides: {}
 
 config:
   convergence_rules_path: resources/config/convergence_rules.yaml
