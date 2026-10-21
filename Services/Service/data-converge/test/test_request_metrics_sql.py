@@ -140,6 +140,10 @@ def test_agent_metrics_weight_requests_and_convert_milliseconds(
     ]
     query = source_query(period, "agent_ads", dws_source(rows), alias_preference, analyzer)
     row = execute_request(clickhouse_local, query)[0]
+    assert row["request_success_sum"] == 6
+    sql = request_sql(period, "agent_ads")
+    columns = [name.strip() for name in sql[sql.index("(") + 1:sql.index(")")].split(",")]
+    assert list(row) == columns
     expected = dict(zip(METRICS, (25, 75, 2, 4, 50, 25, 8 / 300, 0.2, 2, 400 / 300, 200 / 300)))
     for name, value in expected.items():
         assert row[name] == pytest.approx(value), name
@@ -150,10 +154,12 @@ def test_agent_metrics_weight_requests_and_convert_milliseconds(
 @pytest.mark.parametrize("period", PERIODS)
 @pytest.mark.parametrize("empty", [0, None])
 def test_agent_metrics_keep_zero_denominator_policy(clickhouse_local, period, empty):
-    source = dws_source([{"request_total_sum": empty, "input_tokens_sum": empty,
+    source = dws_source([{"request_total_sum": empty, "request_success_count": empty,
+                          "input_tokens_sum": empty,
                           "output_tokens_sum": empty, "prefill_time_sum": empty,
                           "decode_time_average_sum": empty, "total_time_sum": empty}])
     row = execute_request(clickhouse_local, source_query(period, "agent_ads", source, 0))[0]
+    assert row["request_success_sum"] == 0
     assert all(row[name] == 0 for name in METRICS)
 
 
@@ -193,6 +199,7 @@ def test_request_outcomes_and_latencies_survive_the_whole_rollup_chain(clickhous
     assert (row["request_total_sum"], row["request_success_count"], row["request_failed_count"]) == (2, 1, 1)
     source = "(" + query.split(" SETTINGS ")[0] + ")"
     row = execute_request(clickhouse_local, source_query("month", "agent_ads", source, 0))[0]
+    assert row["request_success_sum"] == 1
     assert row["request_failed_rate"] == row["request_success_rate"] == 50
     assert row["time_to_first_token_seconds_avg"] == 1
     assert row["time_per_output_token_seconds_avg"] == pytest.approx(0.1)

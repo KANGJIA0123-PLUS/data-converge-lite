@@ -11,6 +11,7 @@ COLUMNS = ("input_output_token_rate", "request_received_total_qps",
            "unit_token_computepower_consumption")
 REQUEST_COUNTS = ("request_failed_count", "request_success_count")
 AGENT_COLUMNS = (
+    "request_success_sum",
     "request_failed_rate", "request_success_rate", "infer_input_output_token_rate",
     "infer_e2e_request_latency_seconds_avg", "infer_input_token_num_length_avg",
     "infer_output_token_num_length_avg", "infer_request_received_qps",

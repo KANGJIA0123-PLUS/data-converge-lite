@@ -24,6 +24,7 @@
     total_tokens_sum,
     total_time_sum,
     request_total_sum,
+    request_success_sum,
     -- 补充指标字段列表
     request_failed_rate,
     request_success_rate,
@@ -90,6 +91,7 @@ SELECT
     toInt32(sum(dws.total_tokens_sum)) AS total_tokens_sum,
     sum(dws.total_time_sum) AS total_time_sum,
     toUInt64(sum(dws.request_total_sum)) AS request_total_sum,
+    toUInt64(coalesce(sum(dws.request_success_count), 0)) AS request_success_sum,
 
     -- 4. 补充指标计算
     -- 请求失败率 (%)

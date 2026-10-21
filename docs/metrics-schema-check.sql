@@ -20,6 +20,7 @@ WITH expected AS (
     ]) AS table_name)
     UNION ALL
     SELECT table_name, arrayJoin([
+                'request_success_sum',
                 'request_failed_rate',
                 'request_success_rate',
                 'infer_input_output_token_rate',

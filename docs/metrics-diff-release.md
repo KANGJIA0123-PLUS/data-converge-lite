@@ -101,9 +101,18 @@ sha256sum \
 | --- | --- |
 | `t_mops_request_realtime_dwd` | `result_code`；源端须真实上报状态码，不能靠填入默认成功码补齐数据。 |
 | `t_mops_request_<周期>_dws` | `request_failed_count`、`request_success_count`，保存非负请求计数。 |
+| `t_mops_agent_<周期>_ads` | `request_success_sum`，SQL 输出 `UInt64`，由 DWS 的 `request_success_count` 累加。 |
 | `t_mops_agent_<周期>_ads` | `request_failed_rate`、`request_success_rate`、`infer_input_output_token_rate`、`infer_e2e_request_latency_seconds_avg`、`time_per_output_token_seconds_avg`、`time_to_first_token_seconds_avg`，SQL 输出 `Nullable(Float32)`。 |
 | `t_mops_agent_<周期>_ads` | `infer_input_token_num_length_avg`、`infer_output_token_num_length_avg`、`infer_request_received_qps`、`prompt_tokens_per_s_avg`、`generation_tokens_per_s_avg`，SQL 输出 `Nullable(Float64)`。 |
 
 先执行上述只读字段检查，再按真实 DDL 核对类型及请求时延确为毫秒。旧表新增列的默认值不能代表历史真实成功、失败次数；历史指标需要从仍保留状态码的原始请求逐层回算，不能只重跑 Agent ADS。已有 UNKNOWN 仍须按 query_id 核实后处理。
 
 本轮还复现了小时实例指标 SQL 的两个既存口径问题：并发、队列和参考吞吐的五分钟均值被跨窗口直接累加；同一组同一时刻分布在多个节点时，内层 `argMax(node_id/node_ip, window_time)` 只保留一个节点。两者均早于此次补丁，修复需要明确时间加权及节点维度口径，本次不改变这些业务聚合规则。
+
+### 后续合并补丁复核（文本_equ0.txt）
+
+此补丁中的请求成败计数、11 项 Agent 指标及小时快照修复已在 main 中实现。合并保留上文的单位换算、请求数分母、UInt32 时间参数及应用时区处理，不用旧版本片段覆盖这些修正。
+
+- 补齐四周期 Agent ADS 的成功请求总量 `request_success_sum`。原补丁读取的 `dws.request_success_sum` 不存在，实际来源为 `request_success_count`，按窗口累加后转为 `UInt64`。成功率与成功总量使用同一来源；NULL 不增加成功数。只读结构检查同时覆盖四张逻辑表及其 `_local` 表的新字段，发布前由数据库仓库完成结构变更。
+- 合入配置加载器补充测试：去重场景加入真正重复的源表；时间参数用例验证已有的起止时间替换契约，不声称支持保留任意未提供的占位符。
+- 不采纳 APScheduler 从 3.11.3 降至 3.11.0 的修改。官方 [版本记录](https://apscheduler.readthedocs.io/en/3.x/versionhistory.html) 说明后续补丁修复了 CronTrigger 夏令时回拨时停滞、无限循环及 ZoneInfo 跳时唤醒问题；当前调度和预汇聚使用系统时区，继续保留这些修复。
