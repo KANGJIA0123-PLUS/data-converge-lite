@@ -101,8 +101,8 @@ bash /opt/its/data-converge/bin/start_data_converge.sh \
 加300秒；重启不会重新延长等待。完成后通过原有 `covered_at` 记录实际覆盖时间。
 该安排不回调任务起点、不推进提前执行的普通游标、不解除旧实例隔离。
 
-这个特例不适用于普通配置变更造成的起点、五分钟/月窗口，或完整窗口早于账本覆盖起点
-的情况；服务当天中途新建状态库仍可能拒绝当天整日提前汇聚。不得靠删除状态库绕过。
+上述小时/天特例不适用于普通配置变更造成的起点、五分钟窗口，或完整窗口早于账本覆盖起点
+的情况；服务当天中途新建状态库仍可能拒绝当天整日提前汇聚。当月使用下节的独立规则。
 提前写入后，影响其正式覆盖的配置修改会被拒绝，待正式覆盖后再修改。
 
 提前 UNKNOWN 或重启恢复的未确认提前写入会阻止同窗口正式执行。先凭 query_id 核实
@@ -124,7 +124,74 @@ dconv --resolve-preaggregate 'bf_实际批次号:序号' \
 已有提前写入的窗口尚未结束时，旧 `--run-task` 入口会拒绝提前标记正式完成，
 继续提前测试应使用 `--preaggregate`。
 
-## 正常小时、天任务最多额外等待 5 分钟
+## 提前汇聚全部月表
+
+当前自然月可以用已有日数据提前汇聚，即使月初早于账本覆盖起点、任务生效起点或恢复切点。
+这也适用于月中首次初始化、没有旧账本恢复记录的部署。请求及实际派发时，当前月必须已经开始
+且尚未结束，覆盖起点和任务生效起点、恢复切点都必须已生效；仍拒绝被退休隔离的实例、已入账
+的正式实例和未核查的 UNKNOWN。不会重写全局覆盖起点，也不会顺带补齐历史日数据。
+
+每个月任务在 SQL 派发前保存本次完整月窗、配置依据和正式 Cron 时间。即使重启时已跨月、
+普通游标已越过该窗口，调度器仍补入该正式任务。正式 SQL 成功后填写 `covered_at`；排队尚未
+派发的请求没有提前写入，若到处理时月窗已结束则跳过，不能当作已建立覆盖安排。
+
+以下在容器 Bash 中执行，自动计算上海时区的当前月，按依赖顺序提交全部15个月任务。
+不要换成 `--all-tasks`，它会把其他周期也纳入整月计划。
+
+```bash
+DCONV_MONTH_FROM=$(TZ=Asia/Shanghai date '+%Y-%m-01T00:00:00+08:00')
+DCONV_MONTH_TO=$(TZ=Asia/Shanghai date -d "${DCONV_MONTH_FROM:0:10} +1 month" '+%Y-%m-%dT00:00:00+08:00')
+
+DCONV_MONTH_TASKS=(
+  task_gpu_day_to_month_dws
+  task_node_day_to_month_dws
+  task_node_month_ads
+  task_resource_month_ads
+  task_model_instance_month_dws
+  task_model_instance_month_ads
+  task_model_server_month_ads
+  task_model_metric_instance_month_dws
+  task_model_metric_instance_month_ads
+  task_model_metric_server_month_ads
+  task_resource_server_month_ads
+  task_request_month_dws
+  task_model_metric_node_month_ads
+  task_request_month_agent_ads
+  task_request_month_server_ads
+)
+
+printf '本次月窗口：%s 至 %s\n' "$DCONV_MONTH_FROM" "$DCONV_MONTH_TO"
+for DCONV_TASK in "${DCONV_MONTH_TASKS[@]}"; do
+  printf '\n提交：%s\n' "$DCONV_TASK"
+  bash /opt/its/data-converge/bin/start_data_converge.sh \
+    --backfill --task "$DCONV_TASK" \
+    --from "$DCONV_MONTH_FROM" --to "$DCONV_MONTH_TO" \
+    --preaggregate || break
+done
+```
+
+月 DWS 使用已有日 DWS，月 ADS 按依赖读取本轮月结果；节点指标月 ADS 直接读取节点指标日 ADS。
+SQL 成功不保证有行，空日表或业务过滤可能产生空月表。提前结果不会随源表变化持续刷新。
+提交只表示 QUEUED，后台执行状态用返回的实际 `bf_...` 查询：
+
+```bash
+bash /opt/its/data-converge/bin/start_data_converge.sh --backfill-status 'bf_实际批次号'
+
+# 与提交使用同一组变量；固定保留本次 MONTH_TO，跨月后不要重新计算。
+for DCONV_TASK in "${DCONV_MONTH_TASKS[@]}"; do
+  bash /opt/its/data-converge/bin/start_data_converge.sh \
+    --inspect-instance "${DCONV_TASK}@${DCONV_MONTH_TO}" --limit 1
+done
+```
+
+例如10月的目标 `window_time` 为 `2026-10-01 00:00:00+08:00`，实例ID使用
+`2026-11-01T00:00:00+08:00`。当前配置正式计划为11月1日00:20；跨周期日任务未齐时默认
+最多额外等待到00:25，提前齐全则可先执行。月 ADS 还需同周期月上游正式成功。停机跨过截止
+时间后重启，不会从重启时间重新等5分钟。确认自动覆盖要同时看正式实例 SUCCESS 和提前记录
+的“正式覆盖时间”已填写；提前 SUCCESS、本批补算 COMPLETED 都不能单独证明正式覆盖。
+重启必须继续挂载同一状态目录；删除状态库会丢失提前记录及覆盖安排。
+
+## 正常小时、天、月任务最多额外等待 5 分钟
 
 `app_config.yaml` 中配置：
 

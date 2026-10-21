@@ -726,12 +726,12 @@ convergence_rules:
   - taskname: task_model_metric_node_month_ads
     description: 模型指标节点月ADS表
     source_tables:
-      - t_mops__modelmetric_instance__month_dws
+      - t_mops__modelmetric_node__day_ads
     target_table: t_mops__modelmetric_node__month_ads
     aggregation_interval: P1M
     cron: "20 0 1 * *"
     depends_on:
-      - task_model_metric_instance_month_dws
+      - task_model_metric_node_day_ads
     sql_id: task_model_metric_node_month_ads
 
   # ============================================================================

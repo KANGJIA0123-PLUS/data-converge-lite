@@ -20,6 +20,8 @@ def configuration_evidence(definition, taskname, manifest=None, *, recovery_cove
 
 
 def recovery_coverage(store, instance, now):
+    if instance.task.aggregation_interval == 'P1M':
+        return store.preaggregate_recovery_coverage(instance, now)
     effective = store.get_task_effective_starts().get(instance.taskname)
     if effective is None or timeline_time(instance.data_start) >= timeline_time(effective):
         return None
@@ -51,10 +53,10 @@ def validate_eligibility(definition, store, instance, now, item=None):
     if store is None or store.get_meta('coverage_start') is None:
         raise ValueError('BACKFILL_PREAGGREGATE_COVERAGE_MISSING')
     coverage = datetime.fromisoformat(store.get_meta('coverage_start'))
-    if timeline_time(instance.data_start) < timeline_time(coverage):
+    recovery = recovery_coverage(store, instance, now)
+    if timeline_time(instance.data_start) < timeline_time(coverage) and recovery is None:
         raise ValueError('BACKFILL_PREAGGREGATE_BEFORE_COVERAGE')
     effective = store.get_task_effective_starts().get(instance.taskname)
-    recovery = recovery_coverage(store, instance, now)
     if effective and timeline_time(instance.data_start) < timeline_time(effective) and recovery is None:
         raise ValueError('BACKFILL_PREAGGREGATE_BEFORE_EFFECTIVE_START')
     if store.get_retirement(instance.instance_id) is not None:

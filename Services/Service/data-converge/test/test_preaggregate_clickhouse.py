@@ -113,7 +113,8 @@ def write_definition(directory, config, interval):
         (sql / (TASKS[index] + '.sql')).write_text(
             f'INSERT INTO {target} SELECT {{start_time:DateTime}}, {totals} FROM {source} '
             f'WHERE {column} >= {{start_time:DateTime}} AND {column} < {{end_time:DateTime}}')
-        cron = f'{3 + 2 * index} ' + ('* * * *' if interval == 'PT1H' else '0 * * *')
+        cron = f'{3 + 2 * index} ' + {'PT1H': '* * * *', 'P1D': '0 * * *',
+                                    'P1M': '0 1 * *'}[interval]
         rules.append(dict(taskname=TASKS[index], source_tables=[source], target_table=target,
                           aggregation_interval=interval, cron=cron, sql_id=TASKS[index],
                           depends_on=[] if index == 0 else [TASKS[0]]))
@@ -138,9 +139,13 @@ def scenario(request, tmp_path, monkeypatch, clickhouse):
         create_tables(config)
         path, definition = write_definition(tmp_path, config, request.param)
         start = datetime.now(ZoneInfo(definition.options.timezone)).replace(minute=0, second=0, microsecond=0)
-        if request.param == 'P1D':
+        if request.param in ('P1D', 'P1M'):
             start = start.replace(hour=0)
-        end = start + (timedelta(hours=1) if request.param == 'PT1H' else timedelta(days=1))
+        if request.param == 'P1M':
+            start = start.replace(day=1)
+            end = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        else:
+            end = start + (timedelta(hours=1) if request.param == 'PT1H' else timedelta(days=1))
         store = open_store(tmp_path / 'state.sqlite3')
         store.set_meta('coverage_start', start.isoformat())
         queue = Queue(tmp_path / 'backfill.sqlite3', create=True)
@@ -175,7 +180,7 @@ def assert_phases(config, query_ids):
         assert rows == [['Alter'], ['Insert']]
 
 
-@pytest.mark.parametrize('scenario', ['PT1H', 'P1D'], indirect=True)
+@pytest.mark.parametrize('scenario', ['PT1H', 'P1D', 'P1M'], indirect=True)
 def test_early_chain_is_overwritten_by_formal_same_window_without_accumulation(scenario, monkeypatch):
     s = scenario
     insert_source(s.config, [(s.start - timedelta(seconds=1), 1000), (s.start, 2),
@@ -217,7 +222,9 @@ def install_cutover(s):
     manifest = build_manifest(s.definition)
     revision = manifest_digest(manifest)
     s.store.set_meta('binding', 'a' * 64)
-    s.store.set_meta('coverage_start', (s.start - timedelta(days=1)).isoformat())
+    coverage = s.start + (timedelta(minutes=10) if s.definition.dag.tasks[TASKS[0]].aggregation_interval == 'P1M'
+                          else -timedelta(days=1))
+    s.store.set_meta('coverage_start', coverage.isoformat())
     record = dict(schema_version=1, migration_id='integration-cutover', cutover=cutover.isoformat(),
                   previous_binding='a' * 64, current_binding='b' * 64, revision=revision,
                   backup_path='/test/before.sqlite3', recovered_at=cutover.isoformat(),
@@ -229,7 +236,7 @@ def install_cutover(s):
         backup_path='/test/before.sqlite3', retire_existing=True, recovery=record)
 
 
-@pytest.mark.parametrize('scenario', ['PT1H', 'P1D'], indirect=True)
+@pytest.mark.parametrize('scenario', ['PT1H', 'P1D', 'P1M'], indirect=True)
 def test_cross_cutover_overwrites_after_restart_and_advanced_cursor(scenario, monkeypatch):
     s = scenario
     install_cutover(s)

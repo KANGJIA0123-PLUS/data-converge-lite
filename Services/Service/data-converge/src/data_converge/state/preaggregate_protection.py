@@ -40,12 +40,12 @@ def _validate_identity(row, manifest, timezone, cleanup_columns):
 
 def _validate_window(conn, row, task_starts, coverage):
     start = _instant(row["data_start"])
-    if coverage is None or _instant(coverage) > start:
-        _reject(row, "START_CHANGED")
     if 'recovery_coverage' in json.loads(row['config_evidence']):
         if not preaggregate_coverage.valid_record(conn, row, task_starts=task_starts, coverage=coverage):
             _reject(row, "RECOVERY_CHANGED")
         return
+    if coverage is None or _instant(coverage) > start:
+        _reject(row, "START_CHANGED")
     effective = task_starts.get(row["taskname"], coverage)
     if _instant(effective) > start:
         _reject(row, "EFFECTIVE_CHANGED")
