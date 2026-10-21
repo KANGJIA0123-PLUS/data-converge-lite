@@ -14,6 +14,7 @@ from data_converge.errors import safe_diagnostic_details
 
 from .bootstrap import StateBootstrapError
 from . import cross_period_waits as wait_ledger
+from . import preaggregate_coverage
 from .database import LedgerDatabase
 from . import backfill, checkpoints, configuration, events, history, retirement, preaggregate, preaggregate_protection
 
@@ -136,7 +137,10 @@ class StateStore:
         prepared = list(instances)
         for instance in prepared:
             retirement.assert_active(conn, instance.instance_id)
-        configuration.validate_windows(prepared, self.get_task_effective_starts())
+        starts = self.get_task_effective_starts()
+        configuration.validate_windows((item for item in prepared
+            if starts.get(item.taskname) is None or item.data_start >= starts[item.taskname]
+            or not preaggregate_coverage.covers_window(conn, item)), starts)
         with conn:
             inserted_ids = set()
             for instance in prepared:
@@ -178,6 +182,15 @@ class StateStore:
                                             timezone=None, cleanup_columns=None) -> None:
         preaggregate_protection.validate(self._connection(), manifest, task_starts, coverage,
                                          timezone=timezone, cleanup_columns=cleanup_columns)
+
+    def preaggregate_recovery_coverage(self, instance: TaskInstance, now: datetime) -> dict | None:
+        return preaggregate_coverage.admission(self._connection(), instance, now)
+
+    def pending_preaggregate_coverages(self) -> list[dict]:
+        return preaggregate_coverage.pending(self._connection())
+
+    def preaggregate_covers_window(self, instance: TaskInstance) -> bool:
+        return preaggregate_coverage.covers_window(self._connection(), instance)
 
     def get_preaggregate(self, item_id: str) -> dict | None:
         return preaggregate.get(self._connection(), item_id)

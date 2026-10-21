@@ -3,7 +3,7 @@ from datetime import datetime
 import json
 
 from data_converge.dag.builder import timeline_time
-from . import preaggregate, retirement
+from . import preaggregate, preaggregate_coverage, retirement
 
 
 def pending(conn):
@@ -42,6 +42,10 @@ def _validate_window(conn, row, task_starts, coverage):
     start = _instant(row["data_start"])
     if coverage is None or _instant(coverage) > start:
         _reject(row, "START_CHANGED")
+    if 'recovery_coverage' in json.loads(row['config_evidence']):
+        if not preaggregate_coverage.valid_record(conn, row, task_starts=task_starts, coverage=coverage):
+            _reject(row, "RECOVERY_CHANGED")
+        return
     effective = task_starts.get(row["taskname"], coverage)
     if _instant(effective) > start:
         _reject(row, "EFFECTIVE_CHANGED")
@@ -59,6 +63,8 @@ def validate(conn, manifest, task_starts, coverage, *, timezone=None, cleanup_co
 
 def validate_cursors(conn, records=None):
     for row in pending(conn) if records is None else records:
+        if preaggregate_coverage.valid_record(conn, row):
+            continue
         formal = conn.execute("SELECT 1 FROM task_instances WHERE instance_id=?",
                               (row["instance_id"],)).fetchone()
         if formal is not None:

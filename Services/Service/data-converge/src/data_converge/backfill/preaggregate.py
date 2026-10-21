@@ -9,11 +9,21 @@ from data_converge.dag.builder import timeline_time
 from data_converge.scheduler.cron import next_fire_time
 
 
-def configuration_evidence(definition, taskname, manifest=None):
+def configuration_evidence(definition, taskname, manifest=None, *, recovery_coverage=None):
     manifest = build_manifest(definition) if manifest is None else manifest
-    return {'task': manifest['tasks'][taskname], 'connection': manifest['connection'],
-            'dataset_id': manifest['dataset_id'], 'timezone': definition.options.timezone,
-            'cleanup_column': definition.dag.tasks[taskname].cleanup_column}
+    evidence = {'task': manifest['tasks'][taskname], 'connection': manifest['connection'],
+                'dataset_id': manifest['dataset_id'], 'timezone': definition.options.timezone,
+                'cleanup_column': definition.dag.tasks[taskname].cleanup_column}
+    if recovery_coverage is not None:
+        evidence['recovery_coverage'] = recovery_coverage
+    return evidence
+
+
+def recovery_coverage(store, instance, now):
+    effective = store.get_task_effective_starts().get(instance.taskname)
+    if effective is None or timeline_time(instance.data_start) >= timeline_time(effective):
+        return None
+    return store.preaggregate_recovery_coverage(instance, now)
 
 
 def formal_scheduled_time(definition, instance, cursor=None):
@@ -44,7 +54,8 @@ def validate_eligibility(definition, store, instance, now, item=None):
     if timeline_time(instance.data_start) < timeline_time(coverage):
         raise ValueError('BACKFILL_PREAGGREGATE_BEFORE_COVERAGE')
     effective = store.get_task_effective_starts().get(instance.taskname)
-    if effective and timeline_time(instance.data_start) < timeline_time(effective):
+    recovery = recovery_coverage(store, instance, now)
+    if effective and timeline_time(instance.data_start) < timeline_time(effective) and recovery is None:
         raise ValueError('BACKFILL_PREAGGREGATE_BEFORE_EFFECTIVE_START')
     if store.get_retirement(instance.instance_id) is not None:
         raise ValueError('BACKFILL_PREAGGREGATE_RETIRED')
@@ -53,9 +64,11 @@ def validate_eligibility(definition, store, instance, now, item=None):
     blocker = store.preaggregate_blocker(instance.instance_id)
     if blocker:
         raise ValueError('BACKFILL_PREAGGREGATE_UNCONFIRMED')
-    due = formal_scheduled_time(definition, instance, store.get_cursor(instance.taskname))
+    cursor = None if recovery is not None else store.get_cursor(instance.taskname)
+    due = formal_scheduled_time(definition, instance, cursor)
     if item is not None:
-        if (item.get('config_evidence') != configuration_evidence(definition, instance.taskname)
+        evidence = configuration_evidence(definition, instance.taskname, recovery_coverage=recovery)
+        if (item.get('config_evidence') != evidence
                 or item.get('formal_scheduled_time') != due.isoformat()):
             raise ValueError('BACKFILL_CONFIGURATION_CHANGED')
     return due
@@ -75,7 +88,8 @@ def classify_plan(definition, store, items, now):
         if timeline_time(instance.data_end) > timeline_time(now):
             due = validate_eligibility(definition, store, instance, now)
             item.update(execution_kind='PREAGGREGATE', formal_scheduled_time=due.isoformat(),
-                        config_evidence=configuration_evidence(definition, instance.taskname, manifest))
+                        config_evidence=configuration_evidence(definition, instance.taskname, manifest,
+                            recovery_coverage=recovery_coverage(store, instance, now)))
         selected.append(item)
     if not selected:
         raise ValueError('BACKFILL_EMPTY_RANGE')

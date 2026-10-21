@@ -250,10 +250,30 @@ class TaskScheduler:
             for taskname in self.dag.topological_order
         }
         plan = self._plan_due(cursors, now)
+        instances = {instance.instance_id: instance for instance in plan.instances}
+        for instance in self._preaggregate_coverages(now):
+            instances.setdefault(instance.instance_id, instance)
+        prepared = tuple(instances.values())
         self.state_store.enqueue_and_advance(
-            plan.instances, plan.next_cursors,
-            cross_period_waits=self.cross_period_wait.records(plan.instances))
+            prepared, plan.next_cursors,
+            cross_period_waits=self.cross_period_wait.records(prepared))
         return self.run_pending(now=now)
+
+    def _preaggregate_coverages(self, now: datetime) -> tuple[TaskInstance, ...]:
+        """Restore explicitly promised windows independently of ordinary cursors."""
+        instances = []
+        for row in self.state_store.pending_preaggregate_coverages():
+            due = datetime.fromisoformat(row['formal_scheduled_time'])
+            if timeline_time(due) > timeline_time(now):
+                continue
+            if row['taskname'] not in self.dag.tasks:
+                raise ValueError('PREAGGREGATE_COVERAGE_TASK_CHANGED:' + row['item_id'])
+            instance = self.dag_builder.create_instance(
+                self.dag, row['taskname'], due.astimezone(self.timezone))
+            if not self.state_store.preaggregate_covers_window(instance):
+                raise ValueError('PREAGGREGATE_COVERAGE_WINDOW_CHANGED:' + row['item_id'])
+            instances.append(instance)
+        return tuple(instances)
 
     def _plan_due(self, cursors: Mapping[str, datetime | None], now: datetime) -> SchedulePlan:
         """Calculate complete due windows without changing state or executing work."""
@@ -363,7 +383,8 @@ class TaskScheduler:
                        for field in ("data_start", "data_end"))):
             return self._skip_pending(record, "TASK_WINDOW_CHANGED")
         effective_start = self._effective_start(instance.taskname)
-        if effective_start and timeline_time(instance.data_start) < timeline_time(effective_start):
+        if (effective_start and timeline_time(instance.data_start) < timeline_time(effective_start)
+                and not self.state_store.preaggregate_covers_window(instance)):
             return self._skip_pending(record, "WINDOW_BEFORE_EFFECTIVE_START")
         return instance
 

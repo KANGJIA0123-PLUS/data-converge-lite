@@ -1,5 +1,6 @@
 """Opt in with RUN_CLICKHOUSE_INTEGRATION=1; owns and removes one isolated container."""
 
+from contextlib import closing
 from datetime import datetime, timedelta
 import os
 import subprocess
@@ -17,6 +18,7 @@ from data_converge.backfill.plan import build_plan
 from data_converge.backfill.queue import Queue
 from data_converge.backfill.worker import BackfillWorker
 from data_converge.config.application import load_definition
+from data_converge.config.evolution import build_manifest, manifest_digest
 from data_converge.dag import TaskStatus
 from data_converge.runtime import build_scheduler
 from data_converge.sql_execution import SQLTaskRunner
@@ -208,3 +210,57 @@ def test_early_chain_is_overwritten_by_formal_same_window_without_accumulation(s
     scheduler.tick(due)
     assert_targets(s.config, 3, 18)
     assert all(s.store.get_instance(instance_id)['attempts'] == 1 for instance_id in ids)
+
+
+def install_cutover(s):
+    cutover = s.start + timedelta(minutes=20)
+    manifest = build_manifest(s.definition)
+    revision = manifest_digest(manifest)
+    s.store.set_meta('binding', 'a' * 64)
+    s.store.set_meta('coverage_start', (s.start - timedelta(days=1)).isoformat())
+    record = dict(schema_version=1, migration_id='integration-cutover', cutover=cutover.isoformat(),
+                  previous_binding='a' * 64, current_binding='b' * 64, revision=revision,
+                  backup_path='/test/before.sqlite3', recovered_at=cutover.isoformat(),
+                  identity_verified=False, previous_definition_available=False,
+                  historical_counts=s.store.status_counts())
+    s.store.apply_configuration(expected_binding='a' * 64, expected_revision=None,
+        manifest=manifest, revision=revision, task_starts={task: cutover for task in TASKS},
+        binding='b' * 64, migration_id='integration-cutover', applied_at=cutover,
+        backup_path='/test/before.sqlite3', retire_existing=True, recovery=record)
+
+
+@pytest.mark.parametrize('scenario', ['PT1H', 'P1D'], indirect=True)
+def test_cross_cutover_overwrites_after_restart_and_advanced_cursor(scenario, monkeypatch):
+    s = scenario
+    install_cutover(s)
+    insert_source(s.config, [(s.start, 2), (s.start + timedelta(minutes=10), 5)])
+    early = s.start + timedelta(minutes=30)
+    plan = build_plan(s.definition, s.start.isoformat(), s.end.isoformat(), all_tasks=True,
+                      now=early, preaggregate=True, store=s.store)
+    job = s.queue.submit(plan)
+    worker = BackfillWorker(s.definition, s.store, s.runner, clock=lambda: early)
+    worker.run_one(s.queue)
+    worker.run_one(s.queue)
+    assert s.queue.status(job)['counts'] == {'SUCCESS': 2}
+    assert_targets(s.config, 2, 7)
+    ids = [item['instance_id'] for item in plan['items']]
+    initial = [s.store.latest_preaggregate(instance_id) for instance_id in ids]
+    assert all(row['covered_at'] is None for row in initial)
+    s.store.enqueue_and_advance([], {task: s.end + timedelta(days=3) for task in TASKS})
+    path = s.store.path
+    s.store.close()
+    insert_source(s.config, [(s.start + timedelta(minutes=40), 11)])
+    with closing(open_store(path)) as store:
+        scheduler, executor = build_scheduler(s.definition, s.runner, store, s.start - timedelta(days=1))
+        due = s.end + timedelta(minutes=15)
+        monkeypatch.setattr(executor, '_now', lambda instance: due)
+        report = scheduler.tick(due)
+        assert {instance.instance_id for instance in report.succeeded} == set(ids)
+        assert_targets(s.config, 3, 18)
+        formal = [store.get_instance(instance_id) for instance_id in ids]
+        assert all(store.latest_preaggregate(instance_id)['covered_at'] for instance_id in ids)
+        assert_phases(s.config, [row['query_id'] for row in initial + formal])
+        scheduler.tick(due)
+        assert_targets(s.config, 3, 18)
+        assert all(store.get_instance(instance_id)['attempts'] == 1 for instance_id in ids)
+        store.validate_retirement()

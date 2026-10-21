@@ -5,7 +5,7 @@ import uuid
 
 from data_converge.dag.builder import timeline_time
 from data_converge.errors import safe_diagnostic_details
-from . import retirement
+from . import preaggregate_coverage, retirement
 
 
 def available(conn):
@@ -118,6 +118,8 @@ def begin(conn, item, instance, now):
     with conn:
         _create_schema(conn)
         status, error = _decision(conn, instance, now)
+        if status == "RUNNING":
+            preaggregate_coverage.validate_dispatch(conn, item, instance, now)
         query_id = str(uuid.uuid4()) if status == "RUNNING" else None
         conn.execute("""INSERT INTO preaggregate_attempts
             (item_id,instance_id,taskname,revision,config_evidence,formal_scheduled_time,
