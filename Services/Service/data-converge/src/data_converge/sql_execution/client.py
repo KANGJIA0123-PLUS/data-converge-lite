@@ -107,7 +107,7 @@ def execute_sql(config: dict[str, Any], sql: str, timeout: int = 300,
                             body=body if str(error) == "CLICKHOUSE_RESPONSE_INVALID" else None)
             raise
     except SQLExecutionError:
-        # Success stays quiet; retain only the failed operation's wire SQL.
+        # Success stays quiet; render only the failed operation's bound SQL.
         debug.log_request(config, request)
         raise
 

@@ -146,12 +146,16 @@ DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号�
 无需开启 DEBUG，SQL 执行失败时就会在现有服务日志中输出以下 ERROR 记录，可用同一个 `query_id` 关联：
 
 - `SQL_ERROR`：原始异常类型、脱敏后的错误消息、HTTP 状态码、ClickHouse 异常码（响应头提供时）和服务端错误正文。
-- `SQL_REQUEST`：失败操作实际使用的 SQL、绑定参数与 query_id。
+- `SQL_REQUEST`：按失败请求的实际绑定参数渲染后的等价 SQL、绑定参数与 query_id。
 - `SQL_TASK_FAILED`：任务、实例、SQL 文件、失败阶段（`preflight` / `cleanup` / `aggregate`）和处理窗口。
 
 成功执行的 SQL 不打印。清理成功、汇聚失败时，只打印失败的汇聚 SQL；清理失败时只打印清理 SQL。预检失败尚未发送 SQL，此时查看 `SQL_TASK_FAILED` 和对应错误原因。连接失败、超时或响应校验失败也记录对应请求，但不代表数据库已确认执行失败，原 UNKNOWN 判定保持不变。
 
-SQL 保留实际请求中的参数占位符，参数值单独展示。密码、认证字段和连接凭据会脱敏，错误正文按 UTF-8 解码前的字节长度最多保留 64 KiB，超出部分由 `body_truncated` 标记；截断边界还会保守省略一段尾部并标记 `REDACTED_TRUNCATED_TAIL`，避免留下凭据片段。错误正文读取沿用原请求截止时间，读取失败会显示 `body_read_failed`，不会因此改写原 HTTP 错误的执行结果判定。失败 SQL 可能包含业务值，沿用当前日志的访问权限、轮转和保留期限。
+日志中的 `sql=` 会展开当前程序使用的 `start_time`、`end_time` 和 `system_timezone` 参数。数值保留声明类型，例如 `{start_time:UInt32}` 显示为 `CAST(1788915600 AS UInt32)`；清理 SQL 的 `{end_time:DateTime}` 显示为 `CAST(1788919200 AS DateTime)`，沿用 ClickHouse 服务端时区；时区参数显示为 `'Asia/Shanghai'` 等实际请求值。渲染只用于日志，HTTP 仍发送原模板和绑定参数，不重新读取系统时区或计算窗口。
+
+`sql_rendered=true` 表示活动参数均已展开，不代表数据库确认执行成功。字符串、引用标识符和注释内的相似文本原样保留。缺值、重复值、不支持的类型或无法可靠解释的参数保留原占位符，并显示 `sql_rendered=false` 与 `unresolved_parameters`；String 参数包含反斜杠或控制字符时不会猜测 ClickHouse 的 escaped 解码结果。参数元数据继续保留便于核对。复制日志 SQL 排查时应使用同一数据库和会话设置；INSERT／DELETE 会修改数据，日志本身不会触发重跑。
+
+密码、认证字段和连接凭据会脱敏，错误正文按 UTF-8 解码前的字节长度最多保留 64 KiB，超出部分由 `body_truncated` 标记；截断边界还会保守省略一段尾部并标记 `REDACTED_TRUNCATED_TAIL`，避免留下凭据片段。错误正文读取沿用原请求截止时间，读取失败会显示 `body_read_failed`，不会因此改写原 HTTP 错误的执行结果判定。失败 SQL 可能包含业务值，沿用当前日志的访问权限、轮转和保留期限。
 
 `logging.debug_enabled` 默认是 `false`，省略时也保持关闭。若还需要 Python 调用栈及各执行阶段的 DEBUG 记录，在当前使用的应用配置文件中修改：
 

@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -18,11 +19,40 @@ from .test_sql_runner_debug import make_instance, make_runner
 from .test_main import app
 
 
+AGGREGATION_SQL = (
+    "INSERT INTO target SELECT toDateTime({start_time:UInt32}, {system_timezone:String}), "
+    "{end_time:UInt32}"
+)
+CLEANUP_SQL = (
+    "ALTER TABLE target_local DELETE WHERE window_time >= {start_time:DateTime} "
+    "AND window_time < {end_time:DateTime} SETTINGS mutations_sync=2"
+)
+
+
+def assert_failed_request_sql(request, message, operation):
+    parameters = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
+    assert parameters["param_start_time"] == ["1792458000"]
+    assert parameters["param_end_time"] == ["1792461600"]
+    assert parameters["param_system_timezone"] == ["Asia/Kathmandu"]
+    assert request.data.decode() == (CLEANUP_SQL if operation == 1 else AGGREGATION_SQL)
+    expected = (
+        "ALTER TABLE target_local DELETE WHERE window_time >= CAST(1792458000 AS DateTime) "
+        "AND window_time < CAST(1792461600 AS DateTime) SETTINGS mutations_sync=2"
+        if operation == 1 else
+        "INSERT INTO target SELECT toDateTime(CAST(1792458000 AS UInt32), 'Asia/Kathmandu'), "
+        "CAST(1792461600 AS UInt32)"
+    )
+    assert message.split("\nsql=", 1)[1] == expected
+    assert "sql_rendered=true" in message and "unresolved_parameters=[]" in message
+
+
 @pytest.mark.parametrize("failed_operation", [1, 2], ids=["cleanup", "aggregation"])
 @pytest.mark.parametrize("debug_enabled", [False, True])
 def test_runner_logs_only_the_failed_operation_sql(
         tmp_path, monkeypatch, caplog, failed_operation, debug_enabled):
     task_runner = make_runner(tmp_path, debug_enabled=debug_enabled)
+    (tmp_path / "hour.sql").write_text(AGGREGATION_SQL)
+    monkeypatch.setattr(client, "system_timezone_name", lambda: "Asia/Kathmandu")
     calls = []
 
     class Opener:
@@ -40,7 +70,7 @@ def test_runner_logs_only_the_failed_operation_sql(
     records = [record for record in caplog.records if "SQL_REQUEST" in record.getMessage()]
     assert len(records) == 1 and records[0].levelno == logging.ERROR
     text = records[0].getMessage()
-    assert calls[-1].data.decode() in text
+    assert_failed_request_sql(calls[-1], text, failed_operation)
     assert "runner-attempt" in text
     assert "param_start_time" in text and "param_end_time" in text
     assert "Table target does not exist" in caplog.text
@@ -48,7 +78,9 @@ def test_runner_logs_only_the_failed_operation_sql(
     assert len(errors) == 1
     assert "SQL_TASK_FAILED" in caplog.text
     if failed_operation == 2:
-        assert calls[0].data.decode() not in caplog.text
+        assert "ALTER TABLE target_local DELETE" not in caplog.text
+    else:
+        assert "INSERT INTO target" not in caplog.text
     assert "runner-secret-password" not in caplog.text
 
 
@@ -131,6 +163,9 @@ def test_cli_failure_writes_failed_sql_at_default_and_debug_levels(app, monkeypa
     assert len(calls) == 1
     text = (app.parent / "logs/data-converge.log").read_text()
     assert text.count("SQL_REQUEST") == 1
-    assert calls[0][0].data.decode() in text
+    assert calls[0][0].data.decode() == CLEANUP_SQL
+    assert ("window_time >= CAST(1791770400 AS DateTime) "
+            "AND window_time < CAST(1791770700 AS DateTime)") in text
+    assert "sql_rendered=true" in text and "{start_time:DateTime}" not in text
     assert "Table target_local does not exist" in text
     assert "INSERT INTO target" not in text and "synthetic-test-password" not in text

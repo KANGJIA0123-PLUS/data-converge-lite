@@ -70,17 +70,32 @@ def test_debug_requires_effective_debug_log_level(debug, caplog):
     assert all(record.levelno == logging.ERROR for record in caplog.records)
 
 
-def test_request_logs_complete_wire_sql_and_only_approved_parameters(debug, caplog):
+def test_request_logs_complete_rendered_sql_and_only_approved_parameters(debug, caplog):
     sql = "SELECT {start_time:UInt32}\n" + ("-- retain SQL line\n" * 5000) + "-- final SQL line"
+    request = sql_request(sql)
+    original_url, original_data = request.full_url, request.data
     with caplog.at_level(logging.DEBUG, logger=MODULE):
-        debug.log_request(debug_config(), sql_request(sql))
+        debug.log_request(debug_config(), request)
     text = caplog.text
-    assert "SQL_REQUEST" in text and sql in text
+    expected = "SELECT CAST(1788915600 AS UInt32)\n" + sql.split("\n", 1)[1]
+    assert "SQL_REQUEST" in text and expected in text
+    assert "sql_rendered=true" in text and "unresolved_parameters=[]" in text
+    assert request.full_url == original_url and request.data == original_data
+    assert request.get_header("Authorization") == "Basic header-secret"
     for value in ("metrics", "attempt-42", "1788915600", "1788919200", "Asia/Shanghai"):
         assert value in text
     for secret in ("private-host", "header-secret", "url-secret", "parameter-secret", "token-secret"):
         assert secret not in text
     assert caplog.records[0].exc_info is None
+
+
+def test_request_never_expands_unapproved_secret_parameters(debug, caplog):
+    with caplog.at_level(logging.ERROR, logger=MODULE):
+        debug.log_request(debug_config(), sql_request("SELECT {password:String}"))
+    assert "sql_rendered=false" in caplog.text
+    assert "SELECT {password:[REDACTED]}" in caplog.text
+    for secret in ("header-secret", "url-secret", "parameter-secret", "token-secret"):
+        assert secret not in caplog.text
 
 
 def test_error_redacts_known_credential_encodings_and_retains_missing_table(debug, caplog):

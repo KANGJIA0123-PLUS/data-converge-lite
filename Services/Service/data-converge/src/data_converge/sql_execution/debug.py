@@ -12,6 +12,8 @@ import urllib.parse
 
 from data_converge.errors import safe_error_details
 
+from .render import render_sql, sql_string_literal
+
 
 logger = logging.getLogger(__name__)
 MAX_DEBUG_BODY_BYTES = 65536
@@ -44,7 +46,8 @@ def _known_secrets(config):
     token = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
     secrets = {password, urllib.parse.quote(password, safe=""), urllib.parse.quote_plus(password),
                json.dumps(password, ensure_ascii=True)[1:-1],
-               json.dumps(password, ensure_ascii=False)[1:-1], token}
+               json.dumps(password, ensure_ascii=False)[1:-1],
+               sql_string_literal(password)[1:-1], token}
     return sorted(secrets, key=len, reverse=True)
 
 
@@ -57,7 +60,7 @@ def _redact(config, text):
 
 
 def log_request(config, request):
-    """Record a failed POST's body and approved wire parameters, never headers."""
+    """Render a failed POST using its approved wire parameters, never headers."""
     if not logger.isEnabledFor(logging.ERROR):
         return
     parameters = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query,
@@ -65,7 +68,9 @@ def log_request(config, request):
     parameters = {key: values for key, values in parameters.items() if key in _PARAMETERS}
     query_id = parameters.get("query_id", [""])[0]
     sql = request.data.decode("utf-8", errors="replace")
-    message = (f"SQL_REQUEST query_id={query_id} "
+    sql, unresolved = render_sql(sql, parameters)
+    message = (f"SQL_REQUEST query_id={query_id} sql_rendered={str(not unresolved).lower()} "
+               f"unresolved_parameters={json.dumps(unresolved, ensure_ascii=False)} "
                f"parameters={json.dumps(parameters, ensure_ascii=False, sort_keys=True)}\nsql={sql}")
     logger.error("%s", _redact(config, message))
 
