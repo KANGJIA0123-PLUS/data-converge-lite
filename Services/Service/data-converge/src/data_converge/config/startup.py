@@ -6,10 +6,10 @@ import math
 
 @dataclass(frozen=True)
 class StartupSettings:
-    timeout_seconds: float = 600
-    initial_retry_delay_seconds: float = 2
-    max_retry_delay_seconds: float = 30
-    probe_timeout_seconds: float = 10
+    timeout_seconds: float = 600.0
+    initial_retry_delay_seconds: float = 2.0
+    max_retry_delay_seconds: float = 30.0
+    probe_timeout_seconds: float = 10.0
 
     def __post_init__(self):
         for option in fields(self):

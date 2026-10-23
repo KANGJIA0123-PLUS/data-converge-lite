@@ -38,11 +38,11 @@ class ExecutionAdapter:
     probe_with_timeout: Callable[[float], None] | None = None
 
 
-def _probe_clickhouse(config: dict, timeout: float = 10) -> None:
+def _probe_clickhouse(config: dict, timeout: float = 10.0) -> None:
     execute_sql(config, 'SELECT 1', timeout=timeout)
 
 
-def _legacy_sql_probe(runner: SQLTaskRunner, timeout: float = 10) -> None:
+def _legacy_sql_probe(runner: SQLTaskRunner, timeout: float = 10.0) -> None:
     """Preserve the original three-argument runtime's deferred SQL probe."""
     _probe_clickhouse(runner.config, timeout)
 
