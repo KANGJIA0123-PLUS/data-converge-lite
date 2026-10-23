@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from data_converge.config.application import ApplicationDefinition
+from data_converge.config.startup import StartupSettings
 from data_converge.dag import DAGExecutor, ExecutionReport
 from data_converge.dag.ports import TaskRunner
 from data_converge.dwd_ready.coordinator import ReadyCoordinator
@@ -25,6 +26,7 @@ from data_converge.coordination import create_leadership, GuardedRunner, Guarded
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.archives.worker import ArchiveWorker
 from data_converge.backfill.worker import BackfillWorker
+from data_converge.startup import wait_for_clickhouse
 
 
 @dataclass(frozen=True)
@@ -33,15 +35,16 @@ class ExecutionAdapter:
 
     runner: TaskRunner
     probe: Callable[[], None]
+    probe_with_timeout: Callable[[float], None] | None = None
 
 
-def _probe_clickhouse(config: dict) -> None:
-    execute_sql(config, 'SELECT 1', timeout=10)
+def _probe_clickhouse(config: dict, timeout: float = 10) -> None:
+    execute_sql(config, 'SELECT 1', timeout=timeout)
 
 
-def _legacy_sql_probe(runner: SQLTaskRunner) -> None:
+def _legacy_sql_probe(runner: SQLTaskRunner, timeout: float = 10) -> None:
     """Preserve the original three-argument runtime's deferred SQL probe."""
-    _probe_clickhouse(runner.config)
+    _probe_clickhouse(runner.config, timeout)
 
 
 def _create_sql_execution(config_path: Path, definition: ApplicationDefinition) -> ExecutionAdapter:
@@ -49,7 +52,8 @@ def _create_sql_execution(config_path: Path, definition: ApplicationDefinition) 
     runner = SQLTaskRunner(config_path, definition.sql_dir,
                            timeout=definition.options.default_timeout_seconds,
                            config=definition.config, **optional)
-    return ExecutionAdapter(runner, partial(_probe_clickhouse, runner.config))
+    probe = partial(_probe_clickhouse, runner.config)
+    return ExecutionAdapter(runner, probe, probe)
 
 
 def _create_ready_source(config: dict) -> ReadySignalSource:
@@ -89,11 +93,16 @@ class ServiceRuntime:
     startup_probe: Callable[[], None] | None = field(default=None, repr=False)
     lease: WriterLease | None = field(default=None, repr=False)
     maintenance: AbstractContextManager | None = field(default=None, repr=False)
+    startup_settings: StartupSettings = field(default_factory=StartupSettings)
+    probe_with_timeout: Callable[[float], None] | None = field(default=None, repr=False)
     _probe: Callable[[], None] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._probe = (self.startup_probe if self.startup_probe is not None
                        else partial(_legacy_sql_probe, self.runner))
+        if self.probe_with_timeout is None:
+            self.probe_with_timeout = (partial(_legacy_sql_probe, self.runner)
+                                       if self.startup_probe is None else lambda _timeout: self._probe())
 
     def run_task(self, taskname: str, scheduled_time: datetime) -> ExecutionReport:
         self._assert_owned()
@@ -109,7 +118,10 @@ class ServiceRuntime:
 
     def serve(self) -> None:
         self._assert_owned()
-        self._probe()
+        if not wait_for_clickhouse(self.probe_with_timeout, self.startup_settings,
+                                  lambda: self.scheduler.stop_requested, self._assert_owned):
+            self._assert_owned()
+            return
         self._assert_owned()
         if not self.scheduler.stop_requested:
             with self.maintenance or nullcontext():
@@ -201,5 +213,8 @@ def open_runtime(config_path: Path, definition: ApplicationDefinition, store: St
                          scheduler, executor, cleanup, dependencies.source_factory, lease)
         policy = ArchiveSettings.from_mapping(definition.config.get('state', {}).get('archives'))
         maintenance = ArchiveWorker(store.path, policy, lease=lease)
-        runtime = ServiceRuntime(scheduler, runner, heartbeat, execution.probe, lease, maintenance)
+        runtime = ServiceRuntime(
+            scheduler, runner, heartbeat, execution.probe, lease, maintenance,
+            startup_settings=StartupSettings.from_mapping(definition.config.get('startup')),
+            probe_with_timeout=execution.probe_with_timeout)
         yield runtime

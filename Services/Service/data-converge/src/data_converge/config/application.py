@@ -21,6 +21,7 @@ from data_converge.archives.settings import ArchiveSettings
 from .loader import ConfigLoader
 from .cron import compile_cron_groups
 from .leadership import LeadershipSettings
+from .startup import StartupSettings
 from data_converge.time_policy import system_timezone_name
 
 RESOURCES = Path(__file__).resolve().parents[3] / 'resources'
@@ -128,6 +129,7 @@ def settings(config: dict[str, Any]) -> SchedulerSettings:
 def load_definition(config_path: Path, *, raw_config: dict[str, Any] | None = None) -> ApplicationDefinition:
     raw_config = load_app_config(config_path) if raw_config is None else raw_config
     config = validate_config(raw_config, config_path, resolve_password=False)
+    StartupSettings.from_mapping(config.get('startup'))
     ArchiveSettings.from_mapping(config.get('state', {}).get('archives'))
     config['dwd_ready'] = load_ready_config(config, Path(config_path).parent)
     options = settings(config)

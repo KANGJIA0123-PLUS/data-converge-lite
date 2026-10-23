@@ -16,6 +16,12 @@ clickhouse:
 dwd_ready:
   enabled: false  # 仅本地原流程调试；生产配置默认开启，不可绕过既有账本门控。
 
+startup:
+  timeout_seconds: 600
+  initial_retry_delay_seconds: 2
+  max_retry_delay_seconds: 30
+  probe_timeout_seconds: 10
+
 state:
   directory: ./var/lite-state
 scheduler:

@@ -131,18 +131,18 @@ def test_application_runs_with_injected_adapters_without_external_services(app):
     assert source.closed
 
 
-def test_legacy_runtime_constructor_keeps_default_sql_startup_probe(local_http_app):
+def test_legacy_runtime_constructor_keeps_default_sql_startup_probe(local_http_app, monkeypatch):
     app, queries = local_http_app
     definition = load_definition(app)
     directory = app.parent / 'state'
     store = StateStore(directory / 'state.sqlite3', create=True)
     store.acquire_lock()
+    monkeypatch.setattr(runtime.TaskScheduler, 'start', lambda self: self.shutdown(wait=False))
     try:
         with runtime.open_runtime(app, definition, store, directory, START) as service:
             legacy = runtime.ServiceRuntime(service.scheduler, service.runner, service.heartbeat)
-            legacy.request_stop()
             legacy.serve()
-            assert not legacy.heartbeat.ready
+            assert legacy.heartbeat.ready and legacy.scheduler.stop_requested
     finally:
         store.close()
     assert [body for _, body in queries] == ['SELECT 1']

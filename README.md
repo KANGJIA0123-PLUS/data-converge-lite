@@ -51,6 +51,20 @@ Services/Service/data-converge/
 
 公司启动入口保持 `bash /opt/its/data-converge/bin/start.sh`。业务首次启动时，如果状态目录没有账本、初始化标记或其他残留，会自动初始化 SQLite，日志记录 `STATE_INITIALIZED: coverage_start=...`。覆盖起点为当前时间向上取整到五分钟边界；之前窗口不在新账本的处理范围。已有账本会校验并复用，保留覆盖起点和任务结果。
 
+服务启动调度前，在配置的 ClickHouse 业务库上执行只读 `SELECT 1`。名称解析失败、连接拒绝/中断/超时、TLS 意外 EOF、业务库尚不存在（ClickHouse Code 81）及临时 HTTP 错误会在进程内退避重试。默认等待最多 600 秒，间隔为 2、4、8、16、30 秒，之后保持 30 秒；每次查询最多 10 秒并受剩余总预算限制。可通过应用配置调整：
+
+```yaml
+startup:
+  timeout_seconds: 600
+  initial_retry_delay_seconds: 2
+  max_retry_delay_seconds: 30
+  probe_timeout_seconds: 10
+```
+
+上述值须为正有限数值，初始间隔不能大于最大间隔；未配置时使用默认值。等待期持续更新存活心跳，应用 readiness 为 false，不启动调度和归档；成功记录 `CLICKHOUSE_STARTUP_READY`，开始汇聚。每次重试记录 `CLICKHOUSE_STARTUP_WAIT` 及安全错误字段；超过预算记录 `CLICKHOUSE_STARTUP_TIMEOUT` 并失败退出。认证、权限、证书校验、其他明确 SQL 错误及配置错误立即失败。SIGTERM/SIGINT 或失去写入租约会停止等待并释放资源；退避期间每 0.2 秒检查一次，在途请求受查询超时约束，系统阻塞的 DNS 解析仍受平台 `getaddrinfo` 限制。
+
+该策略只作用于正常服务启动的只读检查，不修改业务写入的重试/UNKNOWN 语义，也不自动创建数据库或表；安装流程仍需完成建库建表。它不会等待 Redis、凭据解密或其他初始化步骤。当前仓库的 `liveness_check.sh`、`readiness_check.sh` 仍保留原有直接 `exit 0`，因此上述 readiness 指应用心跳和 CLI 健康检查结果，部署脚本本身未在本次更改。
+
 应用按运行进程的系统时区解释本地日期、Cron 日程、汇聚时间桶、诊断展示和每日状态备份。容器以自身的 `TZ` 或系统时区文件为准，不会自动继承宿主机时区；部署时可设置 `TZ=Asia/Shanghai`、`TZ=UTC` 或其他 IANA 时区名称，并确保镜像包含对应时区数据。有效时区在进程首次读取后固定，修改 `TZ` 或系统时区后需重启服务。`scheduler.timezone` 不再作为 YAML 配置项；内部 `SchedulerSettings.timezone` 只读返回有效系统时区。
 
 若时区配置缺失、无效或读取失败，应用回退到 `Asia/Shanghai`，并记录一次 `SYSTEM_TIMEZONE_FALLBACK` 告警；显式配置的 UTC 仍使用 UTC。回退结果同样固定到进程结束，诊断中的 `timezone` 显示最终采用的时区。

@@ -18,6 +18,13 @@ clickhouse:
   secure: true
   verify: true
 
+startup:
+  # 在业务库上执行只读SELECT 1；安装期间依赖未就绪时等待，不启动汇聚。
+  timeout_seconds: 600
+  initial_retry_delay_seconds: 2
+  max_retry_delay_seconds: 30
+  probe_timeout_seconds: 10
+
 state:
   directory: /srv/its/MindOpsBOSE/data-converge/data/lite-state
   archives:
