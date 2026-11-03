@@ -38,10 +38,12 @@ class SQLTaskRunner:
         *,
         config: dict[str, Any] | None = None,
         expected_sql_hashes: dict[str, str] | None = None,
+        pool=None,
     ):
         self.config_path = Path(config_path)
         self.sql_directory = Path(sql_directory)
         self.timeout = timeout
+        self.pool = pool
         self.expected_sql_hashes = None if expected_sql_hashes is None else dict(expected_sql_hashes)
 
         # Reuse the validated startup snapshot so binding and execution agree.
@@ -72,6 +74,7 @@ class SQLTaskRunner:
                 start_time=instance.data_start,
                 end_time=instance.data_end,
                 query_id=getattr(instance, "query_id", None),
+                pool=self.pool,
             )
         except Exception as error:
             self._log_failure(instance, sql_file, "aggregate", error)
@@ -133,7 +136,7 @@ class SQLTaskRunner:
                 config=self.config, sql=cleanup_sql,
                 timeout=self.timeout_for(instance) if timeout is None else timeout,
                 start_time=instance.data_start, end_time=instance.data_end,
-                query_id=getattr(instance, "query_id", None),
+                query_id=getattr(instance, "query_id", None), pool=self.pool,
             )
         except Exception as error:
             diagnostic = safe_error_details(error)

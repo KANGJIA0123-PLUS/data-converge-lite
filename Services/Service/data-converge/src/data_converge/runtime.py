@@ -26,6 +26,7 @@ from data_converge.coordination import create_leadership, GuardedRunner, Guarded
 from data_converge.infrastructure.redis import create_connection
 from data_converge.scheduler.skip import queue_resume
 from data_converge.sql_execution.client import kill_queries
+from data_converge.sql_execution.pool import ClickHousePool
 from data_converge.sql_execution.config import resolve_credentials
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.archives.worker import ArchiveWorker
@@ -53,9 +54,10 @@ def _legacy_sql_probe(runner: SQLTaskRunner, timeout: float = 10.0) -> None:
 
 def _create_sql_execution(config_path: Path, definition: ApplicationDefinition) -> ExecutionAdapter:
     optional = {} if definition.sql_hashes is None else {'expected_sql_hashes': definition.sql_hashes}
+    pool = ClickHousePool.from_mapping(definition.config.get('clickhouse_pool'))
     runner = SQLTaskRunner(config_path, definition.sql_dir,
                            timeout=definition.options.task_timeout_seconds,
-                           config=definition.config, **optional)
+                           config=definition.config, pool=pool, **optional)
     probe = partial(_probe_clickhouse, runner.config)
     return ExecutionAdapter(runner, probe, probe)
 

@@ -9,6 +9,7 @@ import json
 import math
 import re
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -60,9 +61,11 @@ def format_clickhouse_datetime(value: datetime | str) -> str:
     return str(int(value.timestamp()))
 
 
-def _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, query_id):
+def _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, query_id,
+                       settings=None):
     """Keep credentials in headers and preserve ClickHouse's SQL placeholders."""
-    parameters = dict(database=clickhouse["database"], default_format="JSONCompact",
+    parameters = dict(settings or {})
+    parameters.update(database=clickhouse["database"], default_format="JSONCompact",
                       wait_end_of_query="1", max_execution_time=str(max(1, math.ceil(timeout))),
                       query_id=query_id,
                       param_system_timezone=system_timezone_name())
@@ -80,20 +83,41 @@ def _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, q
 
 def execute_sql(config: dict[str, Any], sql: str, timeout: int = 300,
                 start_time: datetime | str | None = None,
-                end_time: datetime | str | None = None, *, query_id: str | None = None) -> list:
-    """POST one query; ambiguous failures are never eligible for automatic retry."""
+                end_time: datetime | str | None = None, *, query_id: str | None = None,
+                pool=None) -> list:
+    """POST one query; ambiguous failures are never eligible for automatic retry.
+
+    With ``pool`` the query waits for an aggregation slot (within its budget),
+    uses the pool's connect timeout and sends its ClickHouse settings.
+    """
+    if pool is None:
+        return _execute(config, sql, timeout, start_time, end_time, query_id, None, None)
+    started = time.monotonic()
+    try:
+        with pool.slot(timeout):
+            remaining = max(1.0, timeout - (time.monotonic() - started))
+            return _execute(config, sql, remaining, start_time, end_time, query_id,
+                            pool.query_parameters(), pool.connect_timeout_seconds)
+    except TimeoutError:
+        # Nothing was sent: safe to retry later.
+        raise SQLExecutionError("CLICKHOUSE_POOL_EXHAUSTED", retryable=True,
+                                query_id=query_id) from None
+
+
+def _execute(config, sql, timeout, start_time, end_time, query_id, settings, connect_timeout):
     if (start_time is None) != (end_time is None):
         raise ValueError("start_time 和 end_time 必须同时提供")
     if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("CLICKHOUSE_TIMEOUT_INVALID") from None
-    deadline = QueryDeadline(timeout)
+    deadline = QueryDeadline(timeout, connect_timeout=connect_timeout)
     clickhouse = config["clickhouse"]
     origin, _, secure, verify = connection_parameters(clickhouse)
     if query_id is None:
         query_id = uuid.uuid4().hex
     if not isinstance(query_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", query_id):
         raise ValueError("CLICKHOUSE_QUERY_ID_INVALID") from None
-    request = _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, query_id)
+    request = _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, query_id,
+                                 settings)
     handlers = build_query_handlers(deadline, secure, verify)
     try:
         body, remaining = _post_sql_request(config, request, handlers, deadline, timeout, query_id)

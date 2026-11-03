@@ -20,6 +20,18 @@ clickhouse:
   secure: true
   verify: true
 
+# 汇聚任务专用 ClickHouse 连接池（exporter 查询使用其独立连接，不受此影响）。
+# 实际并发 = min(scheduler.max_concurrent_tasks, max_connections)。
+# max_execution_time 按任务周期超时（scheduler.task_timeout_seconds）逐条设置。
+clickhouse_pool:
+  max_connections: 20          # 并行数
+  connect_timeout_seconds: 10  # 连接超时
+  settings:
+    max_threads: 8                 # 单条汇聚 SQL 的内部并行线程数
+    readonly: 0                    # 允许写入
+    load_balancing: random         # ClickHouse 集群均衡分发读请求
+    max_memory_usage: 10000000000  # 单次查询最大内存 10GB，防止 OOM
+
 startup:
   # 在业务库上执行只读SELECT 1；安装期间依赖未就绪时等待，不启动汇聚。
   timeout_seconds: 600

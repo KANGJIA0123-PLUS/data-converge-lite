@@ -24,8 +24,9 @@ class QueryDeadline:
     returns, an expired deadline prevents any new connection or SQL submission.
     """
 
-    def __init__(self, timeout):
+    def __init__(self, timeout, *, connect_timeout=None):
         self.expires_at = time.monotonic() + timeout
+        self.connect_timeout = connect_timeout
         self._lock = threading.Lock()
         self._expired = threading.Event()
         self._socket = None
@@ -85,10 +86,14 @@ class QueryDeadline:
                 with self._lock:
                     self.remaining()
                     self._socket = sock
-                sock.settimeout(self.remaining())
+                limit = self.remaining()
+                if self.connect_timeout is not None:
+                    limit = min(limit, self.connect_timeout)
+                sock.settimeout(limit)
                 if source_address:
                     sock.bind(source_address)
                 sock.connect(target)
+                sock.settimeout(self.remaining())
                 return sock
             except OSError as error:
                 sock.close()

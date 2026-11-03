@@ -115,4 +115,4 @@ sha256sum \
 
 - 补齐四周期 Agent ADS 的成功请求总量 `request_success_sum`。原补丁读取的 `dws.request_success_sum` 不存在，实际来源为 `request_success_count`，按窗口累加后转为 `UInt64`。成功率与成功总量使用同一来源；NULL 不增加成功数。只读结构检查同时覆盖四张逻辑表及其 `_local` 表的新字段，发布前由数据库仓库完成结构变更。
 - 合入配置加载器补充测试：去重场景加入真正重复的源表；时间参数用例验证已有的起止时间替换契约，不声称支持保留任意未提供的占位符。
-- 不采纳 APScheduler 从 3.11.3 降至 3.11.0 的修改。官方 [版本记录](https://apscheduler.readthedocs.io/en/3.x/versionhistory.html) 说明后续补丁修复了 CronTrigger 夏令时回拨时停滞、无限循环及 ZoneInfo 跳时唤醒问题；当前调度和预汇聚使用系统时区，继续保留这些修复。
+- 2026-11-04 按要求将 APScheduler 由 3.11.3 改为 3.11.0。官方 [版本记录](https://apscheduler.readthedocs.io/en/3.x/versionhistory.html) 中 3.11.1–3.11.3 修复的是 CronTrigger 夏令时回拨停滞、无限循环及 ZoneInfo 跳时唤醒问题；部署时区 Asia/Shanghai 无夏令时，且本服务只使用 `CronTrigger.get_next_fire_time`，两个版本的全量测试结果一致。若部署到有夏令时的时区，需重新评估。

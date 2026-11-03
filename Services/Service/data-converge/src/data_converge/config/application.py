@@ -19,6 +19,7 @@ from data_converge.sql_execution.config import connection_origin, validate_confi
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.infrastructure.redis.pools import RedisPools
 from data_converge.state.redis_mirror import RedisStateSettings
+from data_converge.sql_execution.pool import ClickHousePool
 
 from .loader import ConfigLoader
 from .cron import compile_cron_groups
@@ -210,6 +211,7 @@ def load_definition(config_path: Path, *, raw_config: dict[str, Any] | None = No
     try:
         RedisPools.from_mapping(config.get('redis_pools'))
         RedisStateSettings.from_mapping(config.get('redis_state'))
+        ClickHousePool.from_mapping(config.get('clickhouse_pool'))
     except ValueError as error:
         raise StartupError(str(error)) from None
     config['dwd_ready'] = load_ready_config(config, Path(config_path).parent)
