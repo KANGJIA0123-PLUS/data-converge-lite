@@ -168,3 +168,13 @@ def _decode_query_response(body, remaining, query_id):
         return document["data"]
     except (ValueError, RecursionError):
         raise SQLExecutionError("CLICKHOUSE_RESPONSE_INVALID", outcome_unknown=True, query_id=query_id) from None
+
+
+def kill_queries(config: dict[str, Any], query_ids, timeout: float = 30) -> None:
+    """Ask ClickHouse to cancel queries left by a previous leader (best effort)."""
+    ids = [value for value in query_ids if isinstance(value, str)
+           and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value)]
+    if not ids:
+        return
+    quoted = ", ".join("'" + value + "'" for value in ids)
+    execute_sql(config, f"KILL QUERY WHERE query_id IN ({quoted}) ASYNC", timeout=timeout)

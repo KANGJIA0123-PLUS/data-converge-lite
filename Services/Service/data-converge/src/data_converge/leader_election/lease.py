@@ -56,6 +56,18 @@ class LeadershipLease:
         return self._lost or self._closed
 
     @property
+    def token(self) -> str:
+        """Current session token used to fence shared-state writes."""
+        with self._state_lock:
+            if self._token is None or not self._acquired:
+                raise LeadershipError('LEADERSHIP_LOST')
+            return self._token
+
+    @property
+    def leader_key(self) -> str:
+        return self.elector.leader_key
+
+    @property
     def lost(self) -> bool:
         with self._state_lock:
             return self._expired_locked()

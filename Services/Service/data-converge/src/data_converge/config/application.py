@@ -18,6 +18,7 @@ from data_converge.dwd_ready.config import load_ready_config
 from data_converge.sql_execution.config import connection_origin, validate_config
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.infrastructure.redis.pools import RedisPools
+from data_converge.state.redis_mirror import RedisStateSettings
 
 from .loader import ConfigLoader
 from .cron import compile_cron_groups
@@ -208,6 +209,7 @@ def load_definition(config_path: Path, *, raw_config: dict[str, Any] | None = No
     ArchiveSettings.from_mapping(config.get('state', {}).get('archives'))
     try:
         RedisPools.from_mapping(config.get('redis_pools'))
+        RedisStateSettings.from_mapping(config.get('redis_state'))
     except ValueError as error:
         raise StartupError(str(error)) from None
     config['dwd_ready'] = load_ready_config(config, Path(config_path).parent)

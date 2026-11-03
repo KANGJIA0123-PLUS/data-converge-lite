@@ -23,6 +23,9 @@ from data_converge.sql_execution import SQLTaskRunner
 from data_converge.sql_execution.client import execute_sql
 from data_converge.state import StateStore
 from data_converge.coordination import create_leadership, GuardedRunner, GuardedSignalSource, WriterLease
+from data_converge.infrastructure.redis import create_connection
+from data_converge.sql_execution.client import kill_queries
+from data_converge.sql_execution.config import resolve_credentials
 from data_converge.archives.settings import ArchiveSettings
 from data_converge.archives.worker import ArchiveWorker
 from data_converge.backfill.worker import BackfillWorker
@@ -72,6 +75,13 @@ class RuntimeDependencies:
     source_factory: Callable[[dict], ReadySignalSource] = _create_ready_source
     heartbeat_factory: Callable[[Path], AbstractContextManager[Heartbeat]] = _create_heartbeat
     leadership_factory: Callable[[ApplicationDefinition], AbstractContextManager[WriterLease]] = create_leadership
+    redis_connection_factory: Callable[[dict], object] = create_connection
+
+    def query_killer(self, definition: ApplicationDefinition):
+        """Cancel interrupted ClickHouse queries by id during takeover."""
+        def kill(query_ids):
+            kill_queries(resolve_credentials(definition.config), query_ids)
+        return kill
 
 
 @contextmanager

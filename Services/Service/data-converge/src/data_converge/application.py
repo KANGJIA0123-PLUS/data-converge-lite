@@ -221,7 +221,16 @@ class Application:
                 logger.info('STATE_INITIALIZED: coverage_start=%s', store.get_meta('coverage_start'))
             store.recover_running()
             log_retained_history(store)
-            yield store, lease
+            with self._shared_state(store, lease, dependencies):
+                yield store, lease
+
+    def _shared_state(self, store, lease, dependencies):
+        """Fenced Redis state for this leadership term (no-op without leadership)."""
+        from data_converge.state.shared import attach_shared_state
+
+        return attach_shared_state(self.definition, store, lease,
+                                   connection_factory=dependencies.redis_connection_factory,
+                                   killer=dependencies.query_killer(self.definition))
 
     def _validate_state_binding(self, store: StateStore, fingerprint: str) -> None:
         existing = store.get_meta('binding')

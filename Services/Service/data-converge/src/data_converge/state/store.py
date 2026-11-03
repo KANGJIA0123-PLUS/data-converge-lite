@@ -44,6 +44,66 @@ class StateStore:
 
     def __init__(self, path: str | Path, create: bool = False):
         self._database = LedgerDatabase(path, create=create)
+        self.mirror = None
+        self._intervals: dict[str, str] = {}
+
+    def attach_mirror(self, mirror, intervals: Mapping[str, str]) -> None:
+        """Publish every committed transition to shared Redis (fenced by the lease)."""
+        self.mirror = mirror
+        self._intervals = dict(intervals)
+
+    def _publish(self, instance_id: str) -> None:
+        """Mirror after the local commit; a fencing failure stops this writer."""
+        if self.mirror is None:
+            return
+        row = self.get_instance(instance_id)
+        if row is not None and self.get_retirement(instance_id) is not None:
+            return
+        interval = self._intervals.get(row['taskname']) if row else None
+        if interval is not None:
+            self.mirror.write_instance(row, interval)
+
+    def import_shared_state(self) -> dict:
+        """Merge the previous leader's published state before scheduling starts."""
+        from . import redis_import
+
+        if self.mirror is None:
+            return {}
+        now = _stamp(datetime.now(datetime_timezone.utc))
+        counts = {'cursors': 0, 'IMPORTED': 0, 'REQUEUED': 0, 'dwd': 0}
+        conn = self._connection(write=True)
+        cursors = self.mirror.read_cursors()
+        instances = [row for row in self.mirror.scan_instances() if row.get('taskname') in self._intervals]
+        dwd = list(self.mirror.scan_dwd())
+        changed = []
+        with conn:
+            counts['cursors'] = redis_import.import_cursors(conn, cursors)
+            for row in instances:
+                action = redis_import.import_instance(conn, row)
+                if action is not None:
+                    counts[action] += 1
+                    changed.append((row['instance_id'], action, row.get('query_id')))
+            for start, types in dwd:
+                counts['dwd'] += redis_import.import_dwd(conn, _window_key(start), types, now)
+        for instance_id, action, _query_id in changed:
+            if action == 'REQUEUED':
+                self._publish(instance_id)  # Clear the shared RUNNING marker.
+        counts['interrupted_query_ids'] = [query for _, action, query in changed
+                                           if action == 'REQUEUED' and query]
+        return counts
+
+    def publish_local_state(self) -> int:
+        """Seed Redis from a ledger that predates shared state (first upgrade)."""
+        if self.mirror is None:
+            return 0
+        rows = self._connection().execute(
+            "SELECT instance_id FROM task_instances WHERE status IN "
+            "('SUCCESS','FAILED','UNKNOWN','PENDING','BLOCKED') ORDER BY data_end DESC LIMIT 20000").fetchall()
+        for row in rows:
+            self._publish(row[0])
+        cursors = self._connection().execute("SELECT taskname, next_fire_time FROM schedule_cursors").fetchall()
+        self.mirror.write_cursors({name: datetime.fromisoformat(value) for name, value in cursors})
+        return len(rows)
 
     @property
     def path(self) -> Path:
@@ -157,6 +217,8 @@ class StateStore:
                     ON CONFLICT(taskname) DO UPDATE SET next_fire_time=excluded.next_fire_time""",
                     (taskname, _stamp(next_fire_time)))
             preaggregate_protection.validate_cursors(conn)
+        if self.mirror is not None:
+            self.mirror.write_cursors(dict(next_cursors))
 
     def get_cross_period_wait(self, instance_id: str) -> dict | None:
         return wait_ledger.get(self._connection(), instance_id)
@@ -283,6 +345,8 @@ class StateStore:
         conn = self._connection(write=True)
         with conn:
             conn.execute("INSERT OR IGNORE INTO dwd_ready_signals VALUES (?, ?, ?)", (key, dwd_type, observed))
+        if self.mirror is not None:
+            self.mirror.write_dwd(window_start, dwd_type)
 
     def _has_dwd_table(self) -> bool:
         return self._connection().execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dwd_ready_signals'").fetchone() is not None
@@ -328,7 +392,9 @@ class StateStore:
                 query_id = self.get_instance(instance_id)['query_id']
                 wait_ledger.attach_query(conn, instance_id, query_id)
                 events.append_event(conn, "DISPATCHED", instance_id, now)
-            return updated.rowcount == 1
+        if updated.rowcount == 1:
+            self._publish(instance_id)
+        return updated.rowcount == 1
 
     def prepare_attempt(self, instance_id: str, *, now: datetime | None = None,
                         max_attempts: int = 3) -> bool:
@@ -374,6 +440,8 @@ class StateStore:
             history.record_claim(conn, instance_id)
             wait_ledger.attach_query(conn, instance_id, query_id)
             events.append_event(conn, "DISPATCHED", instance_id, now)
+        # Publish RUNNING before SQL is sent, so a takeover knows to rerun it.
+        self._publish(instance_id)
 
     def finish(self, instance_id: str, status: TaskStatus, *, error: str | None = None,
                retryable: bool = False, next_retry_at: datetime | None = None,
@@ -403,6 +471,7 @@ class StateStore:
             event = {TaskStatus.SUCCESS: "SUCCEEDED", TaskStatus.FAILED: "FAILED",
                      TaskStatus.UNKNOWN: "OUTCOME_UNKNOWN"}[status]
             events.append_event(conn, event, instance_id, now)
+        self._publish(instance_id)
 
     @staticmethod
     def _save_execution_diagnostic(conn, instance_id: str, diagnostic: dict) -> None:
@@ -465,7 +534,10 @@ class StateStore:
                         continue
 
             history.record_recovery(conn, now)
-            return recovered_count
+        for row in rows:
+            if row["action"] in ("AUTO_RESUME", "RECONCILE"):
+                self._publish(row["instance_id"])
+        return recovered_count
 
     def resolve(self, instance_id: str, resolution: str, note: str) -> None:
         resolution = resolution.upper()
@@ -490,3 +562,4 @@ class StateStore:
             history.record_resolution(conn, instance_id)
             event = "RESOLVED_SUCCESS" if resolution == "SUCCESS" else "RETRY_AUTHORIZED"
             events.append_event(conn, event, instance_id, now)
+        self._publish(instance_id)

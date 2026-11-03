@@ -11,13 +11,26 @@ from data_converge.dag.models import TaskStatus
 logger = logging.getLogger(__name__)
 
 
+def _aged_out(store, parent_id: str) -> bool:
+    """A parent older than its Redis retention was finished history, not missing."""
+    mirror = getattr(store, 'mirror', None)
+    if mirror is None:
+        return False
+    taskname, _, batch = parent_id.partition('@')
+    interval = getattr(store, '_intervals', {}).get(taskname)
+    if interval is None:
+        return False
+    end = datetime.fromisoformat(batch)
+    return timeline_time(mirror.settings.expires_at(interval, end)) <= timeline_time(datetime.now(end.tzinfo))
+
+
 def missing_summary(dag, store, instance) -> dict:
     missing = []
     statuses = Counter()
     count = 0
     for parent in required_cross_period_ids(dag, instance.task, instance.data_start, instance.data_end):
         status = store.get_status(parent)
-        if status == TaskStatus.SUCCESS:
+        if status == TaskStatus.SUCCESS or (status is None and _aged_out(store, parent)):
             continue
         label = status.value if status is not None else 'NOT_FOUND'
         statuses[label] += 1

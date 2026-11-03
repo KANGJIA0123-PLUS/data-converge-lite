@@ -87,6 +87,18 @@ redis_pools:
     socket_timeout: 3.0
     socket_connect_timeout: 3.0
 
+# 任务执行状态实时同步 Redis（主备共享）：调度游标、实例状态、DWD 就绪事实。
+# 写入前用 Lua 校验选主 token（fencing），被替换的旧主无法覆盖新主状态。
+# 新主接管时导入共享状态：已成功窗口不重跑，旧主中断的窗口先 KILL QUERY 再自动重跑。
+# 老化从窗口结束时间起算：5min/hour/day 单位为天，month 单位为月。
+redis_state:
+  enabled: true
+  ttl:
+    5min: 1    # 1-7 天
+    hour: 1    # 1-7 天
+    day: 3     # 1-10 天
+    month: 3   # 1-12 月
+
 scheduler:
   # 调度时区跟随容器 TZ 或系统时区配置，启动后固定；不单独设置业务时区。
   # 单条任务（清理+汇聚）超时，按周期设置，单位秒。取值范围：
