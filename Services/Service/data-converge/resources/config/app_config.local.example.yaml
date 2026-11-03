@@ -26,8 +26,9 @@ state:
   directory: ./var/lite-state
 scheduler:
   # 调度时区跟随当前进程的 TZ 或系统时区配置。
-  default_timeout_seconds: 300
+  task_timeout_seconds: {5min: 120, hour: 600, day: 1800, month: 1800}
   max_concurrent_tasks: 4
+  task_parallelism: 1
   poll_interval_seconds: 5
   catchup_limit: 100
   max_attempts: 3

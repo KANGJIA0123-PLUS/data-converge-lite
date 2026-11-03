@@ -11,7 +11,7 @@ from .test_main import app
 def test_omitted_wait_policy_defaults_to_enabled_five_minutes():
     options = settings({})
     assert getattr(options, 'cross_period_wait_enabled', None) is True
-    assert getattr(options, 'cross_period_wait_seconds', None) == 300
+    assert getattr(options, 'cross_period_wait_seconds', None) == {'PT1H': 300, 'P1D': 300, 'P1M': 300}
     assert getattr(options, 'cross_period_wait_overrides', None) == {}
 
 
@@ -48,4 +48,4 @@ def test_wait_changes_preserve_business_identity_and_allow_zero(app):
     changed.validate()
     assert changed.fingerprint == original.fingerprint
     assert changed.manifest == original.manifest
-    assert changed.definition.options.cross_period_wait_seconds == 0
+    assert set(changed.definition.options.cross_period_wait_seconds.values()) == {0}

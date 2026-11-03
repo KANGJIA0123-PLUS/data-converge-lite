@@ -103,7 +103,7 @@ EXAMPLES = f'''可直接复制的查询示例：
   --resolve-preaggregate ITEM_ID --resolution success|retry --note 核查依据：
     先确认清理和汇聚均已结束；只核查提前结果，不标记正式成功，也不立即重跑。
   跨周期默认开启最多额外等待300秒；scheduler.cross_period_wait_enabled=false 可关闭。
-  cross_period_wait_seconds 设置全局秒数，cross_period_wait_overrides 按任务覆盖。
+  cross_period_wait_seconds 按周期设置（hour/day/month），cross_period_wait_overrides 按任务覆盖。
   等待截止基于原Cron触发时间；上游齐全立即放行，超时按已有数据执行并告警。
   --run-once 可能补跑多个任务，不是预览；所有辅助参数应随对应主命令使用。
   --init-state 会初始化状态；--resolve-instance 会人工修改实例状态。

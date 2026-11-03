@@ -19,14 +19,14 @@ class RetentionFileHandler(WatchedFileHandler):
     def __init__(self, filename: Path, settings: LoggingSettings | None):
         self._lock_fd = None
         self.policy = RetentionPolicy(filename.absolute(), settings) if settings else None
-        self._last_cleanup = 0.0
         super().__init__(filename, mode='a', encoding='utf-8', delay=True)
         try:
             flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
             self._lock_fd = os.open(f'{self.baseFilename}.lock', flags, 0o600)
             with self._file_lock():
                 self._open_stream()
-                self._cleanup(time.time(), rotated=True)
+                # Finish a rotation interrupted by a crash; age only if one was produced.
+                self._finish_rotation(time.time())
         except Exception:
             self.close()
             raise
@@ -50,7 +50,8 @@ class RetentionFileHandler(WatchedFileHandler):
                     self._rotate(now)
                 self.stream.write(message)
                 self.flush()
-                self._cleanup(now, rotated)
+                if rotated:
+                    self._finish_rotation(now)
         except Exception:
             self.handleError(record)
 
@@ -98,16 +99,16 @@ class RetentionFileHandler(WatchedFileHandler):
             metadata = self.policy.filename.stat(follow_symlinks=False)
             if not stat.S_ISREG(metadata.st_mode):
                 raise ValueError('LOGGING_FILE_INVALID')
-            self.policy.filename.rename(self.policy.archive_path(now))
+            self.policy.filename.rename(self.policy.rotating_path(now))
         except FileNotFoundError:
             # Platform log rotation does not participate in our process lock.
             pass
         finally:
             self._open_stream()
 
-    def _cleanup(self, now: float, rotated: bool):
+    def _finish_rotation(self, now: float):
+        """Compress renamed logs, then age archives only when a new one exists."""
         if self.policy is None:
             return
-        if rotated or now - self._last_cleanup >= 60 or now < self._last_cleanup:
+        if self.policy.compress_pending():
             self.policy.cleanup(now)
-            self._last_cleanup = now

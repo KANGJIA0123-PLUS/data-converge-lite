@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter
+from concurrent.futures import (ALL_COMPLETED, FIRST_COMPLETED, Future, ThreadPoolExecutor,
+                                wait as wait_futures)
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import time
@@ -39,17 +41,29 @@ class ExecutionReport:
 
 
 class DAGExecutor:
+    """Dispatch ready windows without a batch barrier.
+
+    The caller's thread owns the repository: workers only run the task, while
+    claims, dispatch commits and finishes happen on the calling thread. With
+    ``wait=False`` submitted work keeps running across calls, so one long task
+    never stalls later scheduling rounds; ``drain()`` collects it on shutdown.
+    """
+
     def __init__(self, dag: DAG, runner: TaskRunner,
                  known_statuses: Optional[Dict[str, TaskStatus]] = None,
                  max_concurrent_tasks: int = 1, *, state_store: ExecutionRepository | None = None,
                  max_attempts: int = 3, retry_delay_seconds: float = 30,
-                 readiness_check: Callable[[TaskInstance, datetime], str | None] | None = None):
+                 readiness_check: Callable[[TaskInstance, datetime], str | None] | None = None,
+                 task_parallelism: int = 1):
         if max_concurrent_tasks <= 0 or max_attempts <= 0 or retry_delay_seconds < 0:
             raise ValueError("Concurrency and attempts must be positive; retry delay cannot be negative")
+        if type(task_parallelism) is not int or task_parallelism <= 0:
+            raise ValueError("task_parallelism must be a positive integer")
         self.dag = dag
         self.runner = runner
         self.known_statuses = known_statuses if known_statuses is not None else {}
         self.max_concurrent_tasks = max_concurrent_tasks
+        self.task_parallelism = task_parallelism
         self.state_store = state_store
         self.max_attempts = max_attempts
         self.retry_delay_seconds = retry_delay_seconds
@@ -59,51 +73,100 @@ class DAGExecutor:
         self.repository: ExecutionRepository = state_store if state_store is not None else memory
         self.checkpoints = self.repository if isinstance(self.repository, CheckpointRepository) else None
         self._memory = memory.records
+        self._pool: ThreadPoolExecutor | None = None
+        self._inflight: Dict[Future, TaskInstance] = {}
+
+    @property
+    def inflight_count(self) -> int:
+        return len(self._inflight)
 
     def execute(self, instances: Iterable[TaskInstance], *, now: datetime | None = None,
                 max_executions: int | None = None,
-                should_stop: Callable[[], bool] | None = None) -> ExecutionReport:
+                should_stop: Callable[[], bool] | None = None,
+                wait: bool = True) -> ExecutionReport:
         instance_list = list(instances)
         by_id = {instance.instance_id: instance for instance in instance_list}
         if len(by_id) != len(instance_list):
             raise ValueError("Duplicate instance_id in execute()")
+        finished = self._collect(block=False)
         if not instance_list:
-            return ExecutionReport({})
+            return ExecutionReport(finished)
         now = now or self._now(instance_list[0])
         self.repository.enqueue_and_advance(instance_list, {})
         for instance in instance_list:
             self._restore(instance)
-
         order = {name: index for index, name in enumerate(self.dag.topological_order)}
         instance_list.sort(key=lambda i: (timeline_time(i.data_end), order[i.taskname]))
-        attempted: set[str] = set()
-        started = time.monotonic()
-        initial_now = now
         budget = max_executions if max_executions is not None else len(instance_list)
-        while len(attempted) < budget:
-            if should_stop and should_stop():
-                break
-            now = shift_elapsed(initial_now, timedelta(seconds=max(0.0, time.monotonic() - started)))
-            ready = []
-            for instance in instance_list:
-                if instance.instance_id in attempted or not self._eligible(instance, now):
-                    continue
-                if self._ready(instance, by_id, now):
-                    ready.append(instance)
-            ready = ready[:min(self.max_concurrent_tasks, budget - len(attempted))]
-            if not ready:
-                break
-            claimed = [i for i in ready if self._claim(i, now)]
-            attempted.update(i.instance_id for i in ready)
-            if claimed:
-                self._execute_ready_instances(claimed, now, should_stop)
-
+        self._dispatch_loop(instance_list, by_id, now, budget, should_stop, wait, finished)
         for instance in instance_list:
             if instance.status not in (TaskStatus.PENDING, TaskStatus.BLOCKED):
                 continue
             if not self._upstreams_succeeded(instance, by_id):
                 self._mark_blocked(instance, self._build_blocked_reason(instance, by_id))
-        return ExecutionReport(by_id)
+        return ExecutionReport({**finished, **by_id})
+
+    def _dispatch_loop(self, instance_list, by_id, initial_now, budget, should_stop, wait, finished):
+        attempted: set[str] = set()
+        started = time.monotonic()
+        while True:
+            if should_stop and should_stop():
+                break
+            now = shift_elapsed(initial_now, timedelta(seconds=max(0.0, time.monotonic() - started)))
+            ready = self._select_ready(instance_list, by_id, attempted, now, budget)
+            if ready:
+                claimed = [i for i in ready if self._claim(i, now)]
+                attempted.update(i.instance_id for i in ready)
+                if claimed:
+                    self._submit_instances(claimed, now, should_stop)
+                continue
+            if not wait or not self._inflight:
+                break
+            finished.update(self._collect(block=True))
+        if wait:
+            finished.update(self._collect(block=True, all_done=True))
+
+    def _select_ready(self, instance_list, by_id, attempted, now, budget):
+        capacity = min(self.max_concurrent_tasks - len(self._inflight), budget - len(attempted))
+        running = Counter(instance.taskname for instance in self._inflight.values())
+        ready = []
+        for instance in instance_list:
+            if len(ready) >= capacity:
+                break
+            if running[instance.taskname] >= self.task_parallelism:
+                continue
+            if instance.instance_id in attempted or not self._eligible(instance, now):
+                continue
+            if self._ready(instance, by_id, now):
+                ready.append(instance)
+                running[instance.taskname] += 1
+        return ready
+
+    def drain(self) -> ExecutionReport:
+        """Wait for submitted work and persist every result before releasing state."""
+        finished = self._collect(block=True, all_done=True)
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
+        return ExecutionReport(finished)
+
+    def _collect(self, *, block: bool, all_done: bool = False) -> Dict[str, TaskInstance]:
+        finished: Dict[str, TaskInstance] = {}
+        while self._inflight:
+            if block:
+                done, _ = wait_futures(tuple(self._inflight), return_when=(
+                    ALL_COMPLETED if all_done else FIRST_COMPLETED))
+            else:
+                done = [future for future in self._inflight if future.done()]
+            if not done:
+                break
+            for future in done:
+                instance = self._inflight.pop(future)
+                self._finish_future(future, instance)
+                finished[instance.instance_id] = instance
+            if not all_done:
+                break
+        return finished
 
     def _ready(self, instance, by_id, now):
         if not self._upstreams_succeeded(instance, by_id):
@@ -153,8 +216,10 @@ class DAGExecutor:
         self._restore(instance)
         return claimed
 
-    def _submit_instances(self, pool, instances, now, should_stop):
-        futures = {}
+    def _submit_instances(self, instances, now, should_stop):
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=self.max_concurrent_tasks,
+                                            thread_name_prefix="dag-task")
         for instance in instances:
             if self.checkpoints is not None:
                 if should_stop and should_stop():
@@ -163,33 +228,27 @@ class DAGExecutor:
                 # that the external side effect may have happened.
                 self.checkpoints.mark_dispatched(instance.instance_id, instance.query_id, now=now)
                 self._restore(instance)
-            futures[pool.submit(self.runner, instance)] = instance
-        return futures
+            self._inflight[self._pool.submit(self.runner, instance)] = instance
 
-    def _execute_ready_instances(self, instances: List[TaskInstance], now: datetime,
-                                 should_stop=None) -> None:
-        with ThreadPoolExecutor(max_workers=len(instances), thread_name_prefix="dag-task") as pool:
-            futures = self._submit_instances(pool, instances, now, should_stop)
-            for future in as_completed(futures):
-                instance = futures[future]
-                retryable = False
-                diagnostic = None
-                try:
-                    future.result()
-                except Exception as exc:
-                    instance.status, retryable, instance.error = self._classify_error(exc)
-                    diagnostic = safe_error_details(exc)
-                else:
-                    instance.status = TaskStatus.SUCCESS
-                    instance.error = None
-                instance.finished_at = self._now(instance)
-                next_retry_at = shift_elapsed(
-                    instance.finished_at, timedelta(seconds=self.retry_delay_seconds)) if retryable else None
-                # A failed success commit must stop dispatch, leaving RUNNING for recovery.
-                # Keep persistence outside the runner exception handler.
-                self.repository.finish(instance.instance_id, instance.status, error=instance.error,
-                                       retryable=retryable, next_retry_at=next_retry_at,
-                                       now=instance.finished_at, diagnostic=diagnostic)
+    def _finish_future(self, future: Future, instance: TaskInstance) -> None:
+        retryable = False
+        diagnostic = None
+        try:
+            future.result()
+        except Exception as exc:
+            instance.status, retryable, instance.error = self._classify_error(exc)
+            diagnostic = safe_error_details(exc)
+        else:
+            instance.status = TaskStatus.SUCCESS
+            instance.error = None
+        instance.finished_at = self._now(instance)
+        next_retry_at = shift_elapsed(
+            instance.finished_at, timedelta(seconds=self.retry_delay_seconds)) if retryable else None
+        # A failed success commit must stop dispatch, leaving RUNNING for recovery.
+        # Keep persistence outside the runner exception handler.
+        self.repository.finish(instance.instance_id, instance.status, error=instance.error,
+                               retryable=retryable, next_retry_at=next_retry_at,
+                               now=instance.finished_at, diagnostic=diagnostic)
 
     @staticmethod
     def _classify_error(exc: Exception) -> tuple[TaskStatus, bool, str]:

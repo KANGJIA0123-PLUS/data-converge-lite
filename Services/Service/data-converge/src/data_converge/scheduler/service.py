@@ -54,7 +54,7 @@ class TaskScheduler:
         catchup_limit: int = 100,
         ready_poller: Callable[[datetime], Iterable[datetime]] | None = None,
         cross_period_wait_enabled: bool = True,
-        cross_period_wait_seconds: int = 300,
+        cross_period_wait_seconds: int | Mapping[str, int] = 300,
         cross_period_wait_overrides: Mapping[str, int] | None = None,
     ):
         self.dag = dag
@@ -83,7 +83,7 @@ class TaskScheduler:
         self._triggers: dict[str, CronTrigger] = {}
         self._wall_triggers: dict[str, CronTrigger] = {}
         self._jobs: tuple[CronGroup, ...] = ()
-        self._registered = False
+        self._registered = self._serving = False
         self._skipped_records: set[tuple[str, str]] = set()
         self.cross_period_wait = CrossPeriodWait(
             dag, self.state_store, enabled=cross_period_wait_enabled,
@@ -227,18 +227,28 @@ class TaskScheduler:
             len(self._jobs),
         )
 
-        while not self.stop_requested:
-            self.tick()
-            if self.background_worker is not None and not self.stop_requested:
-                self.background_worker()
-            deadline = time.monotonic() + self.poll_interval_seconds
+        # Long period tasks keep running while later rounds dispatch new work.
+        self._serving = True
+        try:
             while not self.stop_requested:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                time.sleep(min(0.2, remaining))
+                self.tick()
+                if self.background_worker is not None and not self.stop_requested:
+                    self.background_worker()
+                self._sleep_until_next_round()
+        finally:
+            self._serving = False
+            # Persist every submitted result before the lease and ledger are released.
+            self._log_execution_errors(self.dag_executor.drain())
 
-    def tick(self, now: datetime | None = None) -> ExecutionReport:
+    def _sleep_until_next_round(self) -> None:
+        deadline = time.monotonic() + self.poll_interval_seconds
+        while not self.stop_requested:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.2, remaining))
+
+    def tick(self, now: datetime | None = None, *, wait: bool | None = None) -> ExecutionReport:
         if self.state_store is None or self.start_time is None:
             raise ValueError("Persistent state and initialized coverage_start are required; use --init-state")
         if not self._registered:
@@ -257,7 +267,7 @@ class TaskScheduler:
         self.state_store.enqueue_and_advance(
             prepared, plan.next_cursors,
             cross_period_waits=self.cross_period_wait.records(prepared))
-        return self.run_pending(now=now)
+        return self.run_pending(now=now, wait=wait)
 
     def _preaggregate_coverages(self, now: datetime) -> tuple[TaskInstance, ...]:
         """Restore explicitly promised windows independently of ordinary cursors."""
@@ -353,9 +363,10 @@ class TaskScheduler:
         # Never advance cron cursors here: they still enumerate missing windows.
         self.state_store.enqueue_and_advance(instances, {})
 
-    def run_pending(self, now: datetime | None = None) -> ExecutionReport:
+    def run_pending(self, now: datetime | None = None, *, wait: bool | None = None) -> ExecutionReport:
         if self.state_store is None:
             raise ValueError("run_pending requires persistent state")
+        wait = not self._serving if wait is None else wait
         now = self._normalize_time(now)
         instances = []
         for record in self.state_store.list_pending():
@@ -365,7 +376,7 @@ class TaskScheduler:
         # Read all pending rows, but bound actual submissions. Old BLOCKED rows
         # cannot monopolize a LIMIT query and starve unrelated ready windows.
         report = self.dag_executor.execute(instances, now=now, max_executions=self.catchup_limit,
-                                           should_stop=lambda: self.stop_requested)
+                                           should_stop=lambda: self.stop_requested, wait=wait)
         self._log_execution_errors(report)
         return report
 

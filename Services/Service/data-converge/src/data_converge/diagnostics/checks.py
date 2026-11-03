@@ -35,7 +35,7 @@ def logging_settings_check(raw):
     settings = LoggingSettings.from_mapping(raw.get('logging'))
     return check('logging.settings', 'PASS', '日志轮转、老化与调试配置有效',
                  dict(max_bytes=settings.max_bytes, backup_count=settings.backup_count,
-                      retention_days=settings.retention_days, debug_enabled=settings.debug_enabled))
+                      max_total_bytes=settings.max_total_bytes, debug_enabled=settings.debug_enabled))
 
 
 def definition_check(path, raw):

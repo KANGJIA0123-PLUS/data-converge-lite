@@ -32,41 +32,115 @@ class StartupError(ValueError):
     """An intentionally public, credential-free startup diagnostic."""
 
 
+PERIODS = ('PT5M', 'PT1H', 'P1D', 'P1M')
+PERIOD_NAMES = {'5min': 'PT5M', 'hour': 'PT1H', 'day': 'P1D', 'month': 'P1M'}
+# Design table: default and inclusive range per aggregation period.
+TIMEOUT_DEFAULTS = {'PT5M': 120, 'PT1H': 600, 'P1D': 1800, 'P1M': 1800}
+TIMEOUT_RANGES = {'PT5M': (10, 300), 'PT1H': (10, 1800), 'P1D': (10, 3600), 'P1M': (10, 3600)}
+CROSS_WAIT_DEFAULTS = {'PT1H': 300, 'P1D': 300, 'P1M': 300}
+
+
+def _period_mapping(values, defaults, name):
+    """Accept {5min|hour|day|month: seconds}; omitted periods keep defaults."""
+    if values is None:
+        return dict(defaults)
+    # dataclasses.replace() revalidates already normalized period keys.
+    names = {**PERIOD_NAMES, **{period: period for period in PERIODS}}
+    if not isinstance(values, dict) or set(values) - set(names):
+        raise StartupError('SCHEDULER_SETTING_INVALID')
+    result = dict(defaults)
+    for key, value in values.items():
+        period = names[key]
+        if period not in defaults:
+            raise StartupError(name)
+        result[period] = value
+    return result
+
+
+def _is_int(value) -> bool:
+    return type(value) is int
+
+
 @dataclass(frozen=True)
 class SchedulerSettings:
     """Validated scheduling policy; YAML dictionaries stop at this boundary."""
 
     timezone: str = field(default_factory=system_timezone_name, init=False)
-    default_timeout_seconds: int = 300
     max_concurrent_tasks: int = 4
+    task_parallelism: int = 1
     poll_interval_seconds: int = 5
     catchup_limit: int = 100
     max_attempts: int = 3
     retry_delay_seconds: int = 30
+    task_timeout_seconds: dict | None = None
     cross_period_wait_enabled: bool = True
-    cross_period_wait_seconds: int = 300
+    cross_period_wait_seconds: dict | int | None = None
     cross_period_wait_overrides: dict[str, int] = field(default_factory=dict)
+    skip_batches: bool = False
+    skip_mode: str = 'current_only'
+    skip_threshold_batches: dict | None = None
+    skip_max_resume_days: int = 31
+    default_timeout_seconds: int | None = None
 
     def __post_init__(self) -> None:
-        for option in fields(self):
-            if option.name == 'timezone' or option.name.startswith('cross_period_wait_'):
-                continue
-            value = getattr(self, option.name)
-            if type(value) is not int or value <= 0:
+        for name in ('max_concurrent_tasks', 'poll_interval_seconds', 'catchup_limit',
+                     'max_attempts', 'retry_delay_seconds'):
+            value = getattr(self, name)
+            if not _is_int(value) or value <= 0:
                 raise StartupError('SCHEDULER_SETTING_INVALID')
-        self._validate_cross_period_wait()
-        if self.default_timeout_seconds > 300:
-            raise StartupError('SQL_TIMEOUT_MUST_NOT_EXCEED_300_SECONDS')
+        if not _is_int(self.task_parallelism) or not 1 <= self.task_parallelism <= 3:
+            raise StartupError('TASK_PARALLELISM_OUT_OF_RANGE')
+        self._normalize_timeouts()
+        self._normalize_cross_period_wait()
+        self._validate_skip()
 
-    def _validate_cross_period_wait(self) -> None:
-        values = self.cross_period_wait_overrides
-        if not isinstance(self.cross_period_wait_enabled, bool) or not isinstance(values, dict):
-            raise StartupError('SCHEDULER_SETTING_INVALID')
-        if any(not isinstance(name, str) or not name for name in values):
-            raise StartupError('SCHEDULER_SETTING_INVALID')
-        for value in (self.cross_period_wait_seconds, *values.values()):
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+    def _normalize_timeouts(self) -> None:
+        defaults = dict(TIMEOUT_DEFAULTS)
+        if self.default_timeout_seconds is not None and self.task_timeout_seconds is None:
+            # Legacy single value: applies to every period unless overridden.
+            if not _is_int(self.default_timeout_seconds) or self.default_timeout_seconds <= 0:
                 raise StartupError('SCHEDULER_SETTING_INVALID')
+            defaults = dict.fromkeys(PERIODS, self.default_timeout_seconds)
+        values = _period_mapping(self.task_timeout_seconds, defaults, 'SCHEDULER_SETTING_INVALID')
+        for period, value in values.items():
+            low, high = TIMEOUT_RANGES[period]
+            if not _is_int(value) or not low <= value <= high:
+                raise StartupError('TASK_TIMEOUT_OUT_OF_RANGE')
+        object.__setattr__(self, 'task_timeout_seconds', values)
+
+    def _normalize_cross_period_wait(self) -> None:
+        raw = self.cross_period_wait_seconds
+        values = (dict.fromkeys(CROSS_WAIT_DEFAULTS, raw) if _is_int(raw)
+                  else _period_mapping(raw, CROSS_WAIT_DEFAULTS, 'CROSS_PERIOD_WAIT_PERIOD_INVALID'))
+        overrides = self.cross_period_wait_overrides
+        if not isinstance(self.cross_period_wait_enabled, bool) or not isinstance(overrides, dict):
+            raise StartupError('SCHEDULER_SETTING_INVALID')
+        if any(not isinstance(name, str) or not name for name in overrides):
+            raise StartupError('SCHEDULER_SETTING_INVALID')
+        for value in (*values.values(), *overrides.values()):
+            if not _is_int(value) or value < 0:
+                raise StartupError('SCHEDULER_SETTING_INVALID')
+        object.__setattr__(self, 'cross_period_wait_seconds', values)
+
+    def _validate_skip(self) -> None:
+        if not isinstance(self.skip_batches, bool):
+            raise StartupError('SCHEDULER_SETTING_INVALID')
+        if self.skip_mode not in ('current_only', 'current_then_resume'):
+            raise StartupError('SKIP_MODE_INVALID')
+        thresholds = _period_mapping(self.skip_threshold_batches,
+                                     {'PT5M': 12, 'PT1H': 3, 'P1D': 2, 'P1M': 2},
+                                     'SCHEDULER_SETTING_INVALID')
+        if any(not _is_int(value) or value < 1 for value in thresholds.values()):
+            raise StartupError('SCHEDULER_SETTING_INVALID')
+        object.__setattr__(self, 'skip_threshold_batches', thresholds)
+        if not _is_int(self.skip_max_resume_days) or not 1 <= self.skip_max_resume_days <= 31:
+            raise StartupError('SCHEDULER_SETTING_INVALID')
+
+    def timeout_for(self, interval: str) -> int:
+        return self.task_timeout_seconds[interval]
+
+    def cross_period_wait_for(self, interval: str) -> int:
+        return self.cross_period_wait_seconds.get(interval, 0)
 
 
 @dataclass(frozen=True)

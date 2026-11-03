@@ -101,11 +101,11 @@ def test_logging_policy_is_loaded_from_application_config(app, monkeypatch):
     directory = app.parent / 'logs'
     monkeypatch.setenv('LOG_PATH', str(directory))
     config = yaml.safe_load(app.read_text())
-    config['logging'] = {'max_bytes': 128, 'backup_count': 2, 'retention_days': 7}
+    config['logging'] = {'max_bytes': 128, 'backup_count': 2, 'max_total_bytes': 1048576}
     app.write_text(yaml.safe_dump(config))
     for _ in range(5):
         assert entry.main(['--config', str(app), '--status']) == 1
-    archives = list(directory.glob('data-converge.log.*.archive'))
+    archives = list(directory.glob('data-converge.log.*.gz'))
     assert len(archives) == 2
     assert 'SERVICE_FAILED:' in (directory / 'data-converge.log').read_text()
 

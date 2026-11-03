@@ -9,13 +9,39 @@ from data_converge.config import ConfigLoader, CronValidator
 @pytest.mark.parametrize('policy', [
     {'max_attempts': True},
     {'poll_interval_seconds': 0},
-    {'default_timeout_seconds': 301},
+    {'task_timeout_seconds': {'5min': 301}},
+    {'task_timeout_seconds': {'hour': 9}},
+    {'task_timeout_seconds': {'week': 60}},
+    {'task_parallelism': 4},
+    {'task_parallelism': 0},
+    {'skip_mode': 'resume'},
 ])
 def test_application_rejects_invalid_scheduling_policy(policy):
     from data_converge.config.application import StartupError, settings
 
     with pytest.raises(StartupError):
         settings({'scheduler': policy})
+
+
+def test_design_defaults_and_period_settings():
+    from data_converge.config.application import settings
+
+    options = settings({})
+    assert options.task_timeout_seconds == {'PT5M': 120, 'PT1H': 600, 'P1D': 1800, 'P1M': 1800}
+    assert options.task_parallelism == 1 and options.skip_batches is False
+    assert options.cross_period_wait_seconds == {'PT1H': 300, 'P1D': 300, 'P1M': 300}
+    custom = settings({'scheduler': {'task_timeout_seconds': {'day': 3600},
+                                     'cross_period_wait_seconds': {'month': 900}}})
+    assert custom.timeout_for('P1D') == 3600 and custom.timeout_for('PT5M') == 120
+    assert custom.cross_period_wait_for('P1M') == 900 and custom.cross_period_wait_for('PT1H') == 300
+
+
+def test_legacy_single_values_still_apply_to_every_period():
+    from data_converge.config.application import settings
+
+    options = settings({'scheduler': {'default_timeout_seconds': 200, 'cross_period_wait_seconds': 0}})
+    assert set(options.task_timeout_seconds.values()) == {200}
+    assert set(options.cross_period_wait_seconds.values()) == {0}
 
 
 class TestCronValidator:

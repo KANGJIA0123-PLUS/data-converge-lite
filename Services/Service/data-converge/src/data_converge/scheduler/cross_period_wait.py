@@ -42,12 +42,20 @@ class CrossPeriodWait:
         for instance in instances:
             if not self._parents(instance):
                 continue
-            seconds = self.overrides.get(instance.taskname, self.seconds)
+            seconds = self.wait_seconds(instance)
             result.append(dict(instance_id=instance.instance_id,
                                scheduled_due_at=instance.scheduled_time, wait_seconds=seconds,
                                deadline_at=shift_elapsed(instance.scheduled_time,
                                                          timedelta(seconds=seconds))))
         return result
+
+    def wait_seconds(self, instance) -> int:
+        """Task override, then the child's period, then a legacy single value."""
+        if instance.taskname in self.overrides:
+            return self.overrides[instance.taskname]
+        if isinstance(self.seconds, dict):
+            return self.seconds.get(instance.task.aggregation_interval, 0)
+        return self.seconds
 
     def _parents(self, instance):
         return required_cross_period_ids(self.dag, instance.task, instance.data_start, instance.data_end)

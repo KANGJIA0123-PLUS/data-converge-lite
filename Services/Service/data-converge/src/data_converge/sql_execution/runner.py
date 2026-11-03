@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ class SQLTaskRunner:
         self,
         config_path: Path,
         sql_directory: Path,
-        timeout: int = 300,
+        timeout: int | dict[str, int] = 300,
         *,
         config: dict[str, Any] | None = None,
         expected_sql_hashes: dict[str, str] | None = None,
@@ -50,8 +51,10 @@ class SQLTaskRunner:
 
     def __call__(self, instance: TaskInstance) -> None:
         sql_file = self.sql_directory / f"{instance.task.sql_id}.sql"
+        # One period budget covers cleanup and aggregation of the same window.
+        deadline = time.monotonic() + self.timeout_for(instance)
         sql, local_table = self._load_verified_sql(instance, sql_file)
-        self._cleanup(instance, sql_file, local_table)
+        self._cleanup(instance, sql_file, local_table, self._remaining(deadline))
 
         # Execute aggregation SQL
         self._log_phase(instance, sql_file, "aggregate")
@@ -65,7 +68,7 @@ class SQLTaskRunner:
             execute_sql(
                 config=self.config,
                 sql=sql,
-                timeout=self.timeout,
+                timeout=self._remaining(deadline),
                 start_time=instance.data_start,
                 end_time=instance.data_end,
                 query_id=getattr(instance, "query_id", None),
@@ -100,7 +103,20 @@ class SQLTaskRunner:
             ) from None
         return sql, local_table
 
-    def _cleanup(self, instance: TaskInstance, sql_file: Path, local_table: str) -> None:
+    def timeout_for(self, instance: TaskInstance) -> float:
+        """Per-period budget; a single number keeps the legacy global behaviour."""
+        if isinstance(self.timeout, dict):
+            return self.timeout[instance.task.aggregation_interval]
+        return self.timeout
+
+    @staticmethod
+    def _remaining(deadline: float) -> float:
+        # Never pass a zero budget: an exhausted window still sends a short query
+        # whose deadline expiry is classified by the client, not silently skipped.
+        return max(1.0, deadline - time.monotonic())
+
+    def _cleanup(self, instance: TaskInstance, sql_file: Path, local_table: str,
+                 timeout: float | None = None) -> None:
         """Complete idempotent cleanup before the aggregation query starts."""
         self._log_phase(instance, sql_file, "cleanup")
         # D3: Idempotent pre-cleanup - DELETE before INSERT to prevent duplicates
@@ -114,7 +130,8 @@ class SQLTaskRunner:
         )
         try:
             execute_sql(
-                config=self.config, sql=cleanup_sql, timeout=self.timeout,
+                config=self.config, sql=cleanup_sql,
+                timeout=self.timeout_for(instance) if timeout is None else timeout,
                 start_time=instance.data_start, end_time=instance.data_end,
                 query_id=getattr(instance, "query_id", None),
             )

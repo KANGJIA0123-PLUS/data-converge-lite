@@ -63,7 +63,8 @@ def format_clickhouse_datetime(value: datetime | str) -> str:
 def _build_sql_request(clickhouse, origin, sql, timeout, start_time, end_time, query_id):
     """Keep credentials in headers and preserve ClickHouse's SQL placeholders."""
     parameters = dict(database=clickhouse["database"], default_format="JSONCompact",
-                      wait_end_of_query="1", max_execution_time=str(timeout), query_id=query_id,
+                      wait_end_of_query="1", max_execution_time=str(max(1, math.ceil(timeout))),
+                      query_id=query_id,
                       param_system_timezone=system_timezone_name())
     if start_time is not None:
         parameters.update(param_start_time=format_clickhouse_datetime(start_time),

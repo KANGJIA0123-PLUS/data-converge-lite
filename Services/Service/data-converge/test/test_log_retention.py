@@ -1,5 +1,6 @@
 """Exercise retention with actual files and POSIX process locks."""
 
+import gzip
 import logging
 import multiprocessing
 import os
@@ -19,7 +20,7 @@ def emit(handler, message):
 
 def archive(path, text, age_days):
     target = RetentionPolicy(path, LoggingSettings()).archive_path(time.time())
-    target.write_text(text, encoding='utf-8')
+    target.write_bytes(gzip.compress(text.encode('utf-8')))
     timestamp = time.time() - age_days * 86400
     os.utime(target, (timestamp, timestamp))
     return target
@@ -27,13 +28,13 @@ def archive(path, text, age_days):
 
 @pytest.mark.parametrize('value', [True, 0, -1, 1.5, '7'])
 def test_settings_reject_non_positive_integers(value):
-    for name in ('max_bytes', 'backup_count', 'retention_days'):
+    for name in ('max_bytes', 'backup_count', 'max_total_bytes'):
         with pytest.raises(ValueError, match='^LOGGING_SETTING_INVALID$'):
             LoggingSettings.from_mapping({name: value})
 
 
 def test_settings_defaults_and_mapping():
-    assert LoggingSettings.from_mapping(None) == LoggingSettings(20 * 1024 * 1024, 10, 7)
+    assert LoggingSettings.from_mapping(None) == LoggingSettings(10 * 1024 * 1024, 50, 500 * 1024 * 1024)
     assert LoggingSettings.from_mapping({'backup_count': 3}).backup_count == 3
 
 
@@ -49,7 +50,7 @@ def test_bootstrap_appends_without_rotation_or_retention(tmp_path):
         handler.close()
     assert path.read_text() == 'existing\nconfiguration error\n'
     assert old.exists()
-    assert list(tmp_path.glob('*.archive')) == [old]
+    assert list(tmp_path.glob('*.gz')) == [old]
 
 
 def test_rotation_without_policy_preserves_the_open_log(tmp_path):
@@ -65,7 +66,7 @@ def test_rotation_without_policy_preserves_the_open_log(tmp_path):
     finally:
         handler.close()
     assert path.read_text() == 'before\nafter\n'
-    assert not list(tmp_path.glob('*.archive'))
+    assert not list(tmp_path.glob('*.gz'))
 
 
 def test_size_rotation_counts_utf8_bytes_and_keeps_oversized_record(tmp_path):
@@ -77,31 +78,74 @@ def test_size_rotation_counts_utf8_bytes_and_keeps_oversized_record(tmp_path):
         emit(handler, 'end')
     finally:
         handler.close()
-    saved = sorted(p.read_text() for p in tmp_path.glob('*.archive'))
+    saved = sorted(unzip(p) for p in tmp_path.glob('*.gz'))
     assert saved == sorted(['中文\n', '第二条超过限制\n'])
     assert path.read_text() == 'end\n'
 
 
-def test_startup_removes_only_owned_expired_and_excess_archives(tmp_path):
+def unzip(path):
+    return gzip.decompress(path.read_bytes()).decode('utf-8')
+
+
+def test_startup_does_not_age_without_a_new_archive(tmp_path):
     path = tmp_path / 'service.log'
-    old = archive(path, 'expired', 8)
+    archives = [archive(path, 'recent', age) for age in (3, 2, 1)]
+    handler = RetentionFileHandler(path, LoggingSettings(backup_count=1))
+    handler.close()
+    assert all(p.exists() for p in archives)
+
+
+def test_new_archive_ages_owned_archives_by_count(tmp_path):
+    path = tmp_path / 'service.log'
     oldest = archive(path, 'excess', 3)
-    kept = [archive(path, 'recent', age) for age in (2, 1)]
+    kept = archive(path, 'recent', 2)
     unrelated = tmp_path / 'start.log'
     unrelated.write_text('platform log')
-    malformed = tmp_path / 'service.log.external.archive'
+    malformed = tmp_path / 'service.log.external.gz'
     malformed.write_text('external log')
     linked = RetentionPolicy(path, LoggingSettings()).archive_path(time.time())
     linked.symlink_to(unrelated)
-    handler = RetentionFileHandler(path, LoggingSettings(backup_count=2))
-    handler.close()
-    assert not old.exists() and not oldest.exists()
-    assert all(p.exists() for p in kept)
+    legacy = tmp_path / ('service.log.20260101T000000000000Z.' + '0' * 32 + '.archive')
+    legacy.write_text('legacy')
+    os.utime(legacy, (0, 0))
+    handler = RetentionFileHandler(path, LoggingSettings(max_bytes=4, backup_count=2))
+    try:
+        emit(handler, 'first')
+        emit(handler, 'second')
+    finally:
+        handler.close()
+    assert not oldest.exists() and not legacy.exists()
+    owned = [p for p in tmp_path.glob('service.log.*Z.*.gz') if not p.is_symlink()]
+    assert kept.exists() and len(owned) == 2
     assert unrelated.read_text() == 'platform log'
     assert malformed.exists() and linked.is_symlink()
 
 
-def test_daily_rotation_preserves_old_mtime_for_expiry(tmp_path):
+def test_new_archive_ages_by_total_size(tmp_path):
+    path = tmp_path / 'service.log'
+    old = archive(path, os.urandom(2000).hex(), 2)
+    handler = RetentionFileHandler(path, LoggingSettings(max_bytes=4, max_total_bytes=200))
+    try:
+        emit(handler, 'first')
+        emit(handler, 'second')
+    finally:
+        handler.close()
+    assert not old.exists()
+    saved, = tmp_path.glob('*.gz')
+    assert unzip(saved) == 'first\n'
+
+
+def test_interrupted_rotation_is_compressed_at_startup(tmp_path):
+    path = tmp_path / 'service.log'
+    leftover = RetentionPolicy(path, LoggingSettings()).rotating_path(time.time())
+    leftover.write_text('renamed before crash\n')
+    handler = RetentionFileHandler(path, LoggingSettings())
+    handler.close()
+    saved, = tmp_path.glob('*.gz')
+    assert not leftover.exists() and unzip(saved) == 'renamed before crash\n'
+
+
+def test_rotation_happens_only_by_size(tmp_path):
     path = tmp_path / 'service.log'
     path.write_text('old day\n')
     old_time = time.time() - 2 * 86400
@@ -111,10 +155,8 @@ def test_daily_rotation_preserves_old_mtime_for_expiry(tmp_path):
         emit(handler, 'today')
     finally:
         handler.close()
-    saved, = tmp_path.glob('*.archive')
-    assert saved.read_text() == 'old day\n'
-    assert saved.stat().st_mtime == pytest.approx(old_time)
-    assert path.read_text() == 'today\n'
+    assert not list(tmp_path.glob('*.gz'))
+    assert path.read_text() == 'old day\ntoday\n'
 
 
 def test_external_rotation_and_repeated_close(tmp_path):
@@ -141,11 +183,11 @@ def test_failed_initialization_closes_open_descriptors(tmp_path, monkeypatch):
         descriptors.append(descriptor)
         return descriptor
 
-    def fail_cleanup(self, now):
-        raise PermissionError('cannot remove archive')
+    def fail_compress(self):
+        raise PermissionError('cannot compress archive')
 
     monkeypatch.setattr(os, 'open', track_open)
-    monkeypatch.setattr(RetentionPolicy, 'cleanup', fail_cleanup)
+    monkeypatch.setattr(RetentionPolicy, 'compress_pending', fail_compress)
     with pytest.raises(PermissionError):
         RetentionFileHandler(tmp_path / 'service.log', LoggingSettings())
     assert len(descriptors) == 2
@@ -192,5 +234,6 @@ def test_processes_serialize_rotation_and_preserve_all_records(tmp_path):
             if process.is_alive():
                 process.terminate()
                 process.join(5)
-    lines = [line for p in [path, *tmp_path.glob('*.archive')] for line in p.read_text().splitlines()]
+    texts = [path.read_text(), *(unzip(p) for p in tmp_path.glob('*.gz'))]
+    lines = [line for text in texts for line in text.splitlines()]
     assert sorted(lines) == sorted(f'{worker}:{index}' for worker in range(3) for index in range(30))

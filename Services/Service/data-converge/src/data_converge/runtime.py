@@ -50,7 +50,7 @@ def _legacy_sql_probe(runner: SQLTaskRunner, timeout: float = 10.0) -> None:
 def _create_sql_execution(config_path: Path, definition: ApplicationDefinition) -> ExecutionAdapter:
     optional = {} if definition.sql_hashes is None else {'expected_sql_hashes': definition.sql_hashes}
     runner = SQLTaskRunner(config_path, definition.sql_dir,
-                           timeout=definition.options.default_timeout_seconds,
+                           timeout=definition.options.task_timeout_seconds,
                            config=definition.config, **optional)
     probe = partial(_probe_clickhouse, runner.config)
     return ExecutionAdapter(runner, probe, probe)
@@ -143,6 +143,7 @@ def build_scheduler(definition: ApplicationDefinition, runner: TaskRunner,
     options = definition.options
     executor = DAGExecutor(definition.dag, runner, state_store=store,
                            max_concurrent_tasks=options.max_concurrent_tasks,
+                           task_parallelism=options.task_parallelism,
                            max_attempts=options.max_attempts,
                            retry_delay_seconds=options.retry_delay_seconds)
     scheduler = TaskScheduler(
