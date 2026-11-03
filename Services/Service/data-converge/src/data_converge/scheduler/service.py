@@ -22,6 +22,7 @@ from data_converge.dag.builder import shift_elapsed, timeline_time
 from data_converge.time_policy import system_timezone
 from .cron import next_fire_time
 from .cross_period_wait import CrossPeriodWait
+from .skip import log_skip, plan_skip
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ class SchedulePlan:
 
 class TaskScheduler:
     """Group tasks by Cron and execute each due group as one DAG batch."""
+
+    # Batch skipping is opt-in; runtime assigns options and the resume callback.
+    skip_options = None
+    skip_resume = None
 
     def __init__(
         self,
@@ -259,6 +264,7 @@ class TaskScheduler:
             taskname: self.state_store.get_cursor(taskname)
             for taskname in self.dag.topological_order
         }
+        cursors = self._apply_skip(cursors, now)
         plan = self._plan_due(cursors, now)
         instances = {instance.instance_id: instance for instance in plan.instances}
         for instance in self._preaggregate_coverages(now):
@@ -268,6 +274,27 @@ class TaskScheduler:
             prepared, plan.next_cursors,
             cross_period_waits=self.cross_period_wait.records(prepared))
         return self.run_pending(now=now, wait=wait)
+
+    def _apply_skip(self, cursors: dict, now: datetime) -> dict:
+        """Jump lagging cursors to the current batch when skip_batches is enabled."""
+        if self.skip_options is None:
+            return cursors
+        # A missing or older cursor starts from the task's effective start.
+        effective = {}
+        for name, cursor in cursors.items():
+            start = self._effective_start(name)
+            effective[name] = (start if cursor is None or (
+                start is not None and timeline_time(cursor) < timeline_time(start)) else cursor)
+        decision = plan_skip(self.dag, effective, now, self.skip_options)
+        if decision is None:
+            return cursors
+        log_skip(decision, self.skip_options.skip_mode)
+        if decision.resume_from is not None and self.skip_resume is not None:
+            self.skip_resume(decision)
+        jumped = dict(effective)
+        for taskname in decision.skipped:
+            jumped[taskname] = decision.jump_to
+        return jumped
 
     def _preaggregate_coverages(self, now: datetime) -> tuple[TaskInstance, ...]:
         """Restore explicitly promised windows independently of ordinary cursors."""

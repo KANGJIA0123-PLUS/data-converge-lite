@@ -24,6 +24,7 @@ from data_converge.sql_execution.client import execute_sql
 from data_converge.state import StateStore
 from data_converge.coordination import create_leadership, GuardedRunner, GuardedSignalSource, WriterLease
 from data_converge.infrastructure.redis import create_connection
+from data_converge.scheduler.skip import queue_resume
 from data_converge.sql_execution.client import kill_queries
 from data_converge.sql_execution.config import resolve_credentials
 from data_converge.archives.settings import ArchiveSettings
@@ -166,6 +167,9 @@ def build_scheduler(definition: ApplicationDefinition, runner: TaskRunner,
     )
     scheduler.background_worker = BackfillWorker(
         definition, store, runner, stop_check=lambda: scheduler.stop_requested)
+    if options.skip_batches:
+        scheduler.skip_options = options
+        scheduler.skip_resume = partial(queue_resume, definition, store.path.parent)
     return scheduler, executor
 
 
