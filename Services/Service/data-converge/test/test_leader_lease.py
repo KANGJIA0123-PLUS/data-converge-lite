@@ -70,13 +70,13 @@ def test_acquisition_time_counts_against_local_validity():
 
 
 @pytest.mark.parametrize('failure', [False, 'exception'])
-def test_any_failed_renewal_irreversibly_stops_dispatch(failure):
+def test_rejected_or_unexpected_renewal_irreversibly_stops_dispatch(failure):
     from data_converge.leader_election import LeadershipError
     elector = Elector()
 
     def fail():
         if failure == 'exception':
-            raise OSError('private failure')
+            raise RuntimeError('private failure')
         return False
 
     elector.renew = fail
@@ -89,6 +89,41 @@ def test_any_failed_renewal_irreversibly_stops_dispatch(failure):
         with pytest.raises(LeadershipError, match='LEADERSHIP_LOST'):
             lease.acquire()
     assert elector.renew_calls == 1
+
+
+def test_transient_renewal_failure_retries_within_the_deadline():
+    from data_converge.leader_election import LeadershipError
+    elector = Elector()
+    failures = [2]
+
+    def flaky():
+        if failures[0]:
+            failures[0] -= 1
+            raise LeadershipError('LEADERSHIP_REDIS_FAILED')
+        return True
+
+    elector.renew = flaky
+    with make_lease(elector) as lease:
+        assert lease.acquire()
+        wait_until(lambda: elector.renew_calls >= 4)
+        lease.assert_owned()
+
+
+def test_persistent_transient_failure_is_lost_at_the_deadline():
+    from data_converge.leader_election import LeadershipError
+    clock = [0.0]
+    elector = Elector()
+
+    def down():
+        clock[0] += 0.2
+        raise LeadershipError('LEADERSHIP_REDIS_FAILED')
+
+    elector.renew = down
+    with make_lease(elector, clock=lambda: clock[0]) as lease:
+        assert lease.acquire()
+        wait_until(lambda: lease.lost)
+        with pytest.raises(LeadershipError, match='LEADERSHIP_LOST'):
+            lease.assert_owned()
 
 
 def test_successful_late_renewal_cannot_resurrect_expired_lease():

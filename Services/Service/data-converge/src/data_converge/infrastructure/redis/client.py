@@ -53,8 +53,10 @@ def _connection_options(connection: dict, major: int) -> dict:
     from redis.retry import Retry
 
     options = {name: connection[name] for name in ('ssl', 'socket_timeout', 'socket_connect_timeout')}
+    # Queue consumers keep one exclusive socket; named pools (leader/status/log)
+    # are sized from configuration above their maximum concurrent use.
     options.update(retry=Retry(NoBackoff(), 0), retry_on_error=[], decode_responses=False,
-                   health_check_interval=0, max_connections=1)
+                   health_check_interval=0, max_connections=connection.get('max_connections', 1))
     if major == 5:
         options['retry_on_timeout'] = False
     if connection['ssl']:

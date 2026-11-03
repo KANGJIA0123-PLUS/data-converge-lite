@@ -69,6 +69,24 @@ dwd_ready:
     socket_timeout: 3
     socket_connect_timeout: 2
 
+# Redis 独立连接池（复用上方 dwd_ready.redis 的地址与认证）：
+#   leader 选主（低并发、高稳定）；status 状态查询（匹配调度并行度）；log 状态回写（高频轻量）
+# 超时比设计样例更长：现场 Sentinel + PSM 挑战认证需要多次往返，续租超时不应触发主备切换。
+# max_connections 须大于各自的最大并发使用量（status 至少为 max_concurrent_tasks + 2）。
+redis_pools:
+  leader:
+    max_connections: 3
+    socket_timeout: 3.0
+    socket_connect_timeout: 2.0
+  status:
+    max_connections: 15
+    socket_timeout: 5.0
+    socket_connect_timeout: 3.0
+  log:
+    max_connections: 5
+    socket_timeout: 3.0
+    socket_connect_timeout: 3.0
+
 scheduler:
   # 调度时区跟随容器 TZ 或系统时区配置，启动后固定；不单独设置业务时区。
   # 单条任务（清理+汇聚）超时，按周期设置，单位秒。取值范围：

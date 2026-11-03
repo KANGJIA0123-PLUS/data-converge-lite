@@ -100,9 +100,18 @@ class LeadershipLease:
                 raise LeadershipError('LEADERSHIP_RENEWAL_START_FAILED') from None
 
     def _run(self) -> None:
-        while not self._stop.wait(self.renew_interval_seconds):
+        delay = self.renew_interval_seconds
+        while not self._stop.wait(delay):
             try:
                 self._renew_once()
+                delay = self.renew_interval_seconds
+            except LeadershipError:
+                # Transient Redis failure: retry quickly, but only while the local
+                # conservative deadline still holds. Expiry is enforced by the deadline.
+                if self.lost:
+                    return
+                logger.warning('LEADERSHIP_RENEW_RETRY')
+                delay = min(self.renew_interval_seconds, max(0.05, self.renew_interval_seconds / 5))
             except Exception:
                 self._mark_lost()
                 return
@@ -111,6 +120,8 @@ class LeadershipLease:
         with self._command_lock:
             self.assert_owned()
             started = self._clock()
+            # LeadershipError (transport) propagates for a bounded retry; a False
+            # reply means Redis holds another owner, which is a definite loss.
             renewed = self.elector.renew_leadership(self._token, ttl=self.ttl_seconds)
             with self._state_lock:
                 # A response after the old deadline cannot restore ownership.
