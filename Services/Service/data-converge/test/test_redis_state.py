@@ -62,6 +62,19 @@ def test_success_is_published_with_ttl_from_window_end(tmp_path):
         assert not mirror.running_instances()
 
 
+def test_pending_instances_are_published_for_takeover(tmp_path):
+    server, token = fakeredis.FakeServer(), ['leader']
+    builder, dag = graph()
+    mirror = make_mirror(server, token)
+    mirror.write.set(LEADER, 'leader')
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        attach(store, mirror)
+        pending = builder.create_instance(dag, 'root', NOW)
+        store.enqueue_and_advance([pending], {'root': NOW + timedelta(minutes=5)})
+        row = mirror.read_instance(pending.instance_id)
+    assert row is not None and row['status'] == 'PENDING'
+
+
 def test_recent_window_ages_from_window_end_not_write_time():
     server, token = fakeredis.FakeServer(), ['me']
     mirror = make_mirror(server, token)

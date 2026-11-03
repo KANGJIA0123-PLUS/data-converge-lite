@@ -195,6 +195,10 @@ def run(processes: list, directory: Path) -> dict:
     now = datetime.now(zone)
     start = now.replace(minute=now.minute - now.minute % 5, second=0, microsecond=0) - timedelta(minutes=30)
     windows = [start + timedelta(minutes=5 * index) for index in range(6)]
+    # Seed all historical readiness signals before either scheduler starts.
+    # Otherwise the leader can mark already-due windows BLOCKED before the
+    # drill feeds the queue, and a later signal cannot reopen those windows.
+    push_signals(client, windows)
     instances = {}
     for name in ('A', 'B'):
         config = write_config(directory, name, redis_port, ch_port, rules)
@@ -202,7 +206,6 @@ def run(processes: list, directory: Path) -> dict:
         processes.append(instances[name])
         time.sleep(1.5)  # A starts first and should become leader.
     first = wait_until(lambda: leader_name(client), 30, 'a leader')
-    push_signals(client, windows)
     # Kill the leader while an aggregation INSERT is in flight (mock delays 4s).
     wait_until(lambda: any(c['kind'] == 'INSERT' for c in calls(ch_db)) or
                any(c['kind'] == 'ALTER' for c in calls(ch_db)), 60, 'first SQL')

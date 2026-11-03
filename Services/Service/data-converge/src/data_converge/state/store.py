@@ -218,6 +218,8 @@ class StateStore:
                     (taskname, _stamp(next_fire_time)))
             preaggregate_protection.validate_cursors(conn)
         if self.mirror is not None:
+            for instance_id in inserted_ids:
+                self._publish(instance_id)
             self.mirror.write_cursors(dict(next_cursors))
 
     def get_cross_period_wait(self, instance_id: str) -> dict | None:
