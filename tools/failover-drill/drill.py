@@ -56,6 +56,15 @@ def wait_port(port: int, timeout: float = 15) -> None:
     raise SystemExit(f'port {port} did not open')
 
 
+def wait_file(path: Path, timeout: float = 15) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.05)
+    raise SystemExit(f'{path} did not appear')
+
+
 def write_rules(directory: Path) -> Path:
     """Two five-minute tasks and one hourly task: same-period and cross-period links."""
     sql = directory / 'sql'
@@ -191,10 +200,12 @@ def run(processes: list, directory: Path) -> dict:
 
     redis_port, ch_port, password = free_port(), free_port(), 'drill-secret'
     ch_db = directory / 'clickhouse.sqlite3'
+    ready = directory / 'redis.ready'
     processes.append(subprocess.Popen([PY, str(HERE / 'local_redis.py'), '--port', str(redis_port),
-                                       '--password', password]))
+                                       '--password', password, '--ready-file', str(ready)]))
     processes.append(subprocess.Popen([PY, str(HERE / 'mock_clickhouse.py'), '--port', str(ch_port),
                                        '--db', str(ch_db), '--delay', '4']))
+    wait_file(ready)
     wait_port(redis_port)
     wait_port(ch_port)
     client = redis.Redis(port=redis_port, password=password)
