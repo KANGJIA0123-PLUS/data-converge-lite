@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timezone as datetime_timezone
 from pathlib import Path
@@ -16,10 +17,15 @@ from .bootstrap import StateBootstrapError
 from . import cross_period_waits as wait_ledger
 from . import preaggregate_coverage
 from .database import LedgerDatabase
+from .redis_mirror import FencedOut, StateSyncError
 from . import backfill, checkpoints, configuration, events, history, retirement, preaggregate, preaggregate_protection
 
 
 logger = logging.getLogger(__name__)
+
+TERMINAL_STATUSES = frozenset({'SUCCESS', 'FAILED', 'UNKNOWN'})
+PUBLISH_ATTEMPTS = 3
+PUBLISH_RETRY_SECONDS = 0.2
 
 
 def _stamp(value: datetime) -> str:
@@ -60,8 +66,65 @@ class StateStore:
         if row is not None and self.get_retirement(instance_id) is not None:
             return
         interval = self._intervals.get(row['taskname']) if row else None
-        if interval is not None:
-            self.mirror.write_instance(row, interval)
+        if interval is None:
+            return
+        for attempt in range(PUBLISH_ATTEMPTS):
+            try:
+                self.mirror.write_instance(row, interval)
+                return
+            except FencedOut:
+                raise
+            except StateSyncError:
+                if attempt == PUBLISH_ATTEMPTS - 1:
+                    self._record_pending((instance_id,))
+                    raise
+                time.sleep(PUBLISH_RETRY_SECONDS)
+
+    def _record_pending(self, instance_ids: Iterable[str]) -> None:
+        """Remember local facts that may not have reached Redis."""
+        values = [(instance_id, _stamp(datetime.now(datetime_timezone.utc)))
+                  for instance_id in dict.fromkeys(instance_ids)]
+        if not values:
+            return
+        conn = self._connection(write=True)
+        with conn:
+            conn.executemany("INSERT OR REPLACE INTO mirror_pending(instance_id, queued_at) "
+                             "VALUES (?, ?)", values)
+
+    def _clear_pending(self, instance_ids: Iterable[str]) -> None:
+        values = [(instance_id,) for instance_id in dict.fromkeys(instance_ids)]
+        if not values:
+            return
+        conn = self._connection(write=True)
+        with conn:
+            conn.executemany("DELETE FROM mirror_pending WHERE instance_id=?", values)
+
+    def pending_ids(self) -> list[str]:
+        rows = self._connection().execute(
+            "SELECT instance_id FROM mirror_pending ORDER BY queued_at, instance_id").fetchall()
+        return [row[0] for row in rows]
+
+    def flush_pending(self) -> int:
+        """Replay local facts after a leadership restart without overwriting newer terminals."""
+        if self.mirror is None:
+            return 0
+        flushed = 0
+        for instance_id in self.pending_ids():
+            row = self.get_instance(instance_id)
+            if row is None or self.get_retirement(instance_id) is not None:
+                self._clear_pending((instance_id,))
+                continue
+            shared = self.mirror.read_instance(instance_id)
+            if shared is not None and shared.get('status') in TERMINAL_STATUSES:
+                if shared.get('status') != row['status']:
+                    logger.warning('REDIS_STATE_PENDING_CONFLICT: instance_id=%r local=%s shared=%s',
+                                   instance_id, row['status'], shared.get('status'))
+                self._clear_pending((instance_id,))
+                continue
+            self._publish(instance_id)
+            self._clear_pending((instance_id,))
+            flushed += 1
+        return flushed
 
     def import_shared_state(self) -> dict:
         """Merge the previous leader's published state before scheduling starts."""
@@ -218,8 +281,15 @@ class StateStore:
                     (taskname, _stamp(next_fire_time)))
             preaggregate_protection.validate_cursors(conn)
         if self.mirror is not None:
-            for instance_id in inserted_ids:
-                self._publish(instance_id)
+            try:
+                for instance_id in inserted_ids:
+                    self._publish(instance_id)
+            except FencedOut:
+                raise
+            except StateSyncError:
+                # The whole batch must be replayed before the cursor advances.
+                self._record_pending(inserted_ids)
+                raise
             self.mirror.write_cursors(dict(next_cursors))
 
     def get_cross_period_wait(self, instance_id: str) -> dict | None:
@@ -473,7 +543,14 @@ class StateStore:
             event = {TaskStatus.SUCCESS: "SUCCEEDED", TaskStatus.FAILED: "FAILED",
                      TaskStatus.UNKNOWN: "OUTCOME_UNKNOWN"}[status]
             events.append_event(conn, event, instance_id, now)
-        self._publish(instance_id)
+            if self.mirror is not None:
+                # Write-ahead in the same transaction as the local fact: a crash
+                # before the Redis write leaves a durable replay marker.
+                conn.execute("INSERT OR REPLACE INTO mirror_pending(instance_id, queued_at) "
+                             "VALUES (?, ?)", (instance_id, _stamp(now)))
+        if self.mirror is not None:
+            self._publish(instance_id)
+            self._clear_pending((instance_id,))
 
     @staticmethod
     def _save_execution_diagnostic(conn, instance_id: str, diagnostic: dict) -> None:

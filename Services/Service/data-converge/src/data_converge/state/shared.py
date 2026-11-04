@@ -53,7 +53,8 @@ def attach_shared_state(definition, store, lease, *, connection_factory=create_c
 def _take_over(store, mirror, killer) -> None:
     if not mirror.read_cursors():
         seeded = store.publish_local_state()
-        logger.info('REDIS_STATE_SEEDED: instances=%s', seeded)
+        flushed = store.flush_pending()
+        logger.info('REDIS_STATE_SEEDED: instances=%s pending_flushed=%s', seeded, flushed)
         return
     counts = store.import_shared_state()
     interrupted = counts.pop('interrupted_query_ids', [])
@@ -63,3 +64,6 @@ def _take_over(store, mirror, killer) -> None:
             killer(interrupted)
         except Exception:
             logger.warning('REDIS_STATE_KILL_PREVIOUS_FAILED: count=%s', len(interrupted))
+    flushed = store.flush_pending()
+    if flushed:
+        logger.info('REDIS_STATE_PENDING_FLUSHED: instances=%s', flushed)
