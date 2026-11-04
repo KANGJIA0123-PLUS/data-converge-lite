@@ -2,7 +2,7 @@
 
 ## 运行环境
 
-- 分支：`main`（演练加强提交 `d9392a8`）
+- 分支：`main`（主备演练加强 `d9392a8`，fencing 场景与 Redis 就绪等待 `400ccfd`）
 - Python：3.12.14（uv 虚拟环境）
 - Redis：演练脚本使用 `fakeredis[lua]` TCP 服务（本机未安装 `redis-server`）
 - ClickHouse：`tools/failover-drill/mock_clickhouse.py`
@@ -11,9 +11,10 @@
 
 ```bash
 /tmp/data-converge-drill-venv-20261104/bin/python tools/failover-drill/drill.py
+/tmp/data-converge-drill-venv-20261104/bin/python tools/failover-drill/fencing_drill.py
 ```
 
-## 结果
+## 主备演练结果
 
 `tools/failover-drill/out/report.json` 返回 `passed: true`，9 项检查全部通过：
 
@@ -35,11 +36,11 @@
 | --- | --- | --- | --- | --- |
 | 1 | 14 | 12 | 2 | 3 |
 | 2 | 14 | 12 | 2 | 3 |
-| 3 | 13 | 12 | 1 | 2 |
+| 3 | 14 | 12 | 2 | 3 |
 
-`success_before_kill` 是 SIGKILL 前一刻从共享 Redis 读到的真实状态。以第 1 次为例，杀主前已有 `m5_a` 的 12:45、12:50 和 `m5_b` 的 12:45 三个窗口成功；接管后这三个窗口都没有再次执行，说明 `no_success_window_rerun` 不再是对空集合求值。
+`success_before_kill` 是 SIGKILL 前一刻从共享 Redis 读到的真实状态。以第 1 次为例，杀主前已有 `m5_a` 的 13:25、13:30 和 `m5_b` 的 13:25 三个窗口成功；接管后这三个窗口都没有再次执行，说明 `no_success_window_rerun` 不再是对空集合求值。
 
-第 1、2 次同时有两个 RUNNING（`m5_a`、`m5_b` 是不同任务，各自并行度 1），接管后各自重跑一次，共 14 次 INSERT；第 3 次只有一个中断窗口，13 次 INSERT。三次都满足“每个中断窗口恰好重跑一次”。
+三次都同时有两个 RUNNING（`m5_a`、`m5_b` 是不同任务，各自并行度 1），接管后各自重跑一次，共 14 次 INSERT；三次都满足“每个中断窗口恰好重跑一次”。
 
 ## 本次加强
 
@@ -52,9 +53,35 @@
 3. 紧贴 SIGKILL 前抓取 `done_before`；
 4. `verify()` 增加 `success_windows_before_kill` 检查，杀主前成功窗口少于 2 个时 `passed=false`。
 
-fencing 检查仍是合成探针：演练进程用旧 token 调用同一个 Lua，证明 token 校验生效。旧主 A 已被 SIGKILL，不能代表“旧主进程迟到写入”；真实 store 层 fencing 由 `test_redis_state.py::test_deposed_leader_cannot_overwrite_shared_state` 覆盖，端到端的“旧主存活但失租”场景待补。
+`local_redis.py` 现在在 `CONFIG SET requirepass` 完成后写 `--ready-file`，drill 等到该文件出现再启动实例。修复前 fakeredis 在设置密码的瞬间会关闭早期连接，表现为启动即 `REDIS_STATE_WRITE_FAILED`；修复后主备演练和 fencing 演练各连续 3 次通过。
 
-DWD 信号在两个实例启动前预置，目的是让 6 个历史窗口在启动时立即可执行，把演练聚焦在接管路径；这并不用于证明“晚到信号无法重开窗口”。
+## 旧主存活 fencing 演练
+
+`fencing_drill.py` 验证“旧主进程没有被杀、只是失租”的场景：A 的 SQL 处于 `RUNNING` 时 `SIGSTOP` A；B 在租约 TTL 到期后接管，导入 RUNNING、KILL 旧 query、重跑；B 完成全部窗口后再 `SIGCONT` A，让 A 的迟到结果走完本地 `finish` 并尝试发布。
+
+连续 3 次运行均 `passed: true`：
+
+| 次数 | 接管耗时（秒） | 中断窗口 | 旧主本地状态 | 旧主退出码 |
+| --- | --- | --- | --- | --- |
+| 1 | 6.21 | `m5_a@13:20` | SUCCESS | 1 |
+| 2 | 6.20 | `m5_a@13:20` | SUCCESS | 1 |
+| 3 | 6.18 | `m5_a@13:20` | SUCCESS | 1 |
+
+7 项检查全部通过：
+
+| 检查 | 结果 |
+| --- | --- |
+| 备实例接管 | PASS |
+| 中断窗口最终 SUCCESS | PASS |
+| 旧主 `finish` 已本地提交 | PASS |
+| 旧主迟到写入被拒 | PASS |
+| 共享状态未被覆盖 | PASS |
+| 无残留 RUNNING | PASS |
+| 新主存活 | PASS |
+
+A 恢复后日志出现 `SERVICE_FAILED: FencedOut diagnostic={"error_code": "REDIS_STATE_FENCED"}`，进程以 1 退出；A 的本地账本中中断窗口已是 `SUCCESS`，说明 `finish` 已经提交，随后才会尝试镜像。SIGCONT 前后逐字段比较共享实例 hash，内容完全一致；B 的 token 和状态没有被旧主覆盖。
+
+该演练证明的是 Redis 共享状态的写入 fencing，不等于 ClickHouse 端 exactly-once：旧 query 已提交的物理写入仍可能发生，现场仍需依赖 KILL QUERY、下游幂等清理和人工核对 `UNKNOWN`。
 
 ## 回归测试
 
