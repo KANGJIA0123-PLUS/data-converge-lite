@@ -159,6 +159,15 @@ def shared_state(client) -> dict[str, str]:
     return result
 
 
+def await_success_then_running(client, minimum: int = 2) -> dict[str, str]:
+    """Snapshot shared state after enough windows succeeded and one is RUNNING."""
+    wait_until(lambda: sum(1 for value in shared_state(client).values()
+                           if value == 'SUCCESS') >= minimum, 180, 'successful windows')
+    wait_until(lambda: 'RUNNING' in shared_state(client).values(), 60, 'a RUNNING window')
+    time.sleep(1.0)  # Let the in-flight INSERT reach the mock, which delays 4s.
+    return shared_state(client)
+
+
 def fencing_probe(client) -> bool:
     """A stale token must be rejected by the same Lua used by the service."""
     sys.path.insert(0, str(SERVICE / 'src'))
@@ -206,11 +215,9 @@ def run(processes: list, directory: Path) -> dict:
         processes.append(instances[name])
         time.sleep(1.5)  # A starts first and should become leader.
     first = wait_until(lambda: leader_name(client), 30, 'a leader')
-    # Kill the leader while an aggregation INSERT is in flight (mock delays 4s).
-    wait_until(lambda: any(c['kind'] == 'INSERT' for c in calls(ch_db)) or
-               any(c['kind'] == 'ALTER' for c in calls(ch_db)), 60, 'first SQL')
-    done_before = shared_state(client)
-    time.sleep(1.0)
+    # Kill only after real SUCCESS windows exist; otherwise "no successful
+    # window rerun" would pass on an empty set. Then interrupt a RUNNING one.
+    done_before = await_success_then_running(client)
     victim = 'A' if instances['A'].poll() is None else 'B'
     instances[victim].send_signal(signal.SIGKILL)
     killed_at = time.time()
@@ -240,6 +247,7 @@ def verify(result: dict) -> dict:
     settings = json.loads(inserts[-1]['settings']) if inserts else {}
     checks = {
         'standby_took_over': result['second'] not in (None, result['first']),
+        'success_windows_before_kill': len(before_success) >= 2,
         'all_windows_success_in_shared_state': all(final.get(k) == 'SUCCESS' for k in result['expected']),
         'no_success_window_rerun': not any(
             len(by_window.get((_table(k), _start(k)), [])) > 1 for k in before_success),
