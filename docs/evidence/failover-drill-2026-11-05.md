@@ -36,4 +36,5 @@ uv run --no-project --python python3.12 \
 
 - 接管、重试、DWD seed、Redis 镜像和冲突处置定向测试：`41 passed`。
 - 全量测试：`2087 passed, 39 failed, 11 errors, 224 skipped`；50 个失败/错误 nodeid 与 `tools/test-baseline.txt` 完全一致，没有新增失败。
+- CI 门禁固定 Ubuntu、Python 3.12、`TZ=Asia/Shanghai` 和测试依赖版本；归档校验同时覆盖 Linux 删除重建复用 inode 的文件替换场景。
 - `git diff --check`：通过。

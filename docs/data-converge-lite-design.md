@@ -439,7 +439,7 @@ Lua 写入脚本先比较 leader key 和当前 lease token，再执行 `HSET`、
 - Redis 三连接池隔离；
 - 启动探测、任务超时、日志轮转和状态 TTL 的边界行为；
 - 本地双实例演练的接管完成时间和窗口重跑结果。
-- CI 基线门禁完整运行 pytest，允许 `tools/test-baseline.txt` 中的 50 个既有失败/错误节点，阻断任何新增 nodeid。
+- CI 基线门禁在 Ubuntu、Python 3.12、`TZ=Asia/Shanghai` 和固定测试依赖下完整运行 pytest，允许 `tools/test-baseline.txt` 中的 50 个既有失败/错误节点，阻断任何新增 nodeid。
 
 正式性能测试应在目标环境补充：60 任务全量负载、ClickHouse 并发和内存峰值、Redis 连接数和续租延迟、SQLite 写入延迟、窗口端到端 TTM、主备接管 RTO/RPO，以及日志/账本增长曲线。当前文档不虚构这些指标。
 

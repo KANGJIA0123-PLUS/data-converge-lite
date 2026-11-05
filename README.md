@@ -131,7 +131,7 @@ logging:
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/Services/Service/data-converge/src" python3 -m pytest -c /dev/null -p no:cacheprovider Services/Service/data-converge/test -q
 ```
 
-CI 使用同一套测试命令并保留当前已知的 50 个失败/错误节点，新增失败会阻断流水线；基线文件位于 `tools/test-baseline.txt`，本地可直接运行：
+CI 在 Ubuntu runner、Python 3.12、`TZ=Asia/Shanghai` 下使用固定测试依赖（pytest 9.2.0、PyYAML 6.0.2、redis 5.2.1、APScheduler 3.11.0、Flask 3.1.3、fakeredis 2.40.0、lupa 2.8），保留当前已知的 50 个失败/错误节点，新增失败会阻断流水线。基线文件位于 `tools/test-baseline.txt`，门禁脚本会强制使用该时区，本地可直接运行：
 
 ```bash
 python3 tools/test_baseline_gate.py

@@ -31,7 +31,7 @@ class _Guard:
         try:
             self.callback()
             current = _live_identity(self.database)
-            if current is None or not _same_file(current, self.identity):
+            if current is None or not _same_version(current, self.identity):
                 raise ValueError('ARCHIVE_FILE_CHANGED')
         except BaseException:
             self.cancelled = True
@@ -62,6 +62,12 @@ def _directory_identity(directory):
 
 def _same_file(first, second):
     return (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino)
+
+
+def _same_version(first, second):
+    return _same_file(first, second) and (
+        first.st_size, first.st_mtime_ns, first.st_ctime_ns,
+    ) == (second.st_size, second.st_mtime_ns, second.st_ctime_ns)
 
 
 def _live_identity(database):

@@ -10,7 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "tools" / "test-baseline.txt"
 TEST_ROOT = ROOT / "Services" / "Service" / "data-converge" / "test"
-RESULT = re.compile(r"^(?:FAILED|ERROR) (.+?)(?:\s|$)", re.MULTILINE)
+RESULT = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)\s*$", re.MULTILINE)
 
 
 def _baseline() -> set[str]:
@@ -19,10 +19,12 @@ def _baseline() -> set[str]:
 
 def _run() -> tuple[int, str]:
     env = dict(os.environ)
+    env['TZ'] = 'Asia/Shanghai'
+    env['PYTHONDONTWRITEBYTECODE'] = '1'
     source = ROOT / "Services" / "Service" / "data-converge" / "src"
     env["PYTHONPATH"] = str(source) + os.pathsep + env.get("PYTHONPATH", "")
     command = [sys.executable, "-m", "pytest", "-c", "/dev/null", "-p",
-               "no:cacheprovider", str(TEST_ROOT), "--tb=no", "-q", "-rfE"]
+               "no:cacheprovider", str(TEST_ROOT), "--tb=short", "-q", "-rfE"]
     result = subprocess.run(command, cwd=ROOT, env=env, text=True,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return result.returncode, result.stdout
@@ -31,7 +33,7 @@ def _run() -> tuple[int, str]:
 def main() -> int:
     baseline = _baseline()
     code, output = _run()
-    current = set(RESULT.findall(output))
+    current = {nodeid for nodeid in RESULT.findall(output) if nodeid}
     new = sorted(current - baseline)
     resolved = sorted(baseline - current)
     print(output, end="")
