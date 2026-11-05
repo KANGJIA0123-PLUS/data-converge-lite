@@ -26,12 +26,29 @@ class _Guard:
         self.database = database
         self.identity = identity
         self.cancelled = False
+        self.fd = None
+        try:
+            self.fd = os.open(database, os.O_RDONLY | os.O_NOFOLLOW)
+            if not _same_file(os.fstat(self.fd), identity):
+                raise ValueError('ARCHIVE_FILE_CHANGED')
+        except FileNotFoundError:
+            self.close()
+            raise ValueError('ARCHIVE_FILE_CHANGED') from None
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
 
     def __call__(self):
         try:
             self.callback()
             current = _live_identity(self.database)
-            if current is None or not _same_version(current, self.identity):
+            opened = os.fstat(self.fd)
+            if current is None or opened.st_nlink == 0 or not _same_file(current, opened):
                 raise ValueError('ARCHIVE_FILE_CHANGED')
         except BaseException:
             self.cancelled = True
@@ -62,12 +79,6 @@ def _directory_identity(directory):
 
 def _same_file(first, second):
     return (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino)
-
-
-def _same_version(first, second):
-    return _same_file(first, second) and (
-        first.st_size, first.st_mtime_ns, first.st_ctime_ns,
-    ) == (second.st_size, second.st_mtime_ns, second.st_ctime_ns)
 
 
 def _live_identity(database):
@@ -329,23 +340,27 @@ def run_maintenance(database, settings, *, now, check) -> dict:
     identity = _live_identity(database)
     if identity is None:
         raise ValueError('ARCHIVE_FILE_INVALID')
-    check = _Guard(check, database, identity)
-    check()
-    with _archive_lock(archive_directory(database)):
-        _reap_temporaries(database, now, check, report, redundant_only=True)
-        latest = _valid_today(database, now, check, report)
-        if latest is None:
-            try:
-                latest = _create_daily(database, now, check)
-                report['created'] = 1
-            except Exception as error:
-                _error(report, 'create_daily', error, check)
-                return report
-        report['latest_archive'] = str(latest['path'])
-        report['latest_snapshot_at'] = latest['created_at'].isoformat()
-        _reap_temporaries(database, now, check, report)
-        _prune_daily(database, now - timedelta(days=settings.retention_days), check, report)
-        _maintain_migrations(database, now, settings, check, report)
+    guard = _Guard(check, database, identity)
+    try:
+        check = guard
+        check()
+        with _archive_lock(archive_directory(database)):
+            _reap_temporaries(database, now, check, report, redundant_only=True)
+            latest = _valid_today(database, now, check, report)
+            if latest is None:
+                try:
+                    latest = _create_daily(database, now, check)
+                    report['created'] = 1
+                except Exception as error:
+                    _error(report, 'create_daily', error, check)
+                    return report
+            report['latest_archive'] = str(latest['path'])
+            report['latest_snapshot_at'] = latest['created_at'].isoformat()
+            _reap_temporaries(database, now, check, report)
+            _prune_daily(database, now - timedelta(days=settings.retention_days), check, report)
+            _maintain_migrations(database, now, settings, check, report)
+    finally:
+        guard.close()
     return report
 
 

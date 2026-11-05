@@ -356,3 +356,17 @@ def test_live_database_disappearing_during_validation_preserves_all_archives(dat
     with pytest.raises(ValueError, match='ARCHIVE_FILE_CHANGED'):
         run(database)
     assert old.is_file() and len(maintenance.daily_archives(database)) == 2
+
+
+def test_live_database_write_during_snapshot_validation_is_allowed(database, monkeypatch):
+    original = maintenance.files.create_snapshot
+
+    def write_after_snapshot(*args):
+        result = original(*args)
+        with sqlite3.connect(database) as connection:
+            connection.execute('PRAGMA user_version=7')
+        return result
+
+    monkeypatch.setattr(maintenance.files, 'create_snapshot', write_after_snapshot)
+    report = run(database)
+    assert report['status'] == 'PASS' and report['created'] == 1

@@ -1,4 +1,10 @@
-"""Fail CI only when pytest reports a nodeid outside the approved baseline."""
+"""Fail CI only when pytest reports a nodeid outside the approved baseline.
+
+The command intentionally omits ``--continue-on-collection-errors``: collection
+errors then use pytest's non-one exit code and cannot be mistaken for baseline
+test failures. If that option is added later, collection errors without ``::``
+must be handled explicitly before allowing exit code one.
+"""
 from __future__ import annotations
 
 import os
