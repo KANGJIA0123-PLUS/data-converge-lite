@@ -131,4 +131,12 @@ logging:
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/Services/Service/data-converge/src" python3 -m pytest -c /dev/null -p no:cacheprovider Services/Service/data-converge/test -q
 ```
 
+CI 使用同一套测试命令并保留当前已知的 50 个失败/错误节点，新增失败会阻断流水线；基线文件位于 `tools/test-baseline.txt`，本地可直接运行：
+
+```bash
+python3 tools/test_baseline_gate.py
+```
+
+基线项修复后，门禁会将其列为 `RESOLVED_BASELINE_FAILURES`；更新基线前应确认失败节点已稳定修复或经过明确评审。
+
 打包测试会在临时副本运行自定义构建脚本，检查字节码入口、全部 SQL、资源内容、测试源码保留和镜像测试排除，并在仓库外运行校验与解密子进程。完整镜像组装仍需要公司的外部 BuildTool 和基础镜像。

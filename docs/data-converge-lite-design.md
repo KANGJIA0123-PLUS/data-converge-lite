@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档目的 | 说明当前仓库的业务故事、架构、接口、实现、非功能设计和测试设计 |
 | 适用对象 | 开发、测试、运维、评审和后续接手的实现人员 |
-| 分析基线 | `main` 分支，提交 `f9019c6` |
+| 分析基线 | `main` 分支，提交 `f46d415` |
 | 生成日期 | 2026-11-05 |
 | 运行时 | Python 3.12.10、ClickHouse HTTP、Redis、SQLite |
 
@@ -125,6 +125,7 @@ flowchart LR
 | `--status` | `--config` | 查询覆盖起点、状态计数、实例、DWD 窗口和历史摘要 |
 | `--healthcheck liveness/readiness` | 状态目录 | 查询应用心跳；容器探针脚本本身保持平台兼容行为 |
 | `--resolve-instance ID --resolution ... --note ...` | 显式处置原因 | 把 UNKNOWN/失败实例标记为成功或允许重试 |
+| `--resolve-mirror-conflict ID --resolution resolved\|ignored --note ...` | 冲突处置依据，可选 `--actor` | 在状态锁下记录镜像冲突的已处理/已忽略状态，不修改实例结果 |
 | `--resolve-preaggregate ...` | 补算尝试 ID | 处置测试性提前汇聚结果 |
 | `--backfill` / `--backfill-status` | 任务、时间范围、`--recompute` 或 `--preaggregate` | 计划、执行或查看补算；不自动重算已成功窗口 |
 | `--diagnose`、`--failures`、`--history`、`--recovery-plan` | 可选过滤和 `--format json` | 只读输出诊断、失败、历史和恢复分类 |
@@ -283,6 +284,7 @@ sequenceDiagram
 | `dispatch_checkpoints` | `PREPARED`、`DISPATCHED`、`NOT_SUBMITTED` 边界 |
 | `execution_events` | 白名单事件的有序审计记录 |
 | `preaggregate_attempts`、`backfill_*` | 提前测试汇聚和后台补算队列 |
+| `mirror_conflicts` | 本地与共享终态差异、query 证据及 OPEN/RESOLVED/IGNORED 处置审计 |
 | `state.sqlite3.lock` | 同一物理账本的 POSIX 写入锁 |
 
 **Redis 共享状态布局**
@@ -423,6 +425,7 @@ Lua 写入脚本先比较 leader key 和当前 lease token，再执行 `HSET`、
 | PREPARED 阶段崩溃 | 自动恢复为 PENDING，不消耗外部尝试次数 |
 | DISPATCHED/UNKNOWN 阶段崩溃 | 记录 UNKNOWN 或等待共享状态核查，禁止自动重跑 |
 | SQLite 文件锁冲突 | 备机等待原主释放锁，不能抢占正在 drain 的账本 |
+| 镜像冲突处置 | 只接受 `resolved`/`ignored` 和非空说明；状态变化会重新打开冲突，同一证据重复检测保留已有处置 |
 | 配置/SQL hash 变化 | 生成诊断并按迁移策略处理，不静默采用新配置 |
 | 凭据或远端错误返回 | 输出固定安全错误，不泄露密码、原始 SQL 和服务端正文 |
 
@@ -436,6 +439,7 @@ Lua 写入脚本先比较 leader key 和当前 lease token，再执行 `HSET`、
 - Redis 三连接池隔离；
 - 启动探测、任务超时、日志轮转和状态 TTL 的边界行为；
 - 本地双实例演练的接管完成时间和窗口重跑结果。
+- CI 基线门禁完整运行 pytest，允许 `tools/test-baseline.txt` 中的 50 个既有失败/错误节点，阻断任何新增 nodeid。
 
 正式性能测试应在目标环境补充：60 任务全量负载、ClickHouse 并发和内存峰值、Redis 连接数和续租延迟、SQLite 写入延迟、窗口端到端 TTM、主备接管 RTO/RPO，以及日志/账本增长曲线。当前文档不虚构这些指标。
 

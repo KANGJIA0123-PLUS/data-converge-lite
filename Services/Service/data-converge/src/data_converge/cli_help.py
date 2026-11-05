@@ -140,11 +140,14 @@ def add_operation_arguments(parser, modes):
     modes.add_argument('--run-once', action='store_true', help='运行一次调度，会消费信号并执行符合条件的 SQL')
     modes.add_argument('--run-task', metavar='TASK', help='执行指定任务，必须同时指定 --scheduled-time')
     modes.add_argument('--resolve-instance', metavar='ID', help='人工修改实例状态，必须指定 --resolution 和 --note')
+    modes.add_argument('--resolve-mirror-conflict', metavar='ID',
+                       help='处置镜像冲突，--resolution 使用 resolved 或 ignored，并指定 --note')
     modes.add_argument('--resolve-preaggregate', metavar='ITEM_ID',
                        help='核查提前执行的未知结果，不改变正式成功状态；需 --resolution 和 --note')
     parser.add_argument('--start-time', metavar='TIME', help='首次覆盖起点，仅配合 --init-state；带时区并对齐五分钟')
     parser.add_argument('--scheduled-time', metavar='TIME', help='--run-task 的调度时间，必须为带时区的 ISO8601 时间')
     parser.add_argument('--now', metavar='TIME', help='仅配合 --run-once，指定评估时间，必须带时区')
-    parser.add_argument('--resolution', choices=['success', 'retry'],
+    parser.add_argument('--resolution', choices=['success', 'retry', 'resolved', 'ignored'],
                         help='配合人工核查命令：确认成功或允许后续重算；先核实远端结果')
     parser.add_argument('--note', metavar='TEXT', help='配合人工核查命令记录处理依据，不能为空')
+    parser.add_argument('--actor', metavar='NAME', help='镜像冲突处置人；仅配合 --resolve-mirror-conflict')

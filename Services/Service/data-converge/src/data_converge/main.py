@@ -47,14 +47,25 @@ def arguments(argv):
 
 
 def _validate_resolution(parser, args):
-    selected = args.resolve_instance or args.resolve_preaggregate
+    selected = args.resolve_instance or args.resolve_preaggregate or args.resolve_mirror_conflict
     if (args.resolution is not None or args.note is not None) and not selected:
-        parser.error('--resolution and --note require --resolve-instance or --resolve-preaggregate')
+        parser.error('--resolution and --note require a resolution command')
+    if args.actor is not None and not args.resolve_mirror_conflict:
+        parser.error('--actor requires --resolve-mirror-conflict')
     if selected and (not args.resolution or not args.note or not args.note.strip()):
         parser.error('resolution commands require --resolution and a nonempty --note')
+    if args.resolve_mirror_conflict and args.resolution not in ('resolved', 'ignored'):
+        parser.error('--resolve-mirror-conflict requires --resolution resolved or ignored')
+    if (args.resolve_instance or args.resolve_preaggregate) and args.resolution not in ('success', 'retry'):
+        parser.error('--resolve-instance/--resolve-preaggregate require --resolution success or retry')
     if (args.resolve_preaggregate is not None and
             re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', args.resolve_preaggregate) is None):
         parser.error('--resolve-preaggregate requires a valid item ID')
+    if (args.resolve_mirror_conflict is not None and
+            re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,127}', args.resolve_mirror_conflict) is None):
+        parser.error('--resolve-mirror-conflict requires a valid instance ID')
+    if args.resolve_mirror_conflict and args.actor is not None and not args.actor.strip():
+        parser.error('--actor must be nonempty when supplied')
 
 
 def output(value):
@@ -75,6 +86,9 @@ def run(args, *, raw_config=None) -> CommandResult:
         return application.initialize(args.start_time)
     if args.resolve_instance:
         return application.resolve(args.resolve_instance, args.resolution, args.note)
+    if args.resolve_mirror_conflict:
+        return application.resolve_mirror_conflict(args.resolve_mirror_conflict,
+                                                   args.resolution, args.note, args.actor or 'operator')
     if args.resolve_preaggregate:
         return application.resolve_preaggregate(args.resolve_preaggregate, args.resolution, args.note)
     if args.run_task:

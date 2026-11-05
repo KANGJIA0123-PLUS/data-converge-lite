@@ -34,6 +34,28 @@ def test_original_instance_resolution_arguments_still_work():
     assert args.resolution == 'retry'
 
 
+def test_mirror_conflict_resolution_arguments_are_explicit():
+    args = entry.arguments(['--resolve-mirror-conflict', 'task@2026-10-21T00:00:00+08:00',
+                            '--resolution', 'ignored', '--note', 'duplicate evidence',
+                            '--actor', 'alice'])
+    assert args.resolve_mirror_conflict.startswith('task@')
+    assert args.resolution == 'ignored'
+    assert args.actor == 'alice'
+
+
+@pytest.mark.parametrize('extra', [
+    ['--resolve-mirror-conflict', 'window-1'],
+    ['--resolve-mirror-conflict', 'window-1', '--resolution', 'success', '--note', 'checked'],
+    ['--resolve-mirror-conflict', '../bad', '--resolution', 'ignored', '--note', 'checked'],
+    ['--resolve-mirror-conflict', 'window-1', '--resolution', 'ignored', '--note', 'checked', '--actor', ' '],
+])
+def test_bad_mirror_conflict_resolution_rejected_before_config(tmp_path, extra):
+    with pytest.raises(SystemExit) as error:
+        entry.main(['--config', str(tmp_path / 'missing.yaml'), *extra])
+    assert error.value.code == 2
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_help_describes_preaggregate_resolution(capsys):
     with pytest.raises(SystemExit) as result:
         entry.arguments(['--help'])

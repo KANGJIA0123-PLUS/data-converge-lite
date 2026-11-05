@@ -138,6 +138,29 @@ def test_replay_prefers_local_success_and_records_conflict(tmp_path):
         assert conflict['shared_status'] == 'FAILED'
 
 
+def test_mirror_conflict_can_be_resolved_or_ignored(tmp_path):
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        store._record_mirror_conflict('window-1', {'status': 'SUCCESS', 'query_id': 'local'},
+                                       {'status': 'RUNNING', 'query_id': 'shared'})
+        assert store.mirror_conflicts()[0]['disposition'] == 'OPEN'
+        store.resolve_mirror_conflict('window-1', 'RESOLVED', 'verified in ClickHouse', 'alice')
+        conflict = store.mirror_conflicts()[0]
+        assert conflict['disposition'] == 'RESOLVED'
+        assert conflict['disposition_note'] == 'verified in ClickHouse'
+        assert conflict['disposition_by'] == 'alice'
+        store.resolve_mirror_conflict('window-1', 'IGNORED', 'duplicate audit record')
+        assert store.mirror_conflicts()[0]['disposition'] == 'IGNORED'
+        store._record_mirror_conflict('window-1', {'status': 'SUCCESS', 'query_id': 'local'},
+                                      {'status': 'RUNNING', 'query_id': 'shared'})
+        assert store.mirror_conflicts()[0]['disposition'] == 'IGNORED'
+        store._record_mirror_conflict('window-1', {'status': 'SUCCESS', 'query_id': 'local'},
+                                      {'status': 'FAILED', 'query_id': 'new-shared'})
+        assert store.mirror_conflicts()[0]['disposition'] == 'OPEN'
+        assert len(store.mirror_conflicts(disposition='OPEN')) == 1
+        with pytest.raises(ValueError):
+            store.resolve_mirror_conflict('window-1', 'OPEN', 'invalid')
+
+
 def test_takeover_replaces_shared_running_with_local_success(tmp_path):
     builder, dag = graph()
     instance = pending_instance(builder, dag)

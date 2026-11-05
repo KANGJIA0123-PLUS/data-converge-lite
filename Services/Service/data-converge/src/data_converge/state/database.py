@@ -118,8 +118,20 @@ class LedgerDatabase:
                     shared_status TEXT NOT NULL,
                     local_query_id TEXT,
                     shared_query_id TEXT,
-                    detected_at TEXT NOT NULL
+                    detected_at TEXT NOT NULL,
+                    disposition TEXT NOT NULL DEFAULT 'OPEN',
+                    disposition_note TEXT,
+                    disposition_by TEXT,
+                    disposed_at TEXT
                 )""")
+                columns = {row[1] for row in self._conn.execute(
+                    "PRAGMA table_info(mirror_conflicts)")}
+                for name, definition in (
+                        ('disposition', "TEXT NOT NULL DEFAULT 'OPEN'"),
+                        ('disposition_note', 'TEXT'), ('disposition_by', 'TEXT'),
+                        ('disposed_at', 'TEXT')):
+                    if name not in columns:
+                        self._conn.execute(f"ALTER TABLE mirror_conflicts ADD COLUMN {name} {definition}")
 
     def _validate_startup_schema(self) -> None:
         self._conn.execute("""SELECT instance_id, taskname, scheduled_time,
@@ -167,7 +179,11 @@ class LedgerDatabase:
                 shared_status TEXT NOT NULL,
                 local_query_id TEXT,
                 shared_query_id TEXT,
-                detected_at TEXT NOT NULL
+                detected_at TEXT NOT NULL,
+                disposition TEXT NOT NULL DEFAULT 'OPEN',
+                disposition_note TEXT,
+                disposition_by TEXT,
+                disposed_at TEXT
             );
         """)
 

@@ -265,6 +265,15 @@ class Application:
             store.resolve(instance_id, 'SUCCESS' if resolution == 'success' else 'PENDING', note)
         return CommandResult(payload={'status': 'RESOLVED', 'instance_id': instance_id})
 
+    def resolve_mirror_conflict(self, instance_id: str, disposition: str,
+                                note: str, actor: str = 'operator') -> CommandResult:
+        with self._active_state() as (store, lease):
+            if lease is not None:
+                lease.assert_owned()
+            store.resolve_mirror_conflict(instance_id, disposition.upper(), note, actor)
+        return CommandResult(payload={'status': disposition.upper(), 'instance_id': instance_id,
+                                      'disposition_by': actor})
+
     def resolve_preaggregate(self, item_id: str, resolution: str, note: str) -> CommandResult:
         with self._active_state() as (store, lease):
             if lease is not None:

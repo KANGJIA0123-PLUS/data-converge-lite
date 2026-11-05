@@ -104,14 +104,50 @@ class StateStore:
             "SELECT instance_id FROM mirror_pending ORDER BY queued_at, instance_id").fetchall()
         return [row[0] for row in rows]
 
-    def mirror_conflicts(self, limit: int = 100) -> list[dict]:
+    def mirror_conflicts(self, limit: int = 100, *, disposition: str | None = None) -> list[dict]:
         """Return terminal mirror conflicts retained for operator review."""
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        rows = self._connection().execute(
-            "SELECT * FROM mirror_conflicts ORDER BY detected_at DESC LIMIT ?", (limit,)
-        ).fetchall()
-        return [dict(row) for row in rows]
+        if disposition not in (None, 'OPEN', 'RESOLVED', 'IGNORED'):
+            raise ValueError("invalid mirror conflict disposition")
+        query = "SELECT * FROM mirror_conflicts"
+        values = []
+        if disposition is not None:
+            query += " WHERE disposition=?"
+            values.append(disposition)
+        query += " ORDER BY detected_at DESC LIMIT ?"
+        values.append(limit)
+        rows = self._connection().execute(query, values).fetchall()
+        return [self._mirror_conflict_row(row) for row in rows]
+
+    @staticmethod
+    def _mirror_conflict_row(row) -> dict:
+        """Normalize rows from ledgers created before disposition columns existed."""
+        value = dict(row)
+        value.setdefault('disposition', 'OPEN')
+        value.setdefault('disposition_note', None)
+        value.setdefault('disposition_by', None)
+        value.setdefault('disposed_at', None)
+        return value
+
+    def resolve_mirror_conflict(self, instance_id: str, disposition: str, note: str,
+                                actor: str = 'operator') -> None:
+        if disposition not in ('RESOLVED', 'IGNORED'):
+            raise ValueError('disposition must be RESOLVED or IGNORED')
+        if not note or not note.strip():
+            raise ValueError('disposition note must be nonempty')
+        if not actor or not actor.strip():
+            raise ValueError('disposition actor must be nonempty')
+        actor = actor.strip()
+        conn = self._connection(write=True)
+        with conn:
+            updated = conn.execute("""UPDATE mirror_conflicts
+                SET disposition=?, disposition_note=?, disposition_by=?, disposed_at=?
+                WHERE instance_id=?""", (disposition, note.strip(), actor,
+                                           _stamp(datetime.now(datetime_timezone.utc)),
+                                           instance_id)).rowcount
+        if updated != 1:
+            raise KeyError(instance_id)
 
     def mirror_status(self, sample_limit: int = 20) -> dict:
         """Return bounded mirror queue and conflict evidence for diagnostics."""
@@ -131,9 +167,35 @@ class StateStore:
     def _record_mirror_conflict(self, instance_id: str, local: dict, shared: dict) -> None:
         conn = self._connection(write=True)
         with conn:
-            conn.execute("""INSERT OR REPLACE INTO mirror_conflicts
+            conn.execute("""INSERT INTO mirror_conflicts
                 (instance_id, local_status, shared_status, local_query_id,
-                 shared_query_id, detected_at) VALUES (?, ?, ?, ?, ?, ?)""",
+                 shared_query_id, detected_at) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(instance_id) DO UPDATE SET
+                    local_status=excluded.local_status,
+                    shared_status=excluded.shared_status,
+                    local_query_id=excluded.local_query_id,
+                    shared_query_id=excluded.shared_query_id,
+                    detected_at=excluded.detected_at,
+                    disposition=CASE WHEN mirror_conflicts.local_status != excluded.local_status
+                        OR mirror_conflicts.shared_status != excluded.shared_status
+                        OR mirror_conflicts.local_query_id IS NOT excluded.local_query_id
+                        OR mirror_conflicts.shared_query_id IS NOT excluded.shared_query_id
+                        THEN 'OPEN' ELSE mirror_conflicts.disposition END,
+                    disposition_note=CASE WHEN mirror_conflicts.local_status != excluded.local_status
+                        OR mirror_conflicts.shared_status != excluded.shared_status
+                        OR mirror_conflicts.local_query_id IS NOT excluded.local_query_id
+                        OR mirror_conflicts.shared_query_id IS NOT excluded.shared_query_id
+                        THEN NULL ELSE mirror_conflicts.disposition_note END,
+                    disposition_by=CASE WHEN mirror_conflicts.local_status != excluded.local_status
+                        OR mirror_conflicts.shared_status != excluded.shared_status
+                        OR mirror_conflicts.local_query_id IS NOT excluded.local_query_id
+                        OR mirror_conflicts.shared_query_id IS NOT excluded.shared_query_id
+                        THEN NULL ELSE mirror_conflicts.disposition_by END,
+                    disposed_at=CASE WHEN mirror_conflicts.local_status != excluded.local_status
+                        OR mirror_conflicts.shared_status != excluded.shared_status
+                        OR mirror_conflicts.local_query_id IS NOT excluded.local_query_id
+                        OR mirror_conflicts.shared_query_id IS NOT excluded.shared_query_id
+                        THEN NULL ELSE mirror_conflicts.disposed_at END""",
                 (instance_id, local.get('status', ''), shared.get('status', ''),
                  local.get('query_id'), shared.get('query_id'),
                  _stamp(datetime.now(datetime_timezone.utc))))
