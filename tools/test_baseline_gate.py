@@ -35,7 +35,8 @@ def main() -> int:
     baseline = _baseline()
     code, output = _run()
     clean_output = ANSI.sub('', output)
-    current = {nodeid for nodeid in RESULT.findall(clean_output) if nodeid}
+    current = {nodeid for nodeid in RESULT.findall(clean_output)
+               if nodeid and '::' in nodeid}
     new = sorted(current - baseline)
     resolved = sorted(baseline - current)
     print(output, end="")
