@@ -10,7 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "tools" / "test-baseline.txt"
 TEST_ROOT = ROOT / "Services" / "Service" / "data-converge" / "test"
-RESULT = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)\s*$", re.MULTILINE)
+RESULT = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)(?:\s|$)", re.MULTILINE)
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
