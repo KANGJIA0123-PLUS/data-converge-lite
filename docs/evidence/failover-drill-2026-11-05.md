@@ -34,6 +34,6 @@ uv run --no-project --python python3.12 \
 
 ## 回归验证
 
-- 接管、重试、DWD seed 和 Redis 镜像定向测试：`29 passed`。
-- 全量测试：`2077 passed, 39 failed, 11 errors, 224 skipped`。新增回归用例没有引入失败，剩余红项集中在仓库已有的恢复语义、SQL 预检、启动权限边界和 mock 演练基线。
+- 接管、重试、DWD seed 和 Redis 镜像定向测试：`30 passed`。
+- 全量测试：`2078 passed, 39 failed, 11 errors, 224 skipped`。新增回归用例没有引入失败，剩余红项集中在仓库已有的恢复语义、SQL 预检、启动权限边界和 mock 演练基线。
 - `git diff --check`：通过。

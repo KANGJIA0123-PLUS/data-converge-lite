@@ -121,6 +121,31 @@ def test_takeover_kills_real_running_query_before_local_success(tmp_path):
     assert not mirror.running_instances()
 
 
+def test_real_redis_empty_retry_deadline_is_immediately_eligible(tmp_path):
+    server = fakeredis.FakeServer()
+    builder, dag = graph()
+    instance = builder.create_instance(dag, 'root', NOW)
+    first = make_mirror(server, ['a'])
+    first.write.set(LEADER, 'a')
+    with closing(open_store(tmp_path / 'a.db')) as store:
+        attach(store, first)
+        store.enqueue_and_advance([instance], {})
+        assert store.prepare_attempt(instance.instance_id, now=NOW)
+        store.mark_dispatched(instance.instance_id, store.get_instance(instance.instance_id)['query_id'], now=NOW)
+        store.finish(instance.instance_id, TaskStatus.FAILED, error='temporary', retryable=True,
+                     next_retry_at=None, now=NOW)
+    assert first.read_instance(instance.instance_id)['next_retry_at'] == ''
+    second = make_mirror(server, ['b'])
+    second.write.set(LEADER, 'b')
+    with closing(open_store(tmp_path / 'b.db')) as store:
+        attach(store, second)
+        store.import_shared_state()
+        calls = []
+        DAGExecutor(dag, lambda item: calls.append(item.instance_id), state_store=store).execute(
+            [instance], now=NOW)
+    assert calls == [instance.instance_id]
+
+
 def test_recent_window_ages_from_window_end_not_write_time():
     server, token = fakeredis.FakeServer(), ['me']
     mirror = make_mirror(server, token)
