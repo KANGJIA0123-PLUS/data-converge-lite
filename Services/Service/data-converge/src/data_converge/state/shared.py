@@ -59,11 +59,12 @@ def _take_over(store, mirror, killer) -> None:
         logger.info('REDIS_STATE_SEEDED: instances=%s pending_flushed=%s', seeded, flushed)
         return
     seeded = store.publish_missing_local_state()
+    dwd_seeded = store.publish_missing_dwd_state()
     counts = store.import_shared_state()
     imported = _merge_query_ids([], counts.pop('interrupted_query_ids', []))
     interrupted = _merge_query_ids(initial, imported)
     logger.info('REDIS_STATE_IMPORTED: %s missing_seeded=%s interrupted=%s',
-                counts, seeded, len(interrupted))
+                counts | {'dwd_seeded': dwd_seeded}, seeded, len(interrupted))
     # 导入扫描可能发现未出现在 running 集合中的旧 query，补杀这些新增 ID。
     _kill_previous([query for query in imported if query not in initial], killer)
     flushed = store.flush_pending()

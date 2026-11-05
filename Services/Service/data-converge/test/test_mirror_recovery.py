@@ -42,6 +42,15 @@ class FakeMirror:
         return []
 
 
+class ExpiringMirror(FakeMirror):
+    def scan_instance_ids(self):
+        return list(self.rows)
+
+    def read_instance(self, instance_id):
+        self.rows.pop(instance_id, None)
+        return None
+
+
 def attach(store, mirror):
     store.attach_mirror(mirror, {'root': 'PT5M'})
 
@@ -143,6 +152,18 @@ def test_takeover_replaces_shared_running_with_local_success(tmp_path):
         _take_over(store, mirror, None)
         assert mirror.rows[instance.instance_id]['status'] == 'SUCCESS'
         assert store.mirror_conflicts()[0]['shared_status'] == 'RUNNING'
+
+
+def test_success_is_republished_when_shared_hash_expires_after_scan(tmp_path):
+    builder, dag = graph()
+    instance = pending_instance(builder, dag)
+    mirror = ExpiringMirror()
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        DAGExecutor(dag, lambda _item: None, state_store=store).execute([instance], now=NOW)
+        mirror.rows[instance.instance_id] = {'status': 'SUCCESS'}
+        attach(store, mirror)
+        assert store.publish_missing_local_state() == 1
+        assert mirror.rows[instance.instance_id]['status'] == 'SUCCESS'
 
 
 def test_retry_qualification_survives_takeover(tmp_path):

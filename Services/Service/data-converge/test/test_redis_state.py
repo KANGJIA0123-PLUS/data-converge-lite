@@ -226,6 +226,41 @@ def test_first_seed_publishes_local_dwd_facts(tmp_path):
     assert mirror.read_dwd_types(window) == {'GPU_REALTIME'}
 
 
+def test_nonempty_takeover_publishes_missing_local_dwd_facts(tmp_path):
+    from data_converge.state.shared import _take_over
+
+    server = fakeredis.FakeServer()
+    mirror = make_mirror(server, ['a'])
+    mirror.write.set(LEADER, 'a')
+    window = NOW.replace(minute=0)
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        store.record_dwd_signal(window, 'GPU_REALTIME', NOW)
+        store.attach_mirror(mirror, {'root': 'PT5M'})
+        mirror.write_cursors({'root': NOW})
+        _take_over(store, mirror, None)
+    assert mirror.read_dwd_types(window) == {'GPU_REALTIME'}
+
+
+def test_first_seed_writes_dwd_before_cursor(tmp_path):
+    from data_converge.state.shared import _take_over
+
+    server = fakeredis.FakeServer()
+    mirror = make_mirror(server, ['a'])
+    mirror.write.set(LEADER, 'a')
+    window = NOW.replace(minute=0)
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        store.record_dwd_signal(window, 'GPU_REALTIME', NOW)
+        store.attach_mirror(mirror, {'root': 'PT5M'})
+
+        def fail(_window_start, _dwd_type):
+            raise RuntimeError('dwd write failed')
+
+        mirror.write_dwd = fail
+        with pytest.raises(RuntimeError, match='dwd write failed'):
+            _take_over(store, mirror, None)
+    assert mirror.read_cursors() == {}
+
+
 def test_cross_period_parent_past_retention_is_not_missing(tmp_path):
     from data_converge.scheduler.cross_period_wait import _aged_out
 

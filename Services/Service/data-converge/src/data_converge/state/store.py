@@ -211,7 +211,10 @@ class StateStore:
                 published += 1
             elif local['status'] == TaskStatus.SUCCESS.value:
                 shared = self.mirror.read_instance(instance_id)
-                if shared is not None and shared.get('status') != TaskStatus.SUCCESS.value:
+                if shared is None:
+                    self._publish(instance_id)
+                    published += 1
+                elif shared.get('status') != TaskStatus.SUCCESS.value:
                     self._record_mirror_conflict(instance_id, local, shared)
                     self._publish(instance_id)
                     published += 1
@@ -227,22 +230,34 @@ class StateStore:
         if self.mirror is None:
             return 0
         published = self.publish_missing_local_state()
+        dwd_published = self.publish_missing_dwd_state()
         cursors = self._connection().execute("SELECT taskname, next_fire_time FROM schedule_cursors").fetchall()
         self.mirror.write_cursors({name: datetime.fromisoformat(value) for name, value in cursors})
-        dwd_published = self._publish_local_dwd_state()
         if dwd_published:
             logger.info('REDIS_STATE_DWD_SEEDED: facts=%s', dwd_published)
         return published
 
-    def _publish_local_dwd_state(self) -> int:
-        """Publish durable local DWD facts when Redis is seeded for the first time."""
+    def publish_missing_dwd_state(self) -> int:
+        """Publish local DWD facts absent from the shared mirror."""
         if not self._has_dwd_table():
             return 0
         rows = self._connection().execute(
             "SELECT window_start, dwd_type FROM dwd_ready_signals").fetchall()
+        shared = self._shared_dwd_types()
+        published = 0
         for row in rows:
-            self.mirror.write_dwd(datetime.fromisoformat(row['window_start']), row['dwd_type'])
-        return len(rows)
+            window_start = datetime.fromisoformat(row['window_start'])
+            key = _window_key(window_start)
+            if row['dwd_type'] not in shared.get(key, set()):
+                self.mirror.write_dwd(window_start, row['dwd_type'])
+                shared.setdefault(key, set()).add(row['dwd_type'])
+                published += 1
+        return published
+
+    def _shared_dwd_types(self) -> dict[str, set[str]]:
+        if hasattr(self.mirror, 'scan_dwd'):
+            return {_window_key(start): set(types) for start, types in self.mirror.scan_dwd()}
+        return {}
 
     @property
     def path(self) -> Path:
