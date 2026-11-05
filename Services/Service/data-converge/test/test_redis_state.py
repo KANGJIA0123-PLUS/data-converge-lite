@@ -14,6 +14,7 @@ from data_converge.dag import DAGExecutor, TaskStatus
 from data_converge.state.redis_mirror import (
     FencedOut, RedisStateMirror, RedisStateSettings,
 )
+from data_converge.state.shared import _take_over
 
 from .test_state import NOW, graph, open_store
 
@@ -73,6 +74,51 @@ def test_pending_instances_are_published_for_takeover(tmp_path):
         store.enqueue_and_advance([pending], {'root': NOW + timedelta(minutes=5)})
         row = mirror.read_instance(pending.instance_id)
     assert row is not None and row['status'] == 'PENDING'
+
+
+def test_takeover_kills_real_running_query_when_local_is_pending(tmp_path):
+    from data_converge.state.shared import _take_over
+
+    server, token = fakeredis.FakeServer(), ['leader']
+    builder, dag = graph()
+    mirror = make_mirror(server, token)
+    mirror.write.set(LEADER, 'leader')
+    instance = builder.create_instance(dag, 'root', NOW)
+    killed = []
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        attach(store, mirror)
+        store.enqueue_and_advance([instance], {})
+        row = store.get_instance(instance.instance_id)
+        row.update(status='RUNNING', query_id='old-query')
+        mirror.write_instance(row, 'PT5M')
+        mirror.write_cursors({'root': NOW})
+        _take_over(store, mirror, killed.extend)
+    assert killed == ['old-query']
+    assert mirror.read_instance(instance.instance_id)['status'] == 'PENDING'
+    assert not mirror.running_instances()
+
+
+def test_takeover_kills_real_running_query_before_local_success(tmp_path):
+    from data_converge.state.shared import _take_over
+
+    server, token = fakeredis.FakeServer(), ['leader']
+    builder, dag = graph()
+    mirror = make_mirror(server, token)
+    mirror.write.set(LEADER, 'leader')
+    instance = builder.create_instance(dag, 'root', NOW)
+    killed = []
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        attach(store, mirror)
+        DAGExecutor(dag, lambda _item: None, state_store=store).execute([instance], now=NOW)
+        row = store.get_instance(instance.instance_id)
+        row.update(status='RUNNING', query_id='old-query')
+        mirror.write_instance(row, 'PT5M')
+        mirror.write_cursors({'root': NOW})
+        _take_over(store, mirror, killed.extend)
+        assert store.mirror_conflicts()[0]['shared_status'] == 'RUNNING'
+    assert killed == ['old-query']
+    assert mirror.read_instance(instance.instance_id)['status'] == 'SUCCESS'
+    assert not mirror.running_instances()
 
 
 def test_recent_window_ages_from_window_end_not_write_time():
@@ -141,6 +187,18 @@ def test_dwd_readiness_survives_takeover(tmp_path):
         attach(store, make_mirror(server, ['b']))
         assert store.import_shared_state()['dwd'] == 1
         assert store.get_dwd_types(window) == {'GPU_REALTIME'}
+
+
+def test_first_seed_publishes_local_dwd_facts(tmp_path):
+    server = fakeredis.FakeServer()
+    mirror = make_mirror(server, ['a'])
+    mirror.write.set(LEADER, 'a')
+    window = NOW.replace(minute=0)
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        store.record_dwd_signal(window, 'GPU_REALTIME', NOW)
+        store.attach_mirror(mirror, {'root': 'PT5M'})
+        _take_over(store, mirror, None)
+    assert mirror.read_dwd_types(window) == {'GPU_REALTIME'}
 
 
 def test_cross_period_parent_past_retention_is_not_missing(tmp_path):

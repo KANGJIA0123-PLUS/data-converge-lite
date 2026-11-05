@@ -51,6 +51,8 @@ def attach_shared_state(definition, store, lease, *, connection_factory=create_c
 
 
 def _take_over(store, mirror, killer) -> None:
+    initial = _running_query_ids(mirror)
+    _kill_previous(initial, killer)
     if not mirror.read_cursors():
         seeded = store.publish_local_state()
         flushed = store.flush_pending()
@@ -58,14 +60,32 @@ def _take_over(store, mirror, killer) -> None:
         return
     seeded = store.publish_missing_local_state()
     counts = store.import_shared_state()
-    interrupted = counts.pop('interrupted_query_ids', [])
+    imported = _merge_query_ids([], counts.pop('interrupted_query_ids', []))
+    interrupted = _merge_query_ids(initial, imported)
     logger.info('REDIS_STATE_IMPORTED: %s missing_seeded=%s interrupted=%s',
                 counts, seeded, len(interrupted))
-    if interrupted and killer is not None:
-        try:
-            killer(interrupted)
-        except Exception:
-            logger.warning('REDIS_STATE_KILL_PREVIOUS_FAILED: count=%s', len(interrupted))
+    # 导入扫描可能发现未出现在 running 集合中的旧 query，补杀这些新增 ID。
+    _kill_previous([query for query in imported if query not in initial], killer)
     flushed = store.flush_pending()
     if flushed:
         logger.info('REDIS_STATE_PENDING_FLUSHED: instances=%s', flushed)
+
+
+def _running_query_ids(mirror) -> list[str]:
+    """Read query ids before local state can replace shared RUNNING rows."""
+    if not hasattr(mirror, 'running_instances'):
+        return []
+    return _merge_query_ids([], [row.get('query_id') for row in mirror.running_instances()])
+
+
+def _merge_query_ids(left: list[str], right: list[str]) -> list[str]:
+    return list(dict.fromkeys(query for query in (*left, *right) if query))
+
+
+def _kill_previous(query_ids: list[str], killer) -> None:
+    if not query_ids or killer is None:
+        return
+    try:
+        killer(query_ids)
+    except Exception:
+        logger.warning('REDIS_STATE_KILL_PREVIOUS_FAILED: count=%s', len(query_ids))

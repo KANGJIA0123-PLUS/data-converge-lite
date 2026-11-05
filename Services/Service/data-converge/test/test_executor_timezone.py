@@ -44,3 +44,8 @@ def test_retry_is_due_after_clock_moves_back():
     retry = datetime(2026, 11, 1, 1, 50, tzinfo=zone)
     now = datetime(2026, 11, 1, 1, 10, tzinfo=zone, fold=1)
     assert can_start_attempt(TaskStatus.FAILED, 1, True, retry, now=now, max_attempts=3)
+
+
+def test_empty_retry_deadline_is_treated_as_none():
+    now = datetime(2026, 11, 1, 1, 10, tzinfo=ZoneInfo('UTC'))
+    assert can_start_attempt(TaskStatus.FAILED, 1, True, '', now=now, max_attempts=3)

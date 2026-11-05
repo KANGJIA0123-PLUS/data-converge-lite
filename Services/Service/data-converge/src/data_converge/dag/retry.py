@@ -21,5 +21,8 @@ def can_start_attempt(status: TaskStatus, attempts: int, retryable: bool,
     if not retryable or attempts >= max_attempts:
         return False
     if isinstance(next_retry_at, str):
-        next_retry_at = datetime.fromisoformat(next_retry_at)
+        # Redis hash 会把 NULL 编码为空字符串，空值应保持立即可重试。
+        next_retry_at = next_retry_at.strip() or None
+        if next_retry_at is not None:
+            next_retry_at = datetime.fromisoformat(next_retry_at)
     return next_retry_at is None or timeline_time(next_retry_at) <= timeline_time(now)

@@ -206,6 +206,15 @@ class RedisStateMirror:
         except Exception:
             raise StateSyncError('REDIS_STATE_READ_FAILED') from None
 
+    def scan_instance_ids(self, batch: int = 500):
+        """Yield live instance ids without reading each hash."""
+        pattern = f'{self.prefix}:inst:*'
+        try:
+            for key in self.read.scan_iter(match=pattern, count=batch):
+                yield _text(key).rsplit(':inst:', 1)[-1]
+        except Exception:
+            raise StateSyncError('REDIS_STATE_READ_FAILED') from None
+
 
 def _text(value) -> str:
     return value.decode('utf-8') if isinstance(value, bytes) else value

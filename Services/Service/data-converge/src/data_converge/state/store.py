@@ -198,23 +198,29 @@ class StateStore:
         if self.mirror is None:
             return 0
         rows = self._connection().execute(
-            "SELECT instance_id FROM task_instances WHERE status IN "
+            "SELECT * FROM task_instances WHERE status IN "
             "('SUCCESS','FAILED','UNKNOWN','PENDING','BLOCKED') "
             "ORDER BY data_end DESC LIMIT 20000").fetchall()
+        shared_ids = self._shared_instance_ids()
         published = 0
         for row in rows:
-            instance_id = row[0]
-            local = self.get_instance(instance_id)
-            shared = self.mirror.read_instance(instance_id)
-            if shared is None:
+            local = dict(row)
+            instance_id = local['instance_id']
+            if instance_id not in shared_ids:
                 self._publish(instance_id)
                 published += 1
-            elif (local['status'] == TaskStatus.SUCCESS.value
-                  and shared.get('status') != TaskStatus.SUCCESS.value):
-                self._record_mirror_conflict(instance_id, local, shared)
-                self._publish(instance_id)
-                published += 1
+            elif local['status'] == TaskStatus.SUCCESS.value:
+                shared = self.mirror.read_instance(instance_id)
+                if shared is not None and shared.get('status') != TaskStatus.SUCCESS.value:
+                    self._record_mirror_conflict(instance_id, local, shared)
+                    self._publish(instance_id)
+                    published += 1
         return published
+
+    def _shared_instance_ids(self) -> set[str]:
+        if hasattr(self.mirror, 'scan_instance_ids'):
+            return set(self.mirror.scan_instance_ids())
+        return {row['instance_id'] for row in self.mirror.scan_instances()}
 
     def publish_local_state(self) -> int:
         """Seed Redis from a ledger that predates shared state (first upgrade)."""
@@ -223,7 +229,20 @@ class StateStore:
         published = self.publish_missing_local_state()
         cursors = self._connection().execute("SELECT taskname, next_fire_time FROM schedule_cursors").fetchall()
         self.mirror.write_cursors({name: datetime.fromisoformat(value) for name, value in cursors})
+        dwd_published = self._publish_local_dwd_state()
+        if dwd_published:
+            logger.info('REDIS_STATE_DWD_SEEDED: facts=%s', dwd_published)
         return published
+
+    def _publish_local_dwd_state(self) -> int:
+        """Publish durable local DWD facts when Redis is seeded for the first time."""
+        if not self._has_dwd_table():
+            return 0
+        rows = self._connection().execute(
+            "SELECT window_start, dwd_type FROM dwd_ready_signals").fetchall()
+        for row in rows:
+            self.mirror.write_dwd(datetime.fromisoformat(row['window_start']), row['dwd_type'])
+        return len(rows)
 
     @property
     def path(self) -> Path:

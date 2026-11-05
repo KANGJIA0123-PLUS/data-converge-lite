@@ -166,6 +166,30 @@ def test_retry_qualification_survives_takeover(tmp_path):
         assert store.list_pending()[0]['instance_id'] == instance.instance_id
 
 
+def test_empty_retry_deadline_from_redis_is_imported_as_immediate_retry(tmp_path):
+    builder, dag = graph()
+    instance = pending_instance(builder, dag)
+    mirror = FakeMirror()
+    with closing(open_store(tmp_path / 'leader.db')) as store:
+        attach(store, mirror)
+        store.enqueue_and_advance([instance], {})
+        dispatch(store, instance)
+        store.finish(instance.instance_id, TaskStatus.FAILED, error='temporary',
+                     retryable=True, next_retry_at=NOW, now=NOW)
+    # Redis 会把 NULL hash 值表示为空字符串，旧主可能发布这种立即重试形式。
+    mirror.rows[instance.instance_id]['next_retry_at'] = ''
+    calls = []
+    with closing(open_store(tmp_path / 'standby.db')) as store:
+        attach(store, mirror)
+        counts = store.import_shared_state()
+        row = store.get_instance(instance.instance_id)
+        assert counts['IMPORTED'] == 1
+        assert row['next_retry_at'] is None
+        DAGExecutor(dag, lambda item: calls.append(item.instance_id),
+                    state_store=store).execute([instance], now=NOW)
+    assert calls == [instance.instance_id]
+
+
 def test_takeover_seeds_local_history_when_empty_pod_advanced_cursor(tmp_path):
     builder, dag = graph()
     mirror = FakeMirror()

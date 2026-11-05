@@ -45,6 +45,7 @@ def import_instance(conn, row: dict) -> str | None:
     idempotent cleanup+insert reruns it. Local SUCCESS is never downgraded.
     """
     status = row.get('status')
+    was_running = status == TaskStatus.RUNNING.value
     local = conn.execute('SELECT status FROM task_instances WHERE instance_id=?',
                          (row['instance_id'],)).fetchone()
     if local is not None and local[0] == TaskStatus.SUCCESS.value:
@@ -57,7 +58,8 @@ def import_instance(conn, row: dict) -> str | None:
         return None
     retryable = int(status == TaskStatus.FAILED.value and
                     str(row.get('retryable', '0')) == '1')
-    next_retry_at = row.get('next_retry_at') if retryable else None
+    # Redis 会把 NULL hash 值序列化为空字符串，这里还原为 None，保留立即重试语义。
+    next_retry_at = (row.get('next_retry_at') or None) if retryable else None
     if local is None:
         conn.execute('''INSERT INTO task_instances (instance_id, taskname, scheduled_time,
             data_start, data_end, status, attempts, retryable, next_retry_at, query_id)
@@ -72,7 +74,7 @@ def import_instance(conn, row: dict) -> str | None:
             WHERE instance_id=?''',
                      (int(row.get('attempts') or 0), row.get('query_id') or None,
                       retryable, next_retry_at, row['instance_id']))
-        return None
+        return 'REQUEUED' if was_running else None
     conn.execute('''UPDATE task_instances SET status=?, attempts=MAX(attempts, ?),
         query_id=COALESCE(?, query_id), retryable=?, next_retry_at=?
         WHERE instance_id=?''',
