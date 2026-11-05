@@ -2,7 +2,7 @@
 
 ## 运行环境
 
-- 分支：`main@0233ea5`，工作区包含本次状态镜像、配置校验和探针修复。
+- 分支：`main@6f49d03`，已包含接管 KILL、重试时间归一化、DWD seed 和设计文档对齐修复。
 - Python：3.12.14（uv 临时环境）。
 - Redis：`tools/failover-drill/local_redis.py` 提供的 fakeredis[lua] TCP 服务。
 - ClickHouse：`tools/failover-drill/mock_clickhouse.py`。
@@ -22,7 +22,7 @@ uv run --no-project --python python3.12 \
   python tools/failover-drill/drill.py
 ```
 
-结果为 `passed: true`，8 项检查全部通过：备机接管、杀主前已有成功窗口、全部窗口成功、成功窗口未重跑、中断窗口只重跑一次、无残留 RUNNING、旧主写入被 fencing 拒绝、ClickHouse settings 和 5 分钟超时均生效。
+结果为 `passed: true`，9 项检查全部通过：备机接管、杀主前已有成功窗口、全部窗口成功、成功窗口未重跑、中断窗口只重跑一次、无残留 RUNNING、旧主写入被 fencing 拒绝、ClickHouse settings 和 5 分钟超时均生效。
 
 本次覆盖 12 个窗口，INSERT 14 次；杀主前已有 3 个成功窗口，中断后重跑 2 个窗口。演练只证明 fakeredis 和 mock ClickHouse 下的协议行为，不代表真实 Redis、ClickHouse 容量或 exactly-once。
 
@@ -34,6 +34,6 @@ uv run --no-project --python python3.12 \
 
 ## 回归验证
 
-- 针对配置、manifest、Redis 镜像恢复、诊断和打包探针的定向测试：`135 passed`。
-- 全量测试：`2070 passed, 39 failed, 11 errors, 224 skipped`。剩余红项集中在仓库已有的恢复语义、SQL 预检、启动权限边界和 mock 演练基线；本次新增的镜像恢复及配置安全用例均通过。
+- 接管、重试、DWD seed 和 Redis 镜像定向测试：`29 passed`。
+- 全量测试：`2077 passed, 39 failed, 11 errors, 224 skipped`。新增回归用例没有引入失败，剩余红项集中在仓库已有的恢复语义、SQL 预检、启动权限边界和 mock 演练基线。
 - `git diff --check`：通过。
