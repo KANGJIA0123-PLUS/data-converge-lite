@@ -38,6 +38,8 @@
     time_to_first_token_seconds_avg,
     prompt_tokens_per_s_avg,
     generation_tokens_per_s_avg,
+    infer_input_token_sum_per_s,
+    infer_output_token_sum_per_s,
     sync_flag
 )
 SELECT
@@ -157,6 +159,18 @@ SELECT
         sum(dws.output_tokens_sum) / nullIf(toFloat64(dateDiff('second', toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC'))), 0.0),
         0.0
     ) AS Nullable(Float64)) AS generation_tokens_per_s_avg,
+
+    -- 统计周期内，输入 token 吞吐趋势 (tokens/s) = 输入token数 / (解码耗时ms / 1000)
+    CAST(coalesce(
+        sum(dws.input_tokens_sum) / nullIf(toFloat64(sum(dws.total_time_sum) - sum(dws.prefill_time_sum)) / 1000.0, 0.0),
+        0.0
+    ) AS Nullable(Float64)) AS infer_input_token_sum_per_s,
+
+    -- 统计周期内，输出 token 吞吐趋势 (tokens/s) = 输出token数 / (解码耗时ms / 1000)
+    CAST(coalesce(
+        sum(dws.output_tokens_sum) / nullIf(toFloat64(sum(dws.total_time_sum) - sum(dws.prefill_time_sum)) / 1000.0, 0.0),
+        0.0
+    ) AS Nullable(Float64)) AS infer_output_token_sum_per_s,
 
     -- 数据同步标记
     any(dws.sync_flag) AS sync_flag

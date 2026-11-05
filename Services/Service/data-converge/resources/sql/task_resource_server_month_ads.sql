@@ -43,6 +43,10 @@ INSERT INTO modelmate_metric.t_mops__resource_server__month_ads
     engine_avg_generation_throughput_toks_per_s_avg,
     engine_avg_generation_throughput_toks_per_s_delta,
     engine_avg_generation_throughput_toks_per_s_max,
+    engine_input_token_num_length_delta_avg,
+    engine_output_token_num_length_delta_avg,
+    engine_total_token_argMax,
+    engine_total_token_delta,
     engine_time_to_first_token_seconds_avg,
     engine_time_to_first_token_seconds_sum_delta,
     engine_time_to_first_token_seconds_count_delta,
@@ -140,6 +144,16 @@ SELECT
     avg(s.engine_avg_generation_throughput_toks_per_s_avg) AS engine_avg_generation_throughput_toks_per_s_avg,
     sum(s.engine_avg_generation_throughput_toks_per_s_delta) AS engine_avg_generation_throughput_toks_per_s_delta,
     max(s.engine_avg_generation_throughput_toks_per_s_max) AS engine_avg_generation_throughput_toks_per_s_max,
+    -- 平均每条请求输入token均值（加权平均）
+    if(sum(s.engine_request_received_total_delta) > 0,
+       sum(s.engine_prompt_tokens_total_delta) / sum(s.engine_request_received_total_delta), NULL) AS engine_input_token_num_length_delta_avg,
+    -- 平均每条请求输出token均值（加权平均）
+    if(sum(s.engine_request_received_total_delta) > 0,
+       sum(s.engine_generation_tokens_total_delta) / sum(s.engine_request_received_total_delta), NULL) AS engine_output_token_num_length_delta_avg,
+    --  输入输出token总和的最新快照（累加）
+    sum(s.engine_total_token_argMax) AS engine_total_token_argMax,
+    --  输入输出token增量（累加）
+    sum(s.engine_total_token_delta) AS engine_total_token_delta,
 
     -- 耗时与延时
     if(sum(s.engine_time_to_first_token_seconds_count_delta) > 0, sum(s.engine_time_to_first_token_seconds_sum_delta) / sum(s.engine_time_to_first_token_seconds_count_delta), NULL) AS engine_time_to_first_token_seconds_avg,

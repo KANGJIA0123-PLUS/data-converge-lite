@@ -65,6 +65,10 @@ INSERT INTO modelmate_metric.t_mops__modelmetric_instance__month_ads
     engine_avg_generation_throughput_toks_per_s_avg,
     engine_avg_generation_throughput_toks_per_s_delta,
     engine_avg_generation_throughput_toks_per_s_max,
+    engine_input_token_num_length_delta_avg,
+    engine_output_token_num_length_delta_avg,
+    engine_total_token_argMax,
+    engine_total_token_delta,
     engine_time_to_first_token_seconds_avg,
     engine_time_to_first_token_seconds_count_argMax,
     engine_time_to_first_token_seconds_count_delta,
@@ -191,6 +195,10 @@ SELECT
     t.engine_avg_generation_throughput_toks_per_s_avg,
     t.engine_avg_generation_throughput_toks_per_s_delta,
     t.engine_avg_generation_throughput_toks_per_s_max,
+    t.engine_input_token_num_length_delta_avg,
+    t.engine_output_token_num_length_delta_avg,
+    t.engine_total_token_argMax,
+    t.engine_total_token_delta,
 
     t.engine_time_to_first_token_seconds_avg,
     t.engine_time_to_first_token_seconds_count_argMax,
@@ -408,6 +416,34 @@ FROM
     sumIf(dws.avg_generation_throughput_toks_per_s_avg, dws.process_role IN ('decode', 'engine', 'single'))          AS engine_avg_generation_throughput_toks_per_s_avg,
     sumIf(dws.avg_generation_throughput_toks_per_s_delta, dws.process_role IN ('decode', 'engine', 'single'))        AS engine_avg_generation_throughput_toks_per_s_delta,
     maxIf(dws.avg_generation_throughput_toks_per_s_max, dws.process_role IN ('decode', 'engine', 'single'))          AS engine_avg_generation_throughput_toks_per_s_max,
+
+    -- 平均每条请求输入token均值
+    CAST(coalesce(
+        sumIf(dws.prompt_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
+        / nullIf(sumIf(dws.request_received_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')), 0.0),
+        0.0
+    ) AS Nullable(Float32)) AS engine_input_token_num_length_delta_avg,
+
+    -- 平均每条请求输出token均值
+    CAST(coalesce(
+        sumIf(dws.generation_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
+        / nullIf(sumIf(dws.request_received_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')), 0.0),
+        0.0
+    ) AS Nullable(Float32)) AS engine_output_token_num_length_delta_avg,
+
+    -- 输入输出token总和的最新快照
+    CAST(coalesce(
+        maxIf(dws.prompt_tokens_total_argMax, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
+        + maxIf(dws.generation_tokens_total_argMax, dws.process_role IN ('engine', 'prefill', 'decode', 'single')),
+        0.0
+    ) AS Nullable(Float32)) AS engine_total_token_argMax,
+
+    -- 输入输出token增量
+    CAST(coalesce(
+        sumIf(dws.prompt_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single'))
+        + sumIf(dws.generation_tokens_total_delta, dws.process_role IN ('engine', 'prefill', 'decode', 'single')),
+        0.0
+    ) AS Nullable(Float32)) AS engine_total_token_delta,
 
     -- 4.3 引擎关键耗时 (TTFT: prefill/engine/single, TPOT: decode/engine/single, Engine E2E: 全量)
     CAST(coalesce(

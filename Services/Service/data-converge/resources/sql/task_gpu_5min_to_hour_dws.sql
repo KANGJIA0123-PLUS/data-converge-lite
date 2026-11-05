@@ -134,7 +134,7 @@ SELECT
     sum(f.ai_card_unused_counter)                                            AS ai_card_unused_counter,
     sum(f.ai_card_used_active_counter)                                       AS ai_card_used_active_counter,
     CAST(
-        sum(f.ai_card_used_active_counter) / nullIf(sum(f.ai_card_used_counter), 0)
+        sum(f.ai_card_used_counter) / nullIf(sum(f.ai_card_used_counter) + sum(f.ai_card_unused_counter), 0)
         AS Nullable(Float32)
     )                                                                      AS ai_card_used_ratio_avg,
     
