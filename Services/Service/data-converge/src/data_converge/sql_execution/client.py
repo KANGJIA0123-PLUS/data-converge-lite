@@ -194,11 +194,43 @@ def _decode_query_response(body, remaining, query_id):
         raise SQLExecutionError("CLICKHOUSE_RESPONSE_INVALID", outcome_unknown=True, query_id=query_id) from None
 
 
+NOTHING_TO_KILL = 785
+
+
+def _query_id_list(query_ids) -> list[str]:
+    return [value for value in query_ids if isinstance(value, str)
+            and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value)]
+
+
 def kill_queries(config: dict[str, Any], query_ids, timeout: float = 30) -> None:
     """Ask ClickHouse to cancel queries left by a previous leader (best effort)."""
-    ids = [value for value in query_ids if isinstance(value, str)
-           and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value)]
+    ids = _query_id_list(query_ids)
     if not ids:
         return
     quoted = ", ".join("'" + value + "'" for value in ids)
     execute_sql(config, f"KILL QUERY WHERE query_id IN ({quoted}) ASYNC", timeout=timeout)
+
+
+def stop_queries(config: dict[str, Any], query_ids, timeout: float = 30) -> set[str]:
+    """Cancel queries synchronously and return the ids ClickHouse still reports running.
+
+    An empty result is positive evidence that none of the queries can still write.
+    Any transport or server failure raises: callers must treat that as unconfirmed.
+    """
+    ids = _query_id_list(query_ids)
+    if not ids:
+        return set()
+    quoted = ", ".join("'" + value + "'" for value in ids)
+    # Filtering system.processes first avoids an expected NOTHING_TO_KILL error
+    # (logged as SQL_ERROR) on every confirmation round after the query ended.
+    sql = f"SELECT query_id FROM system.processes WHERE query_id IN ({quoted})"
+    running = {row[0] for row in execute_sql(config, sql, timeout=timeout) if row}
+    if not running:
+        return set()
+    try:
+        execute_sql(config, f"KILL QUERY WHERE query_id IN ({quoted}) SYNC", timeout=timeout)
+    except SQLExecutionError as error:
+        # 785: the queries ended between the two statements; the check below confirms it.
+        if (error.diagnostic or {}).get("clickhouse_exception_code") != NOTHING_TO_KILL:
+            raise
+    return {row[0] for row in execute_sql(config, sql, timeout=timeout) if row}

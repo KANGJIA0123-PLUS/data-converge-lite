@@ -69,6 +69,7 @@ class DAGExecutor:
         self.retry_delay_seconds = retry_delay_seconds
         self.readiness_check = readiness_check
         self.cross_period_check = None
+        self.orphan_check = None
         memory = InMemoryExecutionRepository(self.known_statuses)
         self.repository: ExecutionRepository = state_store if state_store is not None else memory
         self.checkpoints = self.repository if isinstance(self.repository, CheckpointRepository) else None
@@ -171,7 +172,7 @@ class DAGExecutor:
     def _ready(self, instance, by_id, now):
         if not self._upstreams_succeeded(instance, by_id):
             return False
-        for check in (self.readiness_check, self.cross_period_check):
+        for check in (self.orphan_check, self.readiness_check, self.cross_period_check):
             reason = check(instance, now) if check is not None else None
             if reason is not None:
                 self._mark_blocked(instance, reason)

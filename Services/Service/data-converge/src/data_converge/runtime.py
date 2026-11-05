@@ -25,7 +25,8 @@ from data_converge.state import StateStore
 from data_converge.coordination import create_leadership, GuardedRunner, GuardedSignalSource, WriterLease
 from data_converge.infrastructure.redis import create_connection
 from data_converge.scheduler.skip import queue_resume
-from data_converge.sql_execution.client import kill_queries
+from data_converge.sql_execution.client import kill_queries, stop_queries
+from data_converge.scheduler.orphans import OrphanQueryGuard
 from data_converge.sql_execution.pool import ClickHousePool
 from data_converge.sql_execution.config import resolve_credentials
 from data_converge.archives.settings import ArchiveSettings
@@ -85,6 +86,14 @@ class RuntimeDependencies:
         def kill(query_ids):
             kill_queries(resolve_credentials(definition.config), query_ids)
         return kill
+
+    def query_stopper(self, definition: ApplicationDefinition):
+        """Synchronously cancel queries; return the ids ClickHouse still runs."""
+        config = resolve_credentials(definition.config)
+
+        def stop(query_ids):
+            return stop_queries(config, query_ids, timeout=10)
+        return stop
 
 
 @contextmanager
@@ -175,6 +184,27 @@ def build_scheduler(definition: ApplicationDefinition, runner: TaskRunner,
     return scheduler, executor
 
 
+def attach_orphan_guard(definition, store, scheduler, executor, dependencies) -> None:
+    """Hold reruns of interrupted windows until ClickHouse confirms their old query stopped."""
+    stopper = getattr(dependencies, 'query_stopper', None)
+    if stopper is None:
+        return
+    guard = OrphanQueryGuard(store, _lazy(stopper, definition))
+    executor.orphan_check = guard.reason
+    scheduler.orphan_guard = guard
+
+
+def _lazy(factory, definition):
+    """Resolve credentials on first use, so offline paths never decrypt."""
+    resolved = []
+
+    def call(query_ids):
+        if not resolved:
+            resolved.append(factory(definition))
+        return resolved[0](query_ids)
+    return call
+
+
 def attach_readiness(ready_config: dict, store: StateStore, coverage_start: datetime,
                      scheduler: TaskScheduler, executor: DAGExecutor, cleanup: ExitStack,
                      source_factory: Callable[[dict], ReadySignalSource] = _create_ready_source,
@@ -223,6 +253,7 @@ def open_runtime(config_path: Path, definition: ApplicationDefinition, store: St
         execution = dependencies.execution_factory(config_path, definition)
         runner = GuardedRunner(execution.runner, lease) if lease is not None else execution.runner
         scheduler, executor = build_scheduler(definition, runner, store, coverage_start)
+        attach_orphan_guard(definition, store, scheduler, executor, dependencies)
         if lease is not None:
             scheduler.stop_check = lambda: lease.lost
             heartbeat.readiness_check = lambda: not lease.lost

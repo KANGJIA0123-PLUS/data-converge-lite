@@ -4,7 +4,7 @@ from datetime import datetime
 import uuid
 
 from data_converge.dag.builder import timeline_time
-from . import checkpoints, events, history, retirement, preaggregate_protection
+from . import checkpoints, events, history, orphans, retirement, preaggregate_protection
 
 
 def available(conn):
@@ -42,6 +42,9 @@ def _existing_decision(conn, instance, recompute, now):
             return "BLOCKED", "BACKFILL_WINDOW_CHANGED"
     if row["status"] in ("UNKNOWN", "RUNNING"):
         return "BLOCKED", "BACKFILL_INSTANCE_" + row["status"]
+    if instance.instance_id in orphans.held(conn):
+        # A previous leader's query for this window may still be writing.
+        return "BLOCKED", "BACKFILL_PREVIOUS_QUERY_RUNNING"
     if row["status"] == "SUCCESS" and not recompute:
         return "SKIPPED", None
     return None
@@ -99,9 +102,12 @@ def record_finish(conn, instance_id):
 
 
 def recover_running(conn, now):
-    """Never replay a manually dispatched write after losing its outcome."""
+    """Never replay a manually dispatched write after losing its outcome.
+
+    Returns the instance ids changed to UNKNOWN so the caller can publish them.
+    """
     if not available(conn):
-        return
+        return []
     rows = conn.execute("SELECT * FROM backfill_attempts WHERE status='RUNNING'").fetchall()
     for row in rows:
         stamp = now.isoformat(timespec="microseconds")
@@ -114,3 +120,4 @@ def recover_running(conn, now):
             events.append_event(conn, "OUTCOME_UNKNOWN", row["instance_id"], now)
         conn.execute("""UPDATE backfill_attempts SET status='UNKNOWN', error='EXECUTION_INTERRUPTED'
             WHERE item_id=?""", (row["item_id"],))
+    return [row["instance_id"] for row in rows]

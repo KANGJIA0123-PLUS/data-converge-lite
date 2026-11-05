@@ -18,7 +18,7 @@ from . import cross_period_waits as wait_ledger
 from . import preaggregate_coverage
 from .database import LedgerDatabase
 from .redis_mirror import FencedOut, StateSyncError
-from . import backfill, checkpoints, configuration, events, history, retirement, preaggregate, preaggregate_protection
+from . import backfill, checkpoints, configuration, events, history, orphans, retirement, preaggregate, preaggregate_protection
 
 
 logger = logging.getLogger(__name__)
@@ -248,12 +248,29 @@ class StateStore:
                     changed.append((row['instance_id'], action, row.get('query_id')))
             for start, types in dwd:
                 counts['dwd'] += redis_import.import_dwd(conn, _window_key(start), types, now)
+            # Interrupted windows may not rerun until their old query is confirmed stopped.
+            orphans.hold(conn, [(instance_id, query) for instance_id, action, query in changed
+                                if action == 'REQUEUED'])
         for instance_id, action, _query_id in changed:
             if action == 'REQUEUED':
                 self._publish(instance_id)  # Clear the shared RUNNING marker.
         counts['interrupted_query_ids'] = [query for _, action, query in changed
                                            if action == 'REQUEUED' and query]
         return counts
+
+    def hold_orphans(self, pairs) -> int:
+        """Hold (instance_id, query_id) reruns until ClickHouse confirms the query stopped."""
+        conn = self._connection(write=True)
+        with conn:
+            return orphans.hold(conn, pairs)
+
+    def held_orphans(self) -> dict[str, str]:
+        return orphans.held(self._connection())
+
+    def release_orphans(self, instance_ids) -> int:
+        conn = self._connection(write=True)
+        with conn:
+            return orphans.release(conn, instance_ids)
 
     def publish_missing_local_state(self) -> int:
         """Publish local facts absent from Redis before importing shared state."""
@@ -462,8 +479,13 @@ class StateStore:
 
     def begin_backfill(self, item_id: str, instance: TaskInstance, *,
                        recompute: bool, now: datetime | None = None) -> dict:
-        return backfill.begin(self._connection(write=True), item_id, instance,
-                              recompute=recompute, now=now or datetime.now(datetime_timezone.utc))
+        result = backfill.begin(self._connection(write=True), item_id, instance,
+                                recompute=recompute, now=now or datetime.now(datetime_timezone.utc))
+        if result["status"] == TaskStatus.RUNNING.value:
+            # Like mark_dispatched: a takeover must see RUNNING to stop and rerun the
+            # window, otherwise a recompute interrupted after its DELETE stays empty.
+            self._publish(instance.instance_id)
+        return result
 
     def validate_preaggregate_configuration(self, manifest, task_starts, coverage, *,
                                             timezone=None, cleanup_columns=None) -> None:
@@ -742,7 +764,7 @@ class StateStore:
         conn = self._connection(write=True)
         with conn:
             now = _stamp(datetime.now(datetime_timezone.utc))
-            backfill.recover_running(conn, datetime.fromisoformat(now))
+            interrupted = backfill.recover_running(conn, datetime.fromisoformat(now))
             preaggregate.recover_running(conn, datetime.fromisoformat(now))
             rows = checkpoints.classified_rows(conn, include_unknown=False)
 
@@ -753,6 +775,9 @@ class StateStore:
                 if row["action"] in ("AUTO_RESUME", "RECONCILE"):
                     try:
                         checkpoints.recover_with_idempotent_protection(conn, row, now)
+                        if row["action"] == "RECONCILE":
+                            # The SQL may still be running in ClickHouse (same node restart).
+                            orphans.hold(conn, [(row["instance_id"], row["query_id"])])
                         events.append_event(
                             conn,
                             "IDEMPOTENT_RECOVERED",
@@ -766,9 +791,9 @@ class StateStore:
                         continue
 
             history.record_recovery(conn, now)
-        for row in rows:
-            if row["action"] in ("AUTO_RESUME", "RECONCILE"):
-                self._publish(row["instance_id"])
+        for instance_id in [*interrupted, *(row["instance_id"] for row in rows
+                                            if row["action"] in ("AUTO_RESUME", "RECONCILE"))]:
+            self._publish(instance_id)
         return recovered_count
 
     def resolve(self, instance_id: str, resolution: str, note: str) -> None:

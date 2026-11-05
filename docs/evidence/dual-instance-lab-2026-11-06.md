@@ -33,7 +33,7 @@
 | S8 | 冻结期间到达的 DWD 信号 | 通过：无信号丢失，旧主恢复后被拒 |
 | S9 | 备机等待期间 Redis 闪断 4–6 秒 | **备机直接退出** — BUG-2 |
 
-## BUG-1（严重）：接管时 KILL 只尝试一次，失败后与旧查询并发执行，数据重复
+## BUG-1（严重，已修复）：接管时 KILL 只尝试一次，失败后与旧查询并发执行，数据重复
 
 **复现**：`s1_orphan.py nokill`、`s2b_zombie.py`。
 
@@ -78,7 +78,7 @@ B alive False  SERVICE_FAILED: LeadershipError ... LEADERSHIP_REDIS_FAILED
 - 主节点失去 Redis 时进入"降级为备机"流程（停止派发、等待在途 SQL、释放文件锁后重新排队竞选），而不是让整个进程以错误退出。
 - 若保留"退出由 k8s 重启"的设计，在部署文档中明确要求 `restartPolicy: Always` 和存活探针，并做一次现场演练。
 
-## BUG-3（严重）：补算执行时不写共享状态，主节点中途宕机会清空窗口且无人察觉
+## BUG-3（严重，已修复）：补算执行时不写共享状态，主节点中途宕机会清空窗口且无人察觉
 
 **复现**：`s7b.py`。
 
@@ -126,6 +126,16 @@ status=UNKNOWN error=CLICKHOUSE_OUTCOME_UNKNOWN   error_type=TimeoutError
 UNKNOWN 不会自动重试，必须人工核对后 `--resolve-instance`。小时/天任务偶发超时会持续产生人工工单。
 
 **建议**：对 `X-ClickHouse-Exception-Code` 为 159/394 等明确"未完成"的错误，在确认 `system.processes` 中已不存在后归为可重试 FAILED（清理是幂等的）。
+
+## 修复与复测（BUG-1、BUG-3）
+
+- 中断窗口在接管（导入共享 RUNNING）或本机重启恢复（RECONCILE）时记入本地 `orphan_queries` 表。
+  调度每轮先确认这些旧 query 已不在 `system.processes`（必要时 `KILL QUERY ... SYNC`），确认前窗口保持
+  `BLOCKED: PREVIOUS_QUERY_STILL_RUNNING:<query_id>`，补算同样阻断；ClickHouse 不可达时只等待、不重跑。
+  代码：`state/orphans.py`、`scheduler/orphans.py`、`sql_execution/client.py:stop_queries`。
+- 补算派发后立即把 RUNNING 发布到共享状态；本机重启把中断补算改为 UNKNOWN 后也会发布。
+- 复测结果：S1c、S2b（KILL 失败）数据由 `(80, 40)` 变为正确的 `(40, 40)`；S7b 窗口由"清空且显示成功"变为
+  接管后重跑、数据正确 `(60, 60)`；S1、S1b、S2、S5 回归通过。全量测试与基线一致（50 个既有失败，无新增）。
 
 ## 已验证正常的部分
 

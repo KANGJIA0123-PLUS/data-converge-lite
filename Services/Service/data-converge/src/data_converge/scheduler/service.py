@@ -44,6 +44,8 @@ class TaskScheduler:
     # Batch skipping is opt-in; runtime assigns options and the resume callback.
     skip_options = None
     skip_resume = None
+    # Runtime assigns an OrphanQueryGuard; called once per round before planning.
+    orphan_guard = None
 
     def __init__(
         self,
@@ -259,6 +261,8 @@ class TaskScheduler:
         if not self._registered:
             self.register_jobs()
         now = self._normalize_time(now)
+        if self.orphan_guard is not None:
+            self.orphan_guard()
         now = self._poll_ready(now)
         cursors = {
             taskname: self.state_store.get_cursor(taskname)
