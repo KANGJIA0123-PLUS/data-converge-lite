@@ -2,7 +2,7 @@
 
 ## 运行环境
 
-- 分支：`main@6f49d03`，已包含接管 KILL、重试时间归一化、DWD seed 和设计文档对齐修复。
+- 分支：`main`，接管实现基线为 `6f49d03`，回归测试提交为 `18da074`，已包含接管 KILL、重试时间归一化和 DWD seed 修复。
 - Python：3.12.14（uv 临时环境）。
 - Redis：`tools/failover-drill/local_redis.py` 提供的 fakeredis[lua] TCP 服务。
 - ClickHouse：`tools/failover-drill/mock_clickhouse.py`。
