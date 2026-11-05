@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档目的 | 说明当前仓库的业务故事、架构、接口、实现、非功能设计和测试设计 |
 | 适用对象 | 开发、测试、运维、评审和后续接手的实现人员 |
-| 分析基线 | `main` 分支，提交 `6f49d03` |
+| 分析基线 | `main` 分支，提交 `f9019c6` |
 | 生成日期 | 2026-11-05 |
 | 运行时 | Python 3.12.10、ClickHouse HTTP、Redis、SQLite |
 
@@ -22,7 +22,7 @@ Data Converge Lite 是一个面向公司指标数据链路的汇聚服务。它�
 - 使用 DWD 五类就绪事实放行 5 分钟任务；
 - 使用 Redis 租约、独立连接池和 fencing token 实现主备写入准入；
 - 使用 SQLite 账本、检查点、事件和执行历史保留可恢复事实；
-- 使用共享 Redis 镜像同步游标、实例状态和 DWD 事实，首次 seed 同步本地 DWD 事实；主备接管先扫描 running 集合取消旧查询，再导入状态并重跑中断窗口；
+- 使用共享 Redis 镜像同步游标、实例状态和 DWD 事实；首次 seed 与非空接管都补齐本地缺失 DWD，首次 seed 先写 DWD 再写 cursor；主备接管先扫描 running 集合取消旧查询，再导入状态并重跑中断窗口；
 - 使用 ClickHouse 连接池、任务级超时、有限重试和非阻塞线程池控制执行资源；
 - 提供 CLI、诊断、恢复计划、历史、补算和配置迁移入口。
 
@@ -99,7 +99,7 @@ flowchart LR
 | F7 | 超时、重试和并发 | 周期超时为 120/600/1800/1800 秒；全局最大尝试 3 次；全局并发 4，同任务并行度 1-3 |
 | F8 | 非阻塞调度 | 线程池提交后不等待一批全部结束，后续调度轮次继续派发；退出时 `drain()` 等待并记账 |
 | F9 | 主备选举和失租停止 | Redis 租约、后台续租、保守本地截止时间；失租后不再接收新任务或消息 |
-| F10 | 共享状态和 fencing | Redis 镜像游标、PENDING/RUNNING/SUCCESS 状态、DWD 事实；首次 seed 同步本地 DWD 事实；旧 token 写入被拒绝 |
+| F10 | 共享状态和 fencing | Redis 镜像游标、PENDING/RUNNING/SUCCESS 状态、DWD 事实；首次 seed 与非空接管补齐本地缺失 DWD，首次 seed 先写 DWD 再写 cursor；旧 token 写入被拒绝 |
 | F11 | 接管恢复 | 新主在导入前扫描共享 running 集合并 KILL QUERY；导入共享状态后 SUCCESS 不重跑，RUNNING 重排为 PENDING；UNKNOWN 不自动重试 |
 | F12 | 补算和跳批次 | `--backfill --recompute` 修正迟到数据；`--preaggregate` 测试未结束窗口；停机积压可 current_only 或 current_then_resume，超过 31 天不补 |
 | F13 | 账本审计和诊断 | SQLite 事件、尝试历史、恢复计划、失败、DWD 状态、在线连接检查和 JSONL 事件导出 |
@@ -359,7 +359,7 @@ Lua 写入脚本先比较 leader key 和当前 lease token，再执行 `HSET`、
 - 同一任务的批次并行度可配置为 1-3，防止单任务过度争抢资源。
 - `DAGExecutor` 使用线程池和 `wait=False`，长任务运行时调度器仍可推进后续轮次。
 - Redis 将 leader、status、log 拆为 3/15/5 的独立连接池，DWD 阻塞消费不会占用续租连接。
-- 接管补发本地账本时先扫描共享实例集合建立 ID 差集，避免逐条读取 Redis；首次 seed 另外同步本地 DWD 就绪事实。
+- 接管补发本地账本时先扫描共享实例集合建立 ID 差集，避免逐条读取 Redis；接管同时扫描共享 DWD 集合，按窗口和类型补齐本地缺失事实。
 - 日志轮转按原始文件大小和压缩包总量限制；状态事件和检查点增加了磁盘写入成本。
 - 仓库只有边界、并发行为和本地演练，没有生产吞吐、P99 延迟或容量压测基准；正式性能结论需要真实 ClickHouse、Redis、磁盘和任务负载测量。
 

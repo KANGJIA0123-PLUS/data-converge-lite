@@ -2,7 +2,7 @@
 
 ## 运行环境
 
-- 分支：`main`，接管实现基线为 `6f49d03`，回归测试提交为 `18da074`，已包含接管 KILL、重试时间归一化和 DWD seed 修复。
+- 分支：`main`，接管实现基线为 `f9019c6`，已包含接管 KILL、重试时间归一化、首次及非空接管 DWD 补发和 SCAN 竞态修复。
 - Python：3.12.14（uv 临时环境）。
 - Redis：`tools/failover-drill/local_redis.py` 提供的 fakeredis[lua] TCP 服务。
 - ClickHouse：`tools/failover-drill/mock_clickhouse.py`。
@@ -34,6 +34,6 @@ uv run --no-project --python python3.12 \
 
 ## 回归验证
 
-- 接管、重试、DWD seed 和 Redis 镜像定向测试：`30 passed`。
-- 全量测试：`2078 passed, 39 failed, 11 errors, 224 skipped`。新增回归用例没有引入失败，剩余红项集中在仓库已有的恢复语义、SQL 预检、启动权限边界和 mock 演练基线。
+- 接管、重试、DWD seed 和 Redis 镜像定向测试：`34 passed`。
+- 全量测试：`2081 passed, 39 failed, 11 errors, 224 skipped`。新增回归用例没有引入失败，剩余红项集中在仓库已有的恢复语义、SQL 预检、启动权限边界和 mock 演练基线。
 - `git diff --check`：通过。
