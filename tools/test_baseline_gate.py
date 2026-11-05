@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "tools" / "test-baseline.txt"
 TEST_ROOT = ROOT / "Services" / "Service" / "data-converge" / "test"
 RESULT = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)\s*$", re.MULTILINE)
+ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _baseline() -> set[str]:
@@ -33,7 +34,8 @@ def _run() -> tuple[int, str]:
 def main() -> int:
     baseline = _baseline()
     code, output = _run()
-    current = {nodeid for nodeid in RESULT.findall(output) if nodeid}
+    clean_output = ANSI.sub('', output)
+    current = {nodeid for nodeid in RESULT.findall(clean_output) if nodeid}
     new = sorted(current - baseline)
     resolved = sorted(baseline - current)
     print(output, end="")
