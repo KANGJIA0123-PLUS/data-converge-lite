@@ -56,7 +56,7 @@ bash /opt/its/data-converge/bin/dconv --history
 不熟悉参数时，直接查看内置中文帮助，包含按问题选择的入口、可复制的命令、时间格式和退出码说明：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --help
+dconv --help
 ```
 
 `-h` 与 `--help` 等效。帮助在加载业务配置、日志和远端连接前退出；配置文件缺失时也能查看，但辅助脚本仍需可用的平台 Python 环境。
@@ -64,52 +64,52 @@ bash /opt/its/data-converge/bin/start_data_converge.sh --help
 先看哪里异常，本地检查不连接 Redis 或 ClickHouse：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --diagnose
+dconv --diagnose
 ```
 
 需要验证解密、认证和远端连通性时显式启用在线检查：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --diagnose --online
+dconv --diagnose --online
 ```
 
 只列异常任务，优先显示 UNKNOWN，其次 FAILED、BLOCKED；查询全历史异常，不会被最近的成功任务挤出：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --failures
+dconv --failures
 ```
 
 筛选资源汇聚任务，或翻到下一页：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --failures --task task_resource_5min_ads --limit 20
-bash /opt/its/data-converge/bin/start_data_converge.sh --failures --limit 20 --offset 20
+dconv --failures --task task_resource_5min_ads --limit 20
+dconv --failures --limit 20 --offset 20
 ```
 
 查看一个实例。下面使用现场曾出现的实例 ID；查询其他窗口时从 `--failures` 复制完整 ID：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --inspect-instance 'task_resource_5min_ads@2026-10-14T16:30:00+08:00'
+dconv --inspect-instance 'task_resource_5min_ads@2026-10-14T16:30:00+08:00'
 ```
 
 查看逐次执行历史。重试成功后，之前的失败证据仍可查询；无需在日志文件中搜索：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --history --limit 20
-bash /opt/its/data-converge/bin/start_data_converge.sh --history --task task_resource_5min_ads --limit 20 --offset 20
+dconv --history --limit 20
+dconv --history --task task_resource_5min_ads --limit 20 --offset 20
 ```
 
 查看最近完整窗口的信号，或精确定位 16:15–16:20 窗口：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --dwd-status
-bash /opt/its/data-converge/bin/start_data_converge.sh --dwd-status --window '2026-10-14T16:15:00+08:00'
+dconv --dwd-status
+dconv --dwd-status --window '2026-10-14T16:15:00+08:00'
 ```
 
 导出可回传的诊断结果：
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --diagnose --online --format json
+dconv --diagnose --online --format json
 ```
 
 `--limit` 范围为 1–100，默认 20；`--offset` 从 0 开始，供 `--failures`、`--history` 及 `--inspect-instance` 的历史分页使用。`--window` 必须为带时区、对齐五分钟的窗口**开始时间**，也接受 UTC 输入，展示时转换为进程有效系统时区；DWD 消息的原有编码及时间语义不变。夏令时重复小时通过输出中的 UTC 偏移区分，等待时长、收齐延迟和最近窗口顺序按实际时刻计算。`--online` 仅用于 `--diagnose`；错误组合及空实例 ID 会拒绝执行，不会启动服务。
@@ -231,6 +231,16 @@ logging:
 
 ## 输出与退出码
 
+默认文本输出按"结论 → 检查项 → 表格 → 下一步"排版：
+
+- 首行显示命令、总体状态和各状态计数；检查项按 FAIL、WARN、PASS、SKIP 排序。
+- FAIL / WARN 自动展开证据（`key=value` 折行）和 `→` 建议；PASS 只显示一行，需要时加 `-v` / `--verbose` 展开全部证据。
+- 实例、历史、恢复候选、DWD 窗口、事件、补算明细均为对齐表格；时间统一转换为容器系统时区，格式为 `2026-11-05 14:35 → 14:40`，不显示微秒。
+- 输出末尾按需给出可复制的下一步命令和分页命令。
+- 仅在交互终端着色；管道、重定向或设置 `NO_COLOR` / `TERM=dumb` 时输出纯文本。
+- 参数错误保留原英文错误行（便于脚本匹配），并追加一行中文提示，退出码仍为 2。
+- `--format json` / `jsonl` 的结构与字段不受上述排版影响。
+
 每项检查固定包含 `id`、`status`、`summary`、`evidence`、`action`。JSON 顶层包含 `schema_version=1`、命令、检查时间、有效系统时区 `timezone`、汇总状态和数据。检查时间使用该时区及当前 UTC 偏移；容器可通过 `TZ` 指定 IANA 时区，改变时区需重启进程。
 
 系统时区无法读取或识别时，使用 `Asia/Shanghai` 并记录一次 `SYSTEM_TIMEZONE_FALLBACK` 告警。告警只含最终时区和异常类型；启动日志及诊断报告均显示实际采用的时区。明确配置的 UTC 不触发回退。
@@ -253,10 +263,10 @@ logging:
 ## 恢复预览与事务事件
 
 ```bash
-bash /opt/its/data-converge/bin/start_data_converge.sh --recovery-plan --format json
-bash /opt/its/data-converge/bin/start_data_converge.sh --recovery-plan --limit 20 --offset 20
-bash /opt/its/data-converge/bin/start_data_converge.sh --events --after-event 0 --limit 100 --format json
-bash /opt/its/data-converge/bin/start_data_converge.sh --events --after-event 0 --limit 100 --format jsonl > execution-page.jsonl
+dconv --recovery-plan --format json
+dconv --recovery-plan --limit 20 --offset 20
+dconv --events --after-event 0 --limit 100 --format json
+dconv --events --after-event 0 --limit 100 --format jsonl > execution-page.jsonl
 ```
 
 `AUTO_RESUME` 表示当前 RUNNING 实例具有匹配 query_id 的 PREPARED 证明。下次合法写进程启动时会重新排队；本次查询不会恢复任务。`RECONCILE` 表示已派发、旧版无证明或已有 UNKNOWN，先核对远端执行结果和窗口数据，确认原查询结束后才考虑人工处置。服务仍运行时，快照里的任务可能随后完成，不能将预览结果当作卡死判断。

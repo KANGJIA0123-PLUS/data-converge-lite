@@ -103,31 +103,56 @@ def _status(args, application):
 
 
 def _render(value):
+    from data_converge.diagnostics.terminal import badge, heading, paint
+
     if value['status'] == 'FAIL':
         error = value['error']
-        return ('补算命令未完成：' + error.get('error_code', error.get('error_type', 'UNKNOWN'))
-                + '\n请核对配置、起止时间及任务名称；查看 --help 获取用法。')
+        return (badge('FAIL', 4) + ' 补算命令未完成：' + error.get('error_code', error.get('error_type', 'UNKNOWN'))
+                + '\n  → 请核对配置、起止时间及任务名称；查看 dconv --help 获取用法。')
     data = value['data']
-    if value['status'] == 'PREVIEW':
-        lines = [f"补算预览：{data['total']} 个完整窗口；未提交、未执行 SQL。",
-                 f"范围：[{data['start']}, {data['end']})；重新汇聚成功窗口={data['recompute']}",
-                 '任务：' + ', '.join(data['selected_tasks'])]
-        lines.extend(f"  {name}：{data['counts'][name]} 个窗口" for name in data['selected_tasks'])
-        if data['omitted_tasks']:
-            lines.append('未纳入（范围内无完整窗口）：' + ', '.join(data['omitted_tasks']))
-    else:
-        lines = [f"补算 {data['job_id']}  {data['status']}  已完成 {data['completed']}/{data['total']}",
-                 '执行结果：' + json.dumps(data['counts'], ensure_ascii=False),
-                 '由正常服务后台串行处理；QUEUED 包含尚未落盘的当前执行项，提交成功不代表汇聚完成。',
-                 f"查询：dconv --backfill-status {data['job_id']}"]
+    lines = _preview_lines(data) if value['status'] == 'PREVIEW' else _progress_lines(data)
     metadata = data if value['status'] == 'PREVIEW' else data.get('metadata', {})
     if metadata.get('preaggregate'):
-        lines.append('PREAGGREGATE 为提前测试，成功不代表正式完成；到期正式汇聚仍将覆盖。')
-        lines.append(f"省略尚未开始窗口：{metadata.get('omitted_future_count', 0)} 个；不创建写入条目。")
-    for item in data.get('items', []):
-        lines.append(f"  {item.get('execution_kind', 'BACKFILL')}  {item.get('status', 'PLANNED')}  {item['instance_id']}"
-                     f"  query_id={item.get('query_id') or '-'}  error={item.get('error') or '-'}")
+        lines.append(paint('  ! PREAGGREGATE 为提前测试，成功不代表正式完成；到期正式汇聚仍将覆盖。', 'yellow'))
+        lines.append(f"  省略尚未开始窗口：{metadata.get('omitted_future_count', 0)} 个；不创建写入条目。")
+    if data.get('items'):
+        lines.extend(['', heading('窗口明细')] + _item_table(data['items']))
     if data.get('has_more'):
-        lines.append(f"下一页：--backfill-status {data['job_id']} --limit {data['limit']}"
-                     f" --offset {data['offset'] + data['limit']}")
+        lines.append(paint(f"  下一页：dconv --backfill-status {data['job_id']} --limit {data['limit']}"
+                           f" --offset {data['offset'] + data['limit']}", 'grey'))
     return '\n'.join(lines)
+
+
+def _preview_lines(data):
+    from data_converge.diagnostics.terminal import badge, paint, window
+
+    lines = [paint('补算预览  ', 'bold') + badge('PREVIEW', 4).rstrip()
+             + f"   共 {data['total']} 个完整窗口；未提交、未执行 SQL。",
+             f"  范围：{window(data['start'], data['end'])}  [{data['start']}, {data['end']})",
+             f"  重新汇聚成功窗口：{'是（--recompute）' if data['recompute'] else '否，已成功窗口会跳过'}",
+             '  任务：' + ', '.join(data['selected_tasks'])]
+    lines.extend(f"    {name}：{data['counts'][name]} 个窗口" for name in data['selected_tasks'])
+    if data['omitted_tasks']:
+        lines.append('  未纳入（范围内无完整窗口）：' + ', '.join(data['omitted_tasks']))
+    lines.append(paint('  确认无误后去掉 --dry-run 重新执行即可提交。', 'cyan'))
+    return lines
+
+
+def _progress_lines(data):
+    from data_converge.diagnostics.terminal import badge, paint
+
+    counts = '  '.join(f"{name} {count}" for name, count in sorted(data['counts'].items()))
+    return [paint(f"补算 {data['job_id']}  ", 'bold') + badge(data['status'], 4).rstrip()
+            + f"   已完成 {data['completed']}/{data['total']}",
+            f"  执行结果：{counts or '-'}",
+            '  由正常服务后台串行处理；QUEUED 包含尚未落盘的当前执行项，提交成功不代表汇聚完成。',
+            paint(f"  查询进度：dconv --backfill-status {data['job_id']}", 'cyan')]
+
+
+def _item_table(items):
+    from data_converge.diagnostics.terminal import badge, table, window
+
+    return table(['状态', '类型', '任务', '窗口', 'query_id', '错误码'], [
+        [badge(item.get('status', 'PLANNED')), item.get('execution_kind', 'BACKFILL'), item['taskname'],
+         window(item['data_start'], item['data_end']) if item.get('data_start') else item['instance_id'],
+         item.get('query_id'), item.get('error')] for item in items])

@@ -12,16 +12,18 @@ def add_arguments(parser, modes):
     modes.add_argument('--history', action='store_true', help='只读查询各次执行结果与人工处理记录')
     modes.add_argument('--recovery-plan', action='store_true', help='只读预览可恢复和需核对的实例，不重跑')
     modes.add_argument('--events', action='store_true', help='只读导出事务内执行事件，支持 JSONL')
-    modes.add_argument('--inspect-instance', metavar='ID', help='查看一个实例的错误证据和当前依赖')
-    modes.add_argument('--dwd-status', action='store_true', help='查询五分钟窗口的缺失信号')
+    modes.add_argument('--inspect-instance', metavar='ID', help='查看一个实例的错误证据、上游依赖和执行历史')
+    modes.add_argument('--dwd-status', action='store_true', help='查询五分钟窗口的缺失 DWD 信号（默认最近20个窗口）')
     parser.add_argument('--online', action='store_true', help='仅与 --diagnose 使用，显式检查远端连接')
-    parser.add_argument('--task', help='查询 --failures / --history 时筛选任务；--backfill 时指定补算任务')
-    parser.add_argument('--limit', type=int, help='查询条数或实例历史条数，默认20，最大100')
-    parser.add_argument('--offset', type=int, help='--failures / --history / --inspect-instance 分页偏移，默认0')
-    parser.add_argument('--after-event', type=int, help='仅与 --events 使用，读取该事件序号之后的记录')
-    parser.add_argument('--window', help='仅与 --dwd-status 使用，含时区的五分钟窗口开始时间')
-    parser.add_argument('--format', choices=('text', 'json', 'jsonl'),
-                        help='诊断输出默认text；jsonl 仅供 --events 使用')
+    parser.add_argument('--task', metavar='任务名', help='查询 --failures / --history 时筛选任务；--backfill 时指定补算任务')
+    parser.add_argument('--limit', type=int, metavar='N', help='查询条数或实例历史条数，默认20，最大100')
+    parser.add_argument('--offset', type=int, metavar='N', help='--failures / --history / --inspect-instance 分页偏移，默认0')
+    parser.add_argument('--after-event', type=int, metavar='N', help='仅与 --events 使用，读取该事件序号之后的记录')
+    parser.add_argument('--window', metavar='TIME', help='仅与 --dwd-status 使用，含时区的五分钟窗口开始时间')
+    parser.add_argument('--format', choices=('text', 'json', 'jsonl'), metavar='text|json|jsonl',
+                        help='默认 text 表格；json 供脚本/回传；jsonl 仅供 --events')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='文本输出时展开通过项的全部证据；默认只展开 FAIL / WARN')
 
 
 def is_diagnostic(args):
@@ -70,6 +72,7 @@ def _option_rules(args):
          '--format requires a diagnostic or backfill command'),
         (args.format == 'jsonl', args.events, '--format jsonl requires --events'),
         (args.after_event is not None, args.events, '--after-event requires --events'),
+        (args.verbose, is_diagnostic(args), '--verbose requires a diagnostic command'),
     ]
 
 
@@ -94,11 +97,11 @@ def run(args):
         value = service.inspect_instance(args.config, args.inspect_instance, limit=args.limit, offset=args.offset)
     else:
         value = service.dwd_status(args.config, limit=args.limit, window=args.window)
-    _print_result(value, args.format)
+    _print_result(value, args.format, verbose=args.verbose)
     return 1 if value['status'] == 'FAIL' else 0
 
 
-def _print_result(value, output_format):
+def _print_result(value, output_format, *, verbose=False):
     if output_format == 'jsonl':
         if value['status'] == 'FAIL':
             print(json.dumps(value, ensure_ascii=False), file=sys.stderr)
@@ -106,4 +109,4 @@ def _print_result(value, output_format):
             for row in value['data']['events']:
                 print(json.dumps(row, ensure_ascii=False))
         return
-    print(json.dumps(value, ensure_ascii=False, default=str) if output_format == 'json' else render_text(value))
+    print(json.dumps(value, ensure_ascii=False, default=str) if output_format == 'json' else render_text(value, verbose=verbose))
