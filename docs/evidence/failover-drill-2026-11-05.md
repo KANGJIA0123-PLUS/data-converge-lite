@@ -2,7 +2,7 @@
 
 ## 运行环境
 
-- 分支：`main`，提交 `f46d415`，已包含接管 KILL、重试时间归一化、首次及非空接管 DWD 补发、SCAN 竞态修复和冲突处置。
+- 分支：`main`，已包含接管 KILL、重试时间归一化、首次及非空接管 DWD 补发、SCAN 竞态修复和冲突处置。
 - Python：3.12.14（uv 临时环境）。
 - Redis：`tools/failover-drill/local_redis.py` 提供的 fakeredis[lua] TCP 服务。
 - ClickHouse：`tools/failover-drill/mock_clickhouse.py`。
