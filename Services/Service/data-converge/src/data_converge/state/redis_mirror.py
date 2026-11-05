@@ -128,8 +128,8 @@ class RedisStateMirror:
         end = datetime.fromisoformat(row['data_end'])
         expires = _expiry_ms(self.settings.expires_at(interval, end))
         fields = {key: '' if row.get(key) is None else str(row[key]) for key in
-                  ('status', 'attempts', 'query_id', 'taskname', 'scheduled_time',
-                   'data_start', 'data_end', 'error')}
+                  ('status', 'attempts', 'retryable', 'next_retry_at', 'query_id',
+                   'taskname', 'scheduled_time', 'data_start', 'data_end', 'error')}
         fields['updated_at'] = datetime.now(timezone.utc).isoformat()
         flat = [item for pair in fields.items() for item in pair]
         self._run('hset', [self.leader_key, self.instance_key(row['instance_id']),

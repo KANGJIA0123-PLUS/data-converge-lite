@@ -16,10 +16,13 @@ from data_converge.config.evolution import (
 from .test_main import app
 
 
-def task_rule(name, dependencies=()):
-    return {'taskname': name, 'source_tables': ['source'], 'target_table': name,
+def task_rule(name, dependencies=(), cleanup_column=None):
+    rule = {'taskname': name, 'source_tables': ['source'], 'target_table': name,
             'aggregation_interval': 'PT5M', 'cron': '*/5 * * * *',
             'depends_on': list(dependencies), 'sql_id': name}
+    if cleanup_column is not None:
+        rule['cleanup_column'] = cleanup_column
+    return rule
 
 
 def definition_with_tasks(app, rules):
@@ -93,6 +96,14 @@ def test_sql_outer_whitespace_does_not_change_approved_revision(app):
     (app.parent / 'sql/root.sql').write_text('\n INSERT INTO target SELECT 1 \t\n')
     current = manifest_with_tasks(app, [task_rule('root')])
     assert manifest_digest(current) == manifest_digest(previous)
+
+
+def test_cleanup_column_change_changes_task_revision_and_digest(app):
+    previous = manifest_with_tasks(app, [task_rule('root')])
+    current = manifest_with_tasks(app, [task_rule('root', cleanup_column='record_time')])
+    assert current['tasks']['root']['definition']['cleanup_column'] == 'record_time'
+    assert compare_manifests(previous, current)['changed'] == ['root']
+    assert manifest_digest(current) != manifest_digest(previous)
 
 
 def test_runtime_description_password_and_internal_fields_are_excluded(app):

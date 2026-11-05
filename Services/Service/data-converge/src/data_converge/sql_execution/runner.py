@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -193,6 +194,8 @@ class SQLTaskRunner:
         table is derived from the verified INSERT, preserving its database.
         """
         cleanup_column = instance.task.cleanup_column
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", cleanup_column) is None:
+            raise ValueError("CLEANUP_COLUMN_INVALID")
 
         return (
             f"ALTER TABLE {local_table} DELETE "

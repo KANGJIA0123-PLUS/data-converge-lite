@@ -55,18 +55,29 @@ def import_instance(conn, row: dict) -> str | None:
         action = 'IMPORTED'
     else:
         return None
+    retryable = int(status == TaskStatus.FAILED.value and
+                    str(row.get('retryable', '0')) == '1')
+    next_retry_at = row.get('next_retry_at') if retryable else None
     if local is None:
         conn.execute('''INSERT INTO task_instances (instance_id, taskname, scheduled_time,
-            data_start, data_end, status, attempts, query_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+            data_start, data_end, status, attempts, retryable, next_retry_at, query_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                      (row['instance_id'], row['taskname'], row['scheduled_time'], row['data_start'],
-                      row['data_end'], status, int(row.get('attempts') or 0), row.get('query_id') or None))
+                      row['data_end'], status, int(row.get('attempts') or 0), retryable,
+                      next_retry_at, row.get('query_id') or None))
         return action
     if local[0] == status:
+        conn.execute('''UPDATE task_instances SET attempts=MAX(attempts, ?),
+            query_id=COALESCE(?, query_id), retryable=?, next_retry_at=?
+            WHERE instance_id=?''',
+                     (int(row.get('attempts') or 0), row.get('query_id') or None,
+                      retryable, next_retry_at, row['instance_id']))
         return None
     conn.execute('''UPDATE task_instances SET status=?, attempts=MAX(attempts, ?),
-        query_id=COALESCE(?, query_id), retryable=0, next_retry_at=NULL
-        WHERE instance_id=?''', (status, int(row.get('attempts') or 0), row.get('query_id') or None,
-                                 row['instance_id']))
+        query_id=COALESCE(?, query_id), retryable=?, next_retry_at=?
+        WHERE instance_id=?''',
+                 (status, int(row.get('attempts') or 0), row.get('query_id') or None,
+                  retryable, next_retry_at, row['instance_id']))
     return action
 
 

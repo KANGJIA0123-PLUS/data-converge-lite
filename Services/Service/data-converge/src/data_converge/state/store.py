@@ -104,8 +104,42 @@ class StateStore:
             "SELECT instance_id FROM mirror_pending ORDER BY queued_at, instance_id").fetchall()
         return [row[0] for row in rows]
 
+    def mirror_conflicts(self, limit: int = 100) -> list[dict]:
+        """Return terminal mirror conflicts retained for operator review."""
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        rows = self._connection().execute(
+            "SELECT * FROM mirror_conflicts ORDER BY detected_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mirror_status(self, sample_limit: int = 20) -> dict:
+        """Return bounded mirror queue and conflict evidence for diagnostics."""
+        if type(sample_limit) is not int or not 1 <= sample_limit <= 100:
+            raise ValueError("sample_limit must be between 1 and 100")
+        try:
+            pending = self.pending_ids()
+            conflicts = self.mirror_conflicts(limit=sample_limit)
+        except sqlite3.OperationalError as error:
+            if 'no such table' not in str(error):
+                raise
+            # Older ledgers are upgraded on the next writer startup.
+            return {'pending_count': 0, 'pending_samples': [], 'conflicts': []}
+        return {'pending_count': len(pending), 'pending_samples': pending[:sample_limit],
+                'conflicts': conflicts}
+
+    def _record_mirror_conflict(self, instance_id: str, local: dict, shared: dict) -> None:
+        conn = self._connection(write=True)
+        with conn:
+            conn.execute("""INSERT OR REPLACE INTO mirror_conflicts
+                (instance_id, local_status, shared_status, local_query_id,
+                 shared_query_id, detected_at) VALUES (?, ?, ?, ?, ?, ?)""",
+                (instance_id, local.get('status', ''), shared.get('status', ''),
+                 local.get('query_id'), shared.get('query_id'),
+                 _stamp(datetime.now(datetime_timezone.utc))))
+
     def flush_pending(self) -> int:
-        """Replay local facts after a leadership restart without overwriting newer terminals."""
+        """Replay local facts, preserving success when terminal states conflict."""
         if self.mirror is None:
             return 0
         flushed = 0
@@ -117,8 +151,12 @@ class StateStore:
             shared = self.mirror.read_instance(instance_id)
             if shared is not None and shared.get('status') in TERMINAL_STATUSES:
                 if shared.get('status') != row['status']:
+                    self._record_mirror_conflict(instance_id, row, shared)
                     logger.warning('REDIS_STATE_PENDING_CONFLICT: instance_id=%r local=%s shared=%s',
                                    instance_id, row['status'], shared.get('status'))
+                    if row['status'] == TaskStatus.SUCCESS.value:
+                        self._publish(instance_id)
+                        flushed += 1
                 self._clear_pending((instance_id,))
                 continue
             self._publish(instance_id)
@@ -155,18 +193,37 @@ class StateStore:
                                            if action == 'REQUEUED' and query]
         return counts
 
-    def publish_local_state(self) -> int:
-        """Seed Redis from a ledger that predates shared state (first upgrade)."""
+    def publish_missing_local_state(self) -> int:
+        """Publish local facts absent from Redis before importing shared state."""
         if self.mirror is None:
             return 0
         rows = self._connection().execute(
             "SELECT instance_id FROM task_instances WHERE status IN "
-            "('SUCCESS','FAILED','UNKNOWN','PENDING','BLOCKED') ORDER BY data_end DESC LIMIT 20000").fetchall()
+            "('SUCCESS','FAILED','UNKNOWN','PENDING','BLOCKED') "
+            "ORDER BY data_end DESC LIMIT 20000").fetchall()
+        published = 0
         for row in rows:
-            self._publish(row[0])
+            instance_id = row[0]
+            local = self.get_instance(instance_id)
+            shared = self.mirror.read_instance(instance_id)
+            if shared is None:
+                self._publish(instance_id)
+                published += 1
+            elif (local['status'] == TaskStatus.SUCCESS.value
+                  and shared.get('status') != TaskStatus.SUCCESS.value):
+                self._record_mirror_conflict(instance_id, local, shared)
+                self._publish(instance_id)
+                published += 1
+        return published
+
+    def publish_local_state(self) -> int:
+        """Seed Redis from a ledger that predates shared state (first upgrade)."""
+        if self.mirror is None:
+            return 0
+        published = self.publish_missing_local_state()
         cursors = self._connection().execute("SELECT taskname, next_fire_time FROM schedule_cursors").fetchall()
         self.mirror.write_cursors({name: datetime.fromisoformat(value) for name, value in cursors})
-        return len(rows)
+        return published
 
     @property
     def path(self) -> Path:

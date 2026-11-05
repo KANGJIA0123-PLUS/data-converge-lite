@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-exit 0
 set -e
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "${script_dir}/start_data_converge.sh"

@@ -122,6 +122,7 @@ class Application:
                 'coverage_start': store.get_meta('coverage_start'),
                 'counts': store.status_counts(), 'instances': store.list_instances(limit=20),
                 'dwd_windows': store.list_dwd_windows(limit=20),
+                'mirror': store.mirror_status(),
             }
             recovery = store.legacy_recovery()
             if recovery is not None:

@@ -112,6 +112,14 @@ class LedgerDatabase:
                     instance_id TEXT PRIMARY KEY,
                     queued_at TEXT NOT NULL
                 )""")
+                self._conn.execute("""CREATE TABLE IF NOT EXISTS mirror_conflicts (
+                    instance_id TEXT PRIMARY KEY,
+                    local_status TEXT NOT NULL,
+                    shared_status TEXT NOT NULL,
+                    local_query_id TEXT,
+                    shared_query_id TEXT,
+                    detected_at TEXT NOT NULL
+                )""")
 
     def _validate_startup_schema(self) -> None:
         self._conn.execute("""SELECT instance_id, taskname, scheduled_time,
@@ -152,6 +160,14 @@ class LedgerDatabase:
             CREATE TABLE IF NOT EXISTS mirror_pending (
                 instance_id TEXT PRIMARY KEY,
                 queued_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS mirror_conflicts (
+                instance_id TEXT PRIMARY KEY,
+                local_status TEXT NOT NULL,
+                shared_status TEXT NOT NULL,
+                local_query_id TEXT,
+                shared_query_id TEXT,
+                detected_at TEXT NOT NULL
             );
         """)
 

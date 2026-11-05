@@ -62,7 +62,7 @@ def state_check(store, definition):
     counts = store.active_status_counts()
     evidence = dict(path=str(store.path), coverage_start=coverage, counts=counts,
                     binding_enforced=False, configuration_enforced=False, issue='DC-STATE-002',
-                    **store.progress())
+                    mirror=store.mirror_status(), **store.progress())
     if not coverage or not store.get_meta('binding'):
         return check('state', 'FAIL', '状态库未完成初始化', evidence,
                      '核对部署与原状态目录；本命令不会补齐初始化信息，删除数据库会丢失原执行历史。')

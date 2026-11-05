@@ -56,9 +56,11 @@ def _take_over(store, mirror, killer) -> None:
         flushed = store.flush_pending()
         logger.info('REDIS_STATE_SEEDED: instances=%s pending_flushed=%s', seeded, flushed)
         return
+    seeded = store.publish_missing_local_state()
     counts = store.import_shared_state()
     interrupted = counts.pop('interrupted_query_ids', [])
-    logger.info('REDIS_STATE_IMPORTED: %s interrupted=%s', counts, len(interrupted))
+    logger.info('REDIS_STATE_IMPORTED: %s missing_seeded=%s interrupted=%s',
+                counts, seeded, len(interrupted))
     if interrupted and killer is not None:
         try:
             killer(interrupted)

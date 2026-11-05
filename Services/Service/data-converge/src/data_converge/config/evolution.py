@@ -19,7 +19,8 @@ from .application import ApplicationDefinition, StartupError
 _MANIFEST_FIELDS = {'schema_version', 'dataset_id', 'connection', 'readiness',
                     'coordination', 'tasks'}
 _DEFINITION_FIELDS = {'taskname', 'source_tables', 'target_table', 'aggregation_interval',
-                      'cron', 'depends_on', 'sql_id'}
+                      'cron', 'depends_on', 'sql_id', 'cleanup_column'}
+_LEGACY_DEFINITION_FIELDS = _DEFINITION_FIELDS - {'cleanup_column'}
 _DIRECT_REDIS_FIELDS = ('mode', 'db', 'host', 'port')
 _SENTINEL_REDIS_FIELDS = ('mode', 'db', 'service_name', 'username', 'paas_name', 'password_file')
 
@@ -34,6 +35,10 @@ def _dataset_id(value, code: str):
                               re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', value) is None):
         raise StartupError(code)
     return value
+
+
+def _safe_identifier(value) -> bool:
+    return isinstance(value, str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', value) is not None
 
 
 def _readiness_manifest(ready: dict) -> dict:
@@ -51,6 +56,10 @@ def _task_manifest(task, sql_directory) -> dict:
         'target_table': task.target_table, 'aggregation_interval': task.aggregation_interval,
         'cron': task.cron, 'depends_on': sorted(task.depends_on), 'sql_id': task.sql_id,
     }
+    # Keep old default manifests byte-for-byte compatible while recording any
+    # non-default cleanup column in the task revision.
+    if task.cleanup_column != 'window_time':
+        definition['cleanup_column'] = task.cleanup_column
     try:
         sql = load_sql(sql_directory / (task.sql_id + '.sql'))
     except (OSError, ValueError):
@@ -157,10 +166,12 @@ def _validate_task(name: str, task: dict) -> None:
     _require(_text(name))
     _require_fields(task, {'definition', 'sql_sha256', 'revision'})
     definition = task['definition']
-    _require_fields(definition, _DEFINITION_FIELDS)
+    _require(isinstance(definition, dict) and
+             set(definition) in (_LEGACY_DEFINITION_FIELDS, _DEFINITION_FIELDS))
     _require(definition['taskname'] == name)
-    for key in _DEFINITION_FIELDS - {'source_tables', 'depends_on'}:
+    for key in _LEGACY_DEFINITION_FIELDS - {'source_tables', 'depends_on'}:
         _require(_text(definition[key]))
+    _require(_safe_identifier(definition.get('cleanup_column', 'window_time')))
     for key in ('source_tables', 'depends_on'):
         values = definition[key]
         _require(isinstance(values, list) and all(_text(value) for value in values))

@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import pytest
 
-from data_converge.dag import TaskStatus
+from data_converge.dag import DAGExecutor, TaskStatus
 from data_converge.state.redis_mirror import FencedOut, StateSyncError
 from data_converge.state.shared import _take_over
 
@@ -33,6 +33,13 @@ class FakeMirror:
 
     def write_cursors(self, cursors):
         self.cursors.update(cursors)
+
+    def scan_instances(self):
+        return [row | {'instance_id': instance_id}
+                for instance_id, row in self.rows.items()]
+
+    def scan_dwd(self):
+        return []
 
 
 def attach(store, mirror):
@@ -100,7 +107,7 @@ def test_enqueue_failure_queues_the_whole_batch(tmp_path):
         assert store.pending_ids() == []
 
 
-def test_replay_does_not_overwrite_a_newer_terminal(tmp_path):
+def test_replay_prefers_local_success_and_records_conflict(tmp_path):
     builder, dag = graph()
     instance = pending_instance(builder, dag)
     mirror = FakeMirror()
@@ -113,9 +120,66 @@ def test_replay_does_not_overwrite_a_newer_terminal(tmp_path):
             store.finish(instance.instance_id, TaskStatus.SUCCESS, now=NOW)
         mirror.rows[instance.instance_id] = {'status': 'FAILED', 'query_id': 'new-leader'}
         mirror.fail = 0
-        assert store.flush_pending() == 0
-        assert mirror.rows[instance.instance_id] == {'status': 'FAILED', 'query_id': 'new-leader'}
+        assert store.flush_pending() == 1
+        assert mirror.rows[instance.instance_id]['status'] == 'SUCCESS'
         assert store.pending_ids() == []
+        conflict = store.mirror_conflicts()[0]
+        assert conflict['instance_id'] == instance.instance_id
+        assert conflict['local_status'] == 'SUCCESS'
+        assert conflict['shared_status'] == 'FAILED'
+
+
+def test_takeover_replaces_shared_running_with_local_success(tmp_path):
+    builder, dag = graph()
+    instance = pending_instance(builder, dag)
+    mirror = FakeMirror()
+    with closing(open_store(tmp_path / 'state.db')) as store:
+        store.enqueue_and_advance([instance], {})
+        dispatch(store, instance)
+        store.finish(instance.instance_id, TaskStatus.SUCCESS, now=NOW)
+        mirror.rows[instance.instance_id] = {'status': 'RUNNING', 'query_id': 'old-leader'}
+        mirror.cursors = {'root': NOW}
+        attach(store, mirror)
+        _take_over(store, mirror, None)
+        assert mirror.rows[instance.instance_id]['status'] == 'SUCCESS'
+        assert store.mirror_conflicts()[0]['shared_status'] == 'RUNNING'
+
+
+def test_retry_qualification_survives_takeover(tmp_path):
+    builder, dag = graph()
+    instance = pending_instance(builder, dag)
+    mirror = FakeMirror()
+    with closing(open_store(tmp_path / 'leader.db')) as store:
+        attach(store, mirror)
+        store.enqueue_and_advance([instance], {})
+        dispatch(store, instance)
+        store.finish(instance.instance_id, TaskStatus.FAILED, error='temporary',
+                     retryable=True, next_retry_at=NOW, now=NOW)
+        mirror.cursors = {'root': NOW}
+    with closing(open_store(tmp_path / 'standby.db')) as store:
+        attach(store, mirror)
+        counts = store.import_shared_state()
+        row = store.get_instance(instance.instance_id)
+        assert counts['IMPORTED'] == 1
+        assert row['retryable'] == 1
+        assert row['next_retry_at'] is not None
+        assert store.list_pending()[0]['instance_id'] == instance.instance_id
+
+
+def test_takeover_seeds_local_history_when_empty_pod_advanced_cursor(tmp_path):
+    builder, dag = graph()
+    mirror = FakeMirror()
+    with closing(open_store(tmp_path / 'empty.db')) as store:
+        attach(store, mirror)
+        _take_over(store, mirror, None)
+        mirror.cursors = {'root': NOW}
+    with closing(open_store(tmp_path / 'old.db')) as store:
+        instance = pending_instance(builder, dag)
+        DAGExecutor(dag, lambda _item: None, state_store=store).execute([instance], now=NOW)
+    with closing(open_store(tmp_path / 'old.db', create=False)) as store:
+        attach(store, mirror)
+        _take_over(store, mirror, None)
+        assert mirror.rows[instance.instance_id]['status'] == 'SUCCESS'
 
 
 def test_fenced_out_is_not_queued(tmp_path):

@@ -342,6 +342,22 @@ class TestConfigLoader:
 
         assert any("taskname" in err for err in errors)
 
+    @pytest.mark.parametrize("cleanup_column", ["window_time OR 1=1", "window_time;DROP TABLE x", ""])
+    def test_validate_rejects_unsafe_cleanup_column(self, tmp_path, cleanup_column):
+        config_data = {"convergence_rules": [{
+            "taskname": "task_test", "source_tables": ["source"],
+            "target_table": "target", "aggregation_interval": "PT5M",
+            "cron": "*/5 * * * *", "sql_id": "task_test",
+            "cleanup_column": cleanup_column,
+        }]}
+        config_file = tmp_path / "test_config.yaml"
+        config_file.write_text(yaml.dump(config_data))
+        (tmp_path / "task_test.sql").write_text("INSERT INTO target SELECT 1")
+
+        errors = ConfigLoader(config_file, sql_dir=tmp_path).validate()
+
+        assert any("cleanup_column" in err and "simple identifier" in err for err in errors)
+
     def test_validate_missing_source_tables(self, tmp_path):
         """验证缺少source_tables的配置"""
         config_data = {
