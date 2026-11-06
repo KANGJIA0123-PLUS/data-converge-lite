@@ -28,7 +28,7 @@ class _Guard:
         self.cancelled = False
         self.fd = None
         try:
-            self.fd = os.open(database, os.O_RDONLY | os.O_NOFOLLOW)
+            self.fd = os.open(database, os.O_RDONLY | os.O_NOFOLLOW, 0o600)
             if not _same_file(os.fstat(self.fd), identity):
                 raise ValueError('ARCHIVE_FILE_CHANGED')
         except FileNotFoundError:
