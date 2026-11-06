@@ -57,6 +57,7 @@ class LedgerDatabase:
             created = bootstrap.prepare(self.lock_path, create=self._create)
             self._open_database(create=created, upgrade=created)
             self._validate_startup_schema()
+            self._upgrade_auxiliary_schema()
             self._startup_created = created
             if bootstrap.recreated:
                 logger.warning("STATE_RECREATED: issue=DC-STATE-002 history_missing=true; "
@@ -108,30 +109,53 @@ class LedgerDatabase:
                     received_at TEXT NOT NULL,
                     PRIMARY KEY (window_start, dwd_type)
                 )""")
-                self._conn.execute("""CREATE TABLE IF NOT EXISTS mirror_pending (
-                    instance_id TEXT PRIMARY KEY,
-                    queued_at TEXT NOT NULL
-                )""")
-                self._conn.execute("""CREATE TABLE IF NOT EXISTS mirror_conflicts (
-                    instance_id TEXT PRIMARY KEY,
-                    local_status TEXT NOT NULL,
-                    shared_status TEXT NOT NULL,
-                    local_query_id TEXT,
-                    shared_query_id TEXT,
-                    detected_at TEXT NOT NULL,
-                    disposition TEXT NOT NULL DEFAULT 'OPEN',
-                    disposition_note TEXT,
-                    disposition_by TEXT,
-                    disposed_at TEXT
-                )""")
-                columns = {row[1] for row in self._conn.execute(
-                    "PRAGMA table_info(mirror_conflicts)")}
-                for name, definition in (
-                        ('disposition', "TEXT NOT NULL DEFAULT 'OPEN'"),
-                        ('disposition_note', 'TEXT'), ('disposition_by', 'TEXT'),
-                        ('disposed_at', 'TEXT')):
-                    if name not in columns:
-                        self._conn.execute(f"ALTER TABLE mirror_conflicts ADD COLUMN {name} {definition}")
+                self._create_mirror_tables()
+                self._create_orphan_table()
+
+    def _create_mirror_tables(self) -> None:
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS mirror_pending (
+            instance_id TEXT PRIMARY KEY,
+            queued_at TEXT NOT NULL
+        )""")
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS mirror_conflicts (
+            instance_id TEXT PRIMARY KEY,
+            local_status TEXT NOT NULL,
+            shared_status TEXT NOT NULL,
+            local_query_id TEXT,
+            shared_query_id TEXT,
+            detected_at TEXT NOT NULL,
+            disposition TEXT NOT NULL DEFAULT 'OPEN',
+            disposition_note TEXT,
+            disposition_by TEXT,
+            disposed_at TEXT
+        )""")
+        columns = {row[1] for row in self._conn.execute(
+            "PRAGMA table_info(mirror_conflicts)")}
+        for name, definition in (
+                ('disposition', "TEXT NOT NULL DEFAULT 'OPEN'"),
+                ('disposition_note', 'TEXT'), ('disposition_by', 'TEXT'),
+                ('disposed_at', 'TEXT')):
+            if name not in columns:
+                self._conn.execute(f"ALTER TABLE mirror_conflicts ADD COLUMN {name} {definition}")
+
+    def _create_orphan_table(self) -> None:
+        self._conn.execute("""CREATE TABLE IF NOT EXISTS orphan_queries (
+            instance_id TEXT PRIMARY KEY,
+            query_id TEXT NOT NULL,
+            detected_at TEXT NOT NULL
+        )""")
+
+    def _upgrade_auxiliary_schema(self) -> None:
+        """Add tables introduced after the ledger was created.
+
+        These are additive features, not part of the core ledger identity:
+        startup must create them before takeover reads pending rows, while a
+        genuinely missing core table still fails validation instead of being
+        repaired silently.
+        """
+        with self._conn:
+            self._create_mirror_tables()
+            self._create_orphan_table()
 
     def _validate_startup_schema(self) -> None:
         self._conn.execute("""SELECT instance_id, taskname, scheduled_time,

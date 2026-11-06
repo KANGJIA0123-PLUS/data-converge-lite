@@ -111,6 +111,25 @@ def test_existing_ledger_can_receive_marker_after_validation(tmp_path):
     assert marker.read_text() == "ready\n"
 
 
+def test_existing_ledger_gets_auxiliary_tables_on_startup(tmp_path):
+    path = tmp_path / "state.sqlite3"
+    with closing(StateStore(path, create=True)) as store:
+        store.acquire_startup_lock()
+        mark_ready(store)
+    with closing(sqlite3.connect(path)) as connection:
+        for table in ("mirror_pending", "mirror_conflicts", "orphan_queries"):
+            connection.execute(f"DROP TABLE {table}")
+
+    with closing(StateStore(path, create=True)) as store:
+        assert store.acquire_startup_lock() is False
+        assert store.pending_ids() == []
+        assert store.mirror_conflicts() == []
+    with closing(sqlite3.connect(path)) as connection:
+        names = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"mirror_pending", "mirror_conflicts", "orphan_queries"} <= names
+
+
 def test_startup_obeys_the_same_single_writer_lock(tmp_path):
     path = tmp_path / "state.sqlite3"
     with closing(StateStore(path, create=True)) as first:
