@@ -117,6 +117,7 @@ class ServiceRuntime:
     maintenance: AbstractContextManager | None = field(default=None, repr=False)
     startup_settings: StartupSettings = field(default_factory=StartupSettings)
     probe_with_timeout: Callable[[float], None] | None = field(default=None, repr=False)
+    stall_seconds: float = 600.0
     _probe: Callable[[], None] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -147,9 +148,26 @@ class ServiceRuntime:
         self._assert_owned()
         if not self.scheduler.stop_requested:
             with self.maintenance or nullcontext():
-                self.heartbeat.set_ready(True)
-                self.scheduler.start()
+                self._watch_progress()
+                try:
+                    self.heartbeat.set_ready(True)
+                    self.scheduler.start()
+                finally:
+                    self._unwatch_progress()
         self._assert_owned()
+
+    def _watch_progress(self) -> None:
+        """Fail liveness if one scheduler round blocks longer than any legitimate step."""
+        if self.heartbeat is None or not hasattr(self.heartbeat, 'watch_progress'):
+            return
+        self.heartbeat.watch_progress(self.stall_seconds)
+        self.scheduler.progress = self.heartbeat.progress
+
+    def _unwatch_progress(self) -> None:
+        # Draining in-flight SQL after the loop is expected to take a while.
+        if self.heartbeat is not None and hasattr(self.heartbeat, 'unwatch_progress'):
+            self.heartbeat.unwatch_progress()
+        self.scheduler.progress = None
 
     def _assert_owned(self) -> None:
         if self.lease is not None:
@@ -157,6 +175,18 @@ class ServiceRuntime:
 
     def request_stop(self) -> None:
         self.scheduler.shutdown(wait=False)
+
+
+# A round may legitimately block on one synchronous backfill/preaggregate SQL
+# (bounded by its task timeout), a DWD poll (about 5 s) and orphan confirmation
+# (10 s). Anything beyond this budget means the writer is hung.
+STALL_MARGIN_SECONDS = 120
+
+
+def stall_budget(definition: ApplicationDefinition) -> float:
+    options = definition.options
+    longest = max(options.task_timeout_seconds.values())
+    return float(longest + options.poll_interval_seconds + STALL_MARGIN_SECONDS)
 
 
 def build_scheduler(definition: ApplicationDefinition, runner: TaskRunner,
@@ -264,5 +294,5 @@ def open_runtime(config_path: Path, definition: ApplicationDefinition, store: St
         runtime = ServiceRuntime(
             scheduler, runner, heartbeat, execution.probe, lease, maintenance,
             startup_settings=StartupSettings.from_mapping(definition.config.get('startup')),
-            probe_with_timeout=execution.probe_with_timeout)
+            probe_with_timeout=execution.probe_with_timeout, stall_seconds=stall_budget(definition))
         yield runtime

@@ -64,15 +64,39 @@ Redis 临时租约键为 `data_converge:leader:{cluster_name}`。旧版永久注
 
 主服务 Pod 的 `restartPolicy` 必须是 `Always`。该字段属于 Pod spec，不是单个 container；Deployment 管理的 Pod 默认是 `Always`，但仓库 Chart 中的安装/删除 Job 使用 `OnFailure`，主服务不能沿用 Job 模板。仓库 Chart 目前只包含这些 Job，主服务 Deployment 及其探针不在本仓库，需在实际上线清单中核对。
 
-同时配置存活探针，命令使用：
+同时配置存活与就绪探针。镜像已带 `liveness_check.sh` / `readiness_check.sh`，它们加载平台 Python 环境后执行 `--healthcheck`，不安装依赖：
 
 ```yaml
 livenessProbe:
   exec:
-    command: ["dconv", "--healthcheck", "liveness"]
+    command: ["bash", "/opt/its/data-converge/bin/liveness_check.sh"]
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+readinessProbe:
+  exec:
+    command: ["bash", "/opt/its/data-converge/bin/readiness_check.sh"]
+  periodSeconds: 10
+  timeoutSeconds: 10
+  failureThreshold: 1
 ```
 
-`dconv --healthcheck liveness` 会转发到 `python3 -m data_converge.main --healthcheck liveness`。该检查只读取本实例心跳文件：要求 PID 仍存在、心跳时间不超过 75 秒；不访问 Redis/ClickHouse，不消费消息。心跳线程每 5 秒刷新；备机 liveness 可通过、readiness 保持失败。当前 `liveness_check.sh` 也执行同一 healthcheck，但 Chart 尚未声明主服务探针，不能把脚本存在当作已启用。
+两个探针只读本实例心跳文件，不访问 Redis、ClickHouse，不消费消息，单次约 0.1 秒。判定规则：
+
+| 状态 | liveness | readiness |
+|---|---|---|
+| 进程未启动 / 已退出 / 心跳超过 75 秒未刷新 | 失败 | 失败 |
+| 备机等待竞选（含 Redis 闪断重试、失租后回到备机） | 通过 | 失败 |
+| 主节点启动中等待 ClickHouse 就绪 | 通过 | 失败 |
+| 主节点正常调度 | 通过 | 通过 |
+| 主节点调度循环卡住超过预算 | **失败** | 失败 |
+
+调度循环每完成一轮会刷新心跳中的 `progress_at`；超过预算未完成一轮即判定挂起，liveness 失败，由 kubelet 重启。预算 = 最长任务超时 + `poll_interval_seconds` + 120 秒（仓库配置为 1800 + 5 + 120 = 1925 秒，约 32 分钟），因为一轮内补算会同步执行一条 SQL，最长可达任务超时。备机等待、启动等待和关闭收尾阶段不检查调度进度。
+
+`readiness` 只表示"本实例是当前写入者"：备机永远 NotReady 是预期行为。本服务不对外提供端口，readiness 不用于流量分发，但会影响 `kubectl rollout status` 和滚动更新判断——同时只会有一个 Pod Ready，滚动更新策略应为 `maxUnavailable: 1`、`maxSurge: 0`，或改用 `Recreate`，否则会一直等待第二个 Pod 就绪。
+
+在 `initialDelaySeconds` 之前心跳文件可能尚未创建：服务启动先加载配置、取得租约前就会写入心跳，但首次部署解压依赖可能更久，可按现场启动耗时调大。
 
 原因：Redis 故障、失租或被 fencing 时，服务会释放租约、在途 SQL 收尾并关闭本地文件锁，然后在进程内回到备机等待重新竞选（日志 `LEADERSHIP_TERM_ENDED`、`LEADERSHIP_REDIS_RETRY`），不再以退出码 1 退出；该行为已在 S2、S3、S4、S9 真实环境复测通过。但进程崩溃、死锁、心跳停止或状态存储不可写时仍需要这两项，不能假定进程永远自行恢复：`restartPolicy: Always` 让 kubelet 重启容器，存活探针用于发现进程仍在但已无响应的挂起状态。
 

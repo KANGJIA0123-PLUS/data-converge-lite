@@ -46,6 +46,8 @@ class TaskScheduler:
     skip_resume = None
     # Runtime assigns an OrphanQueryGuard; called once per round before planning.
     orphan_guard = None
+    # Runtime assigns Heartbeat.progress; called after every completed round.
+    progress = None
 
     def __init__(
         self,
@@ -241,6 +243,8 @@ class TaskScheduler:
                 self.tick()
                 if self.background_worker is not None and not self.stop_requested:
                     self.background_worker()
+                if self.progress is not None:
+                    self.progress()
                 self._sleep_until_next_round()
         finally:
             self._serving = False
