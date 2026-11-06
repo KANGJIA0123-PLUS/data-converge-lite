@@ -13,6 +13,11 @@ from .preaggregate import validate_eligibility
 
 logger = logging.getLogger(__name__)
 
+# Longer than the 1800-second maximum task timeout: a local RUNNING row may still
+# be the previous writer's in-flight SQL, so keep the request queued before
+# declaring it blocked for manual attention.
+RUNNING_HOLD_SECONDS = 35 * 60
+
 
 class BackfillWorker:
     def __init__(self, definition, store, runner, *, stop_check=lambda: False, clock=None):
@@ -24,6 +29,9 @@ class BackfillWorker:
         self.clock = clock or (lambda: datetime.now(self.timezone))
         self.revision = plan_revision(definition)
         self.path = store.path.parent / "backfill.sqlite3"
+        # Imported/prepared RUNNING rows have no started_at; age them from the
+        # first observation in this worker so a takeover still gets a full hold.
+        self._running_since = {}
 
     def __call__(self):
         if self.stop_check() or not self.path.exists():
@@ -70,6 +78,14 @@ class BackfillWorker:
             return self._blocked("BACKFILL_WINDOW_CHANGED")
         if item["execution_kind"] == "PREAGGREGATE":
             return self._process_preaggregate(queue, item, instance, tolerate)
+        age = self._running_age(instance)
+        if age is not None:
+            return (self._blocked("BACKFILL_INSTANCE_RUNNING")
+                    if age >= RUNNING_HOLD_SECONDS else None)
+        if instance.instance_id in self.store.held_orphans():
+            # A previous leader's query may still be writing this window; the
+            # orphan guard releases it once ClickHouse confirms it stopped.
+            return None
         if self.store.get_status(instance.instance_id) == TaskStatus.SUCCESS and not item["recompute"]:
             return self.store.begin_backfill(item["item_id"], instance, recompute=False)
         dependencies = self._queue_operation(
@@ -88,6 +104,20 @@ class BackfillWorker:
         instance.query_id = result["query_id"]
         self._execute(instance, item)
         return self.store.get_backfill(item["item_id"])
+
+    def _running_age(self, instance):
+        """Seconds since a local RUNNING attempt started, or None when not RUNNING."""
+        row = self.store.get_instance(instance.instance_id)
+        if row is None or row["status"] != TaskStatus.RUNNING.value:
+            self._running_since.pop(instance.instance_id, None)
+            return None
+        started = row.get("started_at")
+        if started:
+            self._running_since.pop(instance.instance_id, None)
+            return (self.clock() - datetime.fromisoformat(started)).total_seconds()
+        now = self.clock()
+        first_seen = self._running_since.setdefault(instance.instance_id, now)
+        return (now - first_seen).total_seconds()
 
     def _instance(self, item):
         scheduled = datetime.fromisoformat(item["scheduled_time"]).astimezone(self.timezone)

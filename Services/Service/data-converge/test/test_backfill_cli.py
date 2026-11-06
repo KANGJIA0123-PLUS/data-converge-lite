@@ -135,3 +135,41 @@ def test_bad_arguments_are_rejected_before_config_loading(tmp_path, extra):
         entry.main(['--config', str(missing), *extra])
     assert error.value.code == 2
     assert list(tmp_path.iterdir()) == []
+
+
+def _leadership_submission(app, monkeypatch, leader=None, failure=None):
+    from data_converge.backfill import cli as backfill_cli
+    from .test_writer_coordination import enable_leadership
+
+    enable_leadership(app)
+    Application(app).initialize('2026-10-12T10:00:00+08:00')
+
+    def read(_definition):
+        if failure is not None:
+            raise failure
+        return leader
+
+    monkeypatch.setattr(backfill_cli, '_read_leader', read)
+
+
+def test_standby_submission_reports_that_only_the_leader_executes(app, capsys, monkeypatch):
+    _leadership_submission(app, monkeypatch)
+    assert entry.main(['--config', str(app), *options()]) == 0
+    output = capsys.readouterr().out
+    assert '请求只保存在本节点，只有本节点成为主节点后才会执行' in output
+    assert '当前没有主节点' in output
+
+
+def test_submission_with_a_known_leader_still_reports_the_local_only_queue(app, capsys, monkeypatch):
+    _leadership_submission(app, monkeypatch, leader='another-node')
+    code, value = invoke(app, capsys, *options())
+    assert code == 0 and value['status'] == 'QUEUED'
+    assert value['notices'] == ['请求只保存在本节点，只有本节点成为主节点后才会执行。']
+
+
+def test_redis_read_failure_warns_without_blocking_submission(app, capsys, monkeypatch):
+    _leadership_submission(app, monkeypatch, failure=OSError('redis down'))
+    code, value = invoke(app, capsys, *options())
+    assert code == 0 and value['status'] == 'QUEUED'
+    assert '无法读取 Redis 选主状态' in value['notices'][0]
+    assert '请求只保存在本节点' in value['notices'][0]

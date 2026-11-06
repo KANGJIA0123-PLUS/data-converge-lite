@@ -46,7 +46,43 @@ leadership:
 
 Redis 临时租约键为 `data_converge:leader:{cluster_name}`。旧版永久注册键加 `:ledger`；新版不再读取、写入或删除该键，也不读取或改写本地 `leadership_cluster` / `leadership_ledger_id` 作为准入依据。现存身份项留作现场证据。正常服务启用选主时打印 `LEADERSHIP_LEDGER_CHECK_DISABLED: issue=DC-STATE-001`，这是临时解除校验的遗留提示，不是启动失败；取得有效租约并通过其余状态检查后可以继续调度。该措施不能恢复丢失账本，详见 [DC-STATE-001](known-issues.md#dc-state-001)。
 
-心跳默认按 `DATA_CONVERGE_INSTANCE_ID`、`POD_NAME`、`HOSTNAME`、系统主机名的顺序选取实例身份，文件存放在账本目录旁的 `.<账本目录名>.health/<身份哈希>/heartbeat.json`。不同 Pod 的默认 hostname 不同；同机启动多个进程时需分别设置稳定且不同的 `DATA_CONVERGE_INSTANCE_ID`，启动与探针命令使用相同值。备机的 Python liveness 可通过，readiness 保持失败；失租后下一次心跳写入会撤销 ready。公司探针脚本原有提前 `exit 0` 行为尚未修改，不能据此宣称 Kubernetes 已启用真实探针。
+心跳默认按 `DATA_CONVERGE_INSTANCE_ID`、`POD_NAME`、`HOSTNAME`、系统主机名的顺序选取实例身份，文件存放在账本目录旁的 `.<账本目录名>.health/<身份哈希>/heartbeat.json`。不同 Pod 的默认 hostname 不同；同机启动多个进程时需分别设置稳定且不同的 `DATA_CONVERGE_INSTANCE_ID`，启动与探针命令使用相同值。备机的 Python liveness 可通过，readiness 保持失败；失租后下一次心跳写入会撤销 ready。仓库内的 `liveness_check.sh` / `readiness_check.sh` 已改为调用 `--healthcheck`；但主服务 Deployment 的探针声明不在本仓库 Chart 中，仍需现场核对，不能仅凭脚本存在宣称 Kubernetes 已启用真实探针。
+
+逐键说明、默认值和校验边界见[应用配置参考](configuration-reference.md)。
+
+## 部署要求
+
+以下三项是主备接管的部署前提，不能只靠应用代码满足。
+
+### 终止宽限期
+
+`terminationGracePeriodSeconds` 必须不小于最长任务超时。随仓库配置的 `scheduler.task_timeout_seconds` 为 5min 120 秒、hour 600 秒、day 1800 秒、month 1800 秒，因此当前至少设置为 **1800 秒**，并建议留出连接收尾和记账余量；若把 day/month 调到校验上限 3600 秒，终止宽限期也要同步不低于新的最大值。该字段属于 Pod spec，需在主服务 Pod 模板中设置。
+
+原因：SIGTERM/SIGINT 只停止新派发，服务会在调度循环退出时 `drain()`，等待已提交的在途 SQL 完成并记账，之后才释放 Redis 租约和本地文件锁（见 `scheduler/service.py`、`leader_election/lease.py`、`coordination/admission.py` 的注释与实现）。Kubernetes 默认的 30 秒远短于日/月任务，提前 SIGKILL 会让旧 INSERT 在 ClickHouse 侧继续执行；接管方必须等旧 query 确认停止后才重跑，恢复被推迟，也可能留下待处理窗口和人工核查（演练 BUG-4）。若改为主动 KILL 自己的在途 query 来缩短交接，必须把窗口明确标记为待重跑，不能直接释放租约让接管方盲目并发执行。
+
+### 重启策略与存活探针
+
+主服务 Pod 的 `restartPolicy` 必须是 `Always`。该字段属于 Pod spec，不是单个 container；Deployment 管理的 Pod 默认是 `Always`，但仓库 Chart 中的安装/删除 Job 使用 `OnFailure`，主服务不能沿用 Job 模板。仓库 Chart 目前只包含这些 Job，主服务 Deployment 及其探针不在本仓库，需在实际上线清单中核对。
+
+同时配置存活探针，命令使用：
+
+```yaml
+livenessProbe:
+  exec:
+    command: ["dconv", "--healthcheck", "liveness"]
+```
+
+`dconv --healthcheck liveness` 会转发到 `python3 -m data_converge.main --healthcheck liveness`。该检查只读取本实例心跳文件：要求 PID 仍存在、心跳时间不超过 75 秒；不访问 Redis/ClickHouse，不消费消息。心跳线程每 5 秒刷新；备机 liveness 可通过、readiness 保持失败。当前 `liveness_check.sh` 也执行同一 healthcheck，但 Chart 尚未声明主服务探针，不能把脚本存在当作已启用。
+
+原因：Redis 故障、失租或被 fencing 时，服务会释放租约、在途 SQL 收尾并关闭本地文件锁，然后在进程内回到备机等待重新竞选（日志 `LEADERSHIP_TERM_ENDED`、`LEADERSHIP_REDIS_RETRY`），不再以退出码 1 退出；该行为已在 S2、S3、S4、S9 真实环境复测通过。但进程崩溃、死锁、心跳停止或状态存储不可写时仍需要这两项，不能假定进程永远自行恢复：`restartPolicy: Always` 让 kubelet 重启容器，存活探针用于发现进程仍在但已无响应的挂起状态。
+
+### Sentinel 切换参数
+
+`leadership.ttl_seconds`（仓库配置 30 秒，续租间隔 5 秒）必须大于 Sentinel 完成主从切换的总耗时，不能只比较 `down-after-milliseconds`。总耗时至少包含 `down-after-milliseconds`、Sentinel 选举与提升、客户端发现新主，以及 PSM 挑战认证和重连时间。演练中 `down-after-milliseconds 3000` 的实际切换约 3.6–4.1 秒；现场常见配置为 5–30 秒，总切换耗时还会叠加选举、认证和重连，可能更长。
+
+建议 `down-after-milliseconds` 明显小于 `ttl_seconds`（例如 30 秒 TTL 时不超过 10 秒），并留出实测余量；若无法保证总切换时间小于 TTL，应增大 `ttl_seconds`（上限 300 秒）或降低 `down-after-milliseconds`。TTL 过短会在新主就绪前失租，导致不必要的主备切换和中断窗口重跑；TTL 过长会延长旧主被 fencing 前的风险窗口。修改后应在目标环境复测切换。`down-after-milliseconds` 是 Sentinel 侧配置，不在 `app_config.yaml` 中，应用不会校验它。
+
+以上依据与复现见[双实例真实环境演练报告](evidence/dual-instance-lab-2026-11-06.md)的 BUG-2、BUG-4；配置键的完整范围见[应用配置参考](configuration-reference.md)。
 
 ## 运维查询
 
@@ -70,7 +106,7 @@ bash /opt/its/data-converge/bin/start_data_converge.sh --inspect-instance 'task_
 ## 不能越过的边界
 
 - 连续恢复要求使用同一份完整持久账本、锁文件及初始化标记。两个节点的独立 hostPath 不具备共享历史，复制一个 SQLite 文件形成两份并行账本也不具备；临时解除身份阻断后，这些情况不会因永久注册不一致被拒绝，重复执行风险仍存在。不要简单把 SQLite 放到 NFS 就认为获得可靠共享存储；文件锁、同步和故障语义需要存储保障。[SQLite 官方网络存储说明](https://sqlite.org/useovernet.html)
-- 本次没有增加跨节点独立磁盘自动恢复，也没有修改 Kubernetes 副本数、卷、探针或终止宽限期。
+- 本次代码与 Chart 没有增加跨节点独立磁盘自动恢复，也没有修改 Kubernetes 副本数、卷、探针或终止宽限期；实际部署仍需按上文[部署要求](#部署要求)配置并演练。
 - SQLite 成功记账与 ClickHouse INSERT 没有共同事务。UNKNOWN 可能包含部分或全部已写数据；query_id 只是追踪标识。人工 retry 前必须确认原查询已结束并确认目标窗口可安全重跑。
 - ClickHouse 的表引擎、去重窗口、版本、INSERT SELECT 的块边界及物化视图会影响数据库去重，不能只加一个 token 就承诺幂等。有关约束见 [ClickHouse 官方重试去重说明](https://clickhouse.com/docs/concepts/features/operations/insert/deduplicating-inserts-on-retries)。
 - 本次没有改业务 SQL、目标表结构或任务依赖定义；此前新增节点汇聚的依赖与 SQL 来源差异仍需单独处理。

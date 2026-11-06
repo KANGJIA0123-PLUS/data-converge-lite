@@ -139,6 +139,8 @@ JSON 中的 `data.dependencies` 只统计当前同周期执行前置实例；`to
 
 任务的 `retryable` 只是原执行策略中的标记，仍需结合最大尝试次数及 `next_retry_at` 判断，不代表命令会发起重试。UNKNOWN 表示结果未确认，必须先凭 `query_id` 核实 ClickHouse 结果，再按原人工解决流程处理，不能直接重跑。
 
+当 ClickHouse 通过 HTTP 错误响应头明确返回 `TIMEOUT_EXCEEDED`（159）、`MEMORY_LIMIT_EXCEEDED`（241）或 `QUERY_WAS_CANCELLED`（394）时，查询已在服务端中止、未完成写入，客户端将其归类为可重试的 `CLICKHOUSE_QUERY_ABORTED`（不再记为 UNKNOWN）；重跑前的清理 DELETE 是幂等的，重复执行不会累加数据。连接中断或读取超时没有完整的服务端错误响应，仍按 UNKNOWN 处理。
+
 DWD `READY` 表示本消费者已记录五类信号；`WAITING` 表示缺信号；`BEFORE_COVERAGE` 和 `WINDOW_OPEN` 分别表示早于账本覆盖起点、窗口尚未结束。等待时长从窗口结束算起，收齐后停止累计，另用 `ready_delay_seconds` 保留收齐延迟。默认只看最近20个完整窗口，旧窗口用 `--window` 精确查询；更早的已登记阻断任务可用 `--failures` 查到。
 
 ## 默认错误日志与可选调试日志

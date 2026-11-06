@@ -19,7 +19,7 @@ import yaml
 
 from data_converge.sql_execution import client as client_module
 from data_converge.sql_execution import runner as runner_module
-from data_converge.errors import TaskExecutionError
+from data_converge.errors import TaskExecutionError, safe_error_details
 
 WINDOW_SQL = "SELECT toDateTime({start_time:UInt32}, 'UTC'), toDateTime({end_time:UInt32}, 'UTC')"
 
@@ -74,7 +74,9 @@ def test_execute_sql_posts_original_sql_and_parameterized_window(monkeypatch):
     assert len(params["query_id"][0]) >= 32
     assert "private" not in request.full_url
     assert base64.b64decode(request.get_header("Authorization").split()[1]) == b"test_user:private test password"
-    assert timeout == 123 and rows == [[1]]
+    # The server limit stays the task budget; the client waits a short grace
+    # longer so ClickHouse's definite TIMEOUT_EXCEEDED answer is received.
+    assert timeout == 123 + client_module.SERVER_TIMEOUT_GRACE_SECONDS and rows == [[1]]
     assert any(isinstance(h, urllib.request.ProxyHandler) and not h.proxies for h in handlers)
     redirects = [h for h in handlers if isinstance(h, urllib.request.HTTPRedirectHandler)]
     assert redirects and redirects[0].redirect_request(request, None, 307, "redirect", {}, "https://elsewhere/") is None
@@ -240,7 +242,8 @@ def localhost_clickhouse():
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    observed = SimpleNamespace(requests=[], body=b'{"data":[[7]]}', status=200, disconnect=False, declared_length=None)
+    observed = SimpleNamespace(requests=[], body=b'{"data":[[7]]}', status=200, disconnect=False,
+                               declared_length=None, exception_code=None)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -259,6 +262,8 @@ def localhost_clickhouse():
             self.send_response(observed.status)
             self.send_header("Content-Type", "application/json")
             length = len(observed.body) if observed.declared_length is None else observed.declared_length
+            if observed.exception_code is not None:
+                self.send_header("X-ClickHouse-Exception-Code", str(observed.exception_code))
             self.send_header("Content-Length", str(length))
             self.end_headers()
             self.wfile.write(observed.body)
@@ -321,6 +326,47 @@ def test_real_http_failure_is_redacted_and_never_retried(localhost_clickhouse, d
     assert "private" not in str(caught.value)
     assert caught.value.__suppress_context__
     assert len(observed.requests) == 1
+
+
+@pytest.mark.parametrize("exception_code", [159, 241, 394])
+def test_server_aborted_query_is_retryable_without_unknown_outcome(localhost_clickhouse, exception_code):
+    observed = localhost_clickhouse
+    observed.status, observed.body = 500, b"Code: query aborted"
+    observed.exception_code = exception_code
+    with pytest.raises(client_module.SQLExecutionError) as caught:
+        client_module.execute_sql(make_clickhouse_config(port=observed.port), "INSERT private SQL",
+                                  timeout=2, query_id="aborted-attempt")
+    error = caught.value
+    assert str(error) == "CLICKHOUSE_QUERY_ABORTED"
+    assert error.retryable is True and error.outcome_unknown is False
+    assert error.query_id == "aborted-attempt"
+    assert safe_error_details(error)["clickhouse_exception_code"] == exception_code
+    assert "private" not in str(error)
+
+
+@pytest.mark.parametrize("exception_code", [60, 516])
+def test_other_http_errors_remain_unknown_with_exception_code(localhost_clickhouse, exception_code):
+    observed = localhost_clickhouse
+    observed.status, observed.body = 500, b"Code: private server failure"
+    observed.exception_code = exception_code
+    with pytest.raises(client_module.SQLExecutionError) as caught:
+        client_module.execute_sql(make_clickhouse_config(port=observed.port), "INSERT private SQL",
+                                  timeout=2, query_id="other-failure")
+    error = caught.value
+    assert str(error) == "CLICKHOUSE_HTTP_FAILED"
+    assert error.retryable is False and error.outcome_unknown is True
+    assert safe_error_details(error)["clickhouse_exception_code"] == exception_code
+
+
+def test_expired_deadline_keeps_aborted_query_unknown():
+    from data_converge.sql_execution.transport import QueryDeadline
+
+    error = urllib.error.HTTPError("private-url", 500, "aborted",
+                                   {"X-ClickHouse-Exception-Code": "159"}, io.BytesIO(b""))
+    failure = client_module._http_failure({}, "expired-attempt", error, QueryDeadline(-1))
+    assert str(failure) == "CLICKHOUSE_OUTCOME_UNKNOWN"
+    assert failure.retryable is False and failure.outcome_unknown is True
+    assert failure.diagnostic["clickhouse_exception_code"] == 159
 
 
 @pytest.mark.parametrize("body", [b"", b'{"data":[[7]]}'])

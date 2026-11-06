@@ -34,6 +34,9 @@ dconv --backfill --task task_model_instance_hour_dws \
 返回原批次；若已修复问题、需要发起一次新的执行，应使用新的标识。
 同一标识不能对应不同计划。省略标识则每次创建新批次，带 `--recompute` 重复提交会再次执行。
 
+启用 `leadership` 时，提交后 CLI 只读观察当前租约，并在文本输出或 JSON `notices` 中提示：
+请求只保存在本节点，只有本节点成为主节点后才会执行。Redis 读取失败只给出提示，不阻止提交。
+
 ## 全部任务补算
 
 ```bash
@@ -242,7 +245,7 @@ dconv --history --task task_model_instance_hour_dws --limit 50
 | SKIPPED | 已成功且未选重算，或提前请求过期；结合 error 判断，不能一概当作本次 SQL 成功 |
 | FAILED | 已知执行失败；修复原因后发起新批次，不自动进入普通重试 |
 | UNKNOWN | 请求可能已经送达 ClickHouse，先核实 query_id；不能直接重跑 |
-| BACKFILL_INSTANCE_UNKNOWN / RUNNING | 当前实例结果不确定或执行中；保留原状态，先定位该实例 |
+| BACKFILL_INSTANCE_UNKNOWN / RUNNING | 当前实例结果不确定或执行中；RUNNING 先保留排队（默认最多 35 分钟，导入的无 `started_at` 从首次观察起算），超时才 `BLOCKED` 并保留原状态供定位 |
 | BACKFILL_UPSTREAM_NOT_SUCCESSFUL | 同周期依赖没有成功；先处理依赖。跨周期不受此限制 |
 | BACKFILL_CONFIGURATION_CHANGED | 提交配置/SQL/时区与运行服务快照不同；确认部署一致后提交新批次 |
 | BACKFILL_RETIRED_INSTANCE | 窗口属于旧部署退休历史；此命令不强制覆盖 |

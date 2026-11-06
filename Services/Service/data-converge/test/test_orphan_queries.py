@@ -141,3 +141,13 @@ def test_stop_queries_raises_when_unconfirmed(monkeypatch):
     client, _sent = fake_clickhouse(monkeypatch, [SQLExecutionError('CLICKHOUSE_CONNECT_FAILED')])
     with pytest.raises(SQLExecutionError):
         client.stop_queries({}, ['old-query'])
+
+
+def test_client_waits_past_server_limit_for_task_budgets():
+    """Lab S6: a pooled 10 s budget reached _execute as 9.99 s and timed out on the
+    client at the same instant the server sent code 159, so it was recorded UNKNOWN."""
+    from data_converge.sql_execution.client import SERVER_TIMEOUT_GRACE_SECONDS, _client_budget
+
+    assert _client_budget(9.99) == 10 + SERVER_TIMEOUT_GRACE_SECONDS
+    assert _client_budget(120) == 120 + SERVER_TIMEOUT_GRACE_SECONDS
+    assert _client_budget(0.15) == 0.15 and _client_budget(2) == 2

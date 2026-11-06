@@ -33,6 +33,21 @@ from .config import (
 from .transport import QueryDeadline, build_query_handlers
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+SERVER_TIMEOUT_GRACE_SECONDS = 5
+
+
+def _client_budget(timeout: float) -> float:
+    """Wait slightly longer than the server limit for task-sized budgets.
+
+    ClickHouse stops a query at max_execution_time (sent as ceil(timeout)) and
+    answers with code 159. Without a grace period the client times out at the
+    same instant and records an UNKNOWN outcome for a query the server definitely
+    abandoned. Short budgets (probes, admin statements, tests) keep their limit;
+    task timeouts are validated to at least 10 seconds.
+    """
+    if timeout < 5:
+        return timeout
+    return math.ceil(timeout) + SERVER_TIMEOUT_GRACE_SECONDS
 
 
 class SQLExecutionError(TaskExecutionError):
@@ -109,7 +124,7 @@ def _execute(config, sql, timeout, start_time, end_time, query_id, settings, con
         raise ValueError("start_time 和 end_time 必须同时提供")
     if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("CLICKHOUSE_TIMEOUT_INVALID") from None
-    deadline = QueryDeadline(timeout, connect_timeout=connect_timeout)
+    deadline = QueryDeadline(_client_budget(timeout), connect_timeout=connect_timeout)
     clickhouse = config["clickhouse"]
     origin, _, secure, verify = connection_parameters(clickhouse)
     if query_id is None:
@@ -120,7 +135,8 @@ def _execute(config, sql, timeout, start_time, end_time, query_id, settings, con
                                  settings)
     handlers = build_query_handlers(deadline, secure, verify)
     try:
-        body, remaining = _post_sql_request(config, request, handlers, deadline, timeout, query_id)
+        body, remaining = _post_sql_request(config, request, handlers, deadline,
+                                            _client_budget(timeout), query_id)
         if deadline.expired:
             error = SQLExecutionError("CLICKHOUSE_OUTCOME_UNKNOWN", outcome_unknown=True, query_id=query_id)
             debug.log_error(config, query_id, error)
@@ -162,6 +178,12 @@ def _post_sql_request(config, request, handlers, deadline, timeout, query_id):
     return body, remaining
 
 
+# The server rejected the query before completing it: TIMEOUT_EXCEEDED,
+# MEMORY_LIMIT_EXCEEDED and QUERY_WAS_CANCELLED all abandon the INSERT. The
+# cleanup DELETE before a rerun is idempotent, so retrying is safe.
+_ABORTED_EXCEPTION_CODES = frozenset({159, 241, 394})
+
+
 def _http_failure(config, query_id, error, deadline):
     # Freeze classification before optional diagnostic I/O: a slow error body
     # must not turn a definite 401 rejection into an unknown execution outcome.
@@ -171,6 +193,12 @@ def _http_failure(config, query_id, error, deadline):
         debug.log_http_error(config, query_id, error)
     finally:
         error.close()
+    aborted = (not expired and code != 401
+               and diagnostic.get("clickhouse_exception_code") in _ABORTED_EXCEPTION_CODES)
+    if aborted:
+        return SQLExecutionError("CLICKHOUSE_QUERY_ABORTED", retryable=True,
+                                 outcome_unknown=False, query_id=query_id,
+                                 diagnostic=diagnostic)
     message = "CLICKHOUSE_OUTCOME_UNKNOWN" if expired else (
         "CLICKHOUSE_AUTH_FAILED" if code == 401 else "CLICKHOUSE_HTTP_FAILED")
     return SQLExecutionError(message, outcome_unknown=expired or code != 401,

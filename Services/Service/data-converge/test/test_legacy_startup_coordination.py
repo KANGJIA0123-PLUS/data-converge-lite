@@ -65,8 +65,11 @@ def test_lease_loss_during_backup_prevents_retirement(app, clock, monkeypatch):
         lease.lost = True
         return result
     monkeypatch.setattr(StateStore, 'backup_configuration', lost_backup)
+    target = Application(app, dependencies=dependencies(lease, seen))
+    # A lost term is retried by serve(); this unit keeps the old no-retirement
+    # assertion without pretending the process must exit.
     with pytest.raises(LeadershipError, match='LEADERSHIP_LOST'):
-        Application(app, dependencies=dependencies(lease, seen)).serve()
+        target._serve_term(None, target.dependencies)
     assert dump_database(app) == before and seen == []
 
 

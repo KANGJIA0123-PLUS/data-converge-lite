@@ -51,7 +51,8 @@ def test_lost_lease_still_prevents_replacement_pod_from_starting(app, monkeypatc
     lease, seen = ForeignRegistryLease(), []
     lease.lost = True
     monkeypatch.setattr(TaskScheduler, 'start', lambda self: pytest.fail('lost lease cannot schedule'))
+    candidate = Application(app, dependencies=dependencies(lease, seen))
     with pytest.raises(LeadershipError, match='LEADERSHIP_LOST'):
-        Application(app, dependencies=dependencies(lease, seen)).serve()
+        candidate._serve_term(None, candidate.dependencies)
     assert seen == [] and lease.closed
     assert not (app.parent / 'state/state.sqlite3').exists()

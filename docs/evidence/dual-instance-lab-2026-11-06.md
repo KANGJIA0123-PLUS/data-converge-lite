@@ -22,16 +22,16 @@
 | # | 场景 | 结果 |
 |---|---|---|
 | S1 | kill -9 主节点（SQL 执行中），备机接管 | 通过：9 秒接管，中断窗口 KILL 后重跑，数据正确 |
-| S1c | 同上，但接管瞬间备机到 ClickHouse 短暂不通 | **失败：窗口数据翻倍（80 行/40 卡）** — BUG-1 |
-| S2 | 主节点冻结（SIGSTOP）超过 TTL 后恢复 | 通过：旧主被 fencing，退出码 1，数据正确 |
-| S2b | 冻结 + 接管时 KILL 失败 | **失败：窗口数据翻倍** — BUG-1 |
-| S3 | 主节点与 Redis 断网（拒绝连接 / 静默丢包） | 通过：旧主停止派发后退出，备机接管，数据正确 |
-| S4 | Redis 主节点宕机，Sentinel 切换 | **失败：两个实例同时退出，无人继续调度** — BUG-2 |
+| S1c | 同上，但接管瞬间备机到 ClickHouse 短暂不通 | 修复前窗口数据翻倍；**修复后通过** — BUG-1 |
+| S2 | 主节点冻结（SIGSTOP）超过 TTL 后恢复 | 通过：旧主被 fencing，数据正确（修复后旧主回到备机等待，不再退出） |
+| S2b | 冻结 + 接管时 KILL 失败 | 修复前窗口数据翻倍；**修复后通过** — BUG-1 |
+| S3 | 主节点与 Redis 断网（拒绝连接 / 静默丢包） | 通过：旧主停止派发，备机接管，数据正确（修复后旧主回到备机等待） |
+| S4 | Redis 主节点宕机，Sentinel 切换 | 修复前失败（两个实例同时退出）；**修复后通过** — BUG-2 |
 | S5 | 滚动重启（SIGTERM 主节点） | 数据正确；**交接 25 秒，且补算请求跟着节点丢失** — BUG-4、BUG-5 |
-| S6 | 汇聚超过任务超时 | ClickHouse 已明确取消（code 159），仍记为 UNKNOWN — BUG-6 |
-| S7 | 主节点在补算 `--recompute` 中途宕机 | **失败：该窗口数据被清空，系统仍显示 SUCCESS** — BUG-3 |
+| S6 | 汇聚超过任务超时 | 修复前记为 UNKNOWN；**修复后按可重试失败处理** — BUG-6 |
+| S7 | 主节点在补算 `--recompute` 中途宕机 | 修复前窗口被清空仍显示成功；**修复后通过** — BUG-3 |
 | S8 | 冻结期间到达的 DWD 信号 | 通过：无信号丢失，旧主恢复后被拒 |
-| S9 | 备机等待期间 Redis 闪断 4–6 秒 | **备机直接退出** — BUG-2 |
+| S9 | 备机等待期间 Redis 闪断 4–6 秒 | 修复前备机退出；**修复后通过** — BUG-2 |
 
 ## BUG-1（严重，已修复）：接管时 KILL 只尝试一次，失败后与旧查询并发执行，数据重复
 
@@ -57,7 +57,7 @@ S2b（冻结旧主 + 接管时 KILL 失败）中同一窗口最终同样为 `(80
 - 改用 `KILL QUERY ... SYNC`，并把 785 视为"已不存在"的成功。
 - 根本解决：ClickHouse 侧没有 fencing。可在 INSERT 中带 `insert_deduplication_token`（Replicated 表）或让重跑使用新清理后再校验行数；至少在文档里说明该残余风险。
 
-## BUG-2（严重）：Redis 短暂不可用会让主、备两个实例都退出，无自动恢复
+## BUG-2（严重，已修复）：Redis 短暂不可用会让主、备两个实例都退出，无自动恢复
 
 **复现**：`s4_failover.py clean|lag`、S9。
 
@@ -117,7 +117,7 @@ B acquired 24.7 s after SIGTERM
 
 **建议**：补算请求放进 Redis（与共享状态同一命名空间，带 fencing），或 CLI 提交时检查本节点是否持有租约并给出明确提示；`BACKFILL_INSTANCE_RUNNING` 应保持排队而不是终止。
 
-## BUG-6（低）：服务端明确的超时取消被记为 UNKNOWN，需要人工处理
+## BUG-6（低，已修复）：服务端明确的超时取消被记为 UNKNOWN，需要人工处理
 
 **复现**：`s6_timeout.py`（5 分钟超时设为 10 秒）。ClickHouse 返回 HTTP 500 + `TIMEOUT_EXCEEDED`（code 159），query_log 为 `ExceptionWhileProcessing`，结果确定是未写入。但 `client.py:_http_failure` 只按 401 区分，其余 HTTP 错误一律 `outcome_unknown=True`：
 ```
@@ -136,6 +136,16 @@ UNKNOWN 不会自动重试，必须人工核对后 `--resolve-instance`。小时
 - 补算派发后立即把 RUNNING 发布到共享状态；本机重启把中断补算改为 UNKNOWN 后也会发布。
 - 复测结果：S1c、S2b（KILL 失败）数据由 `(80, 40)` 变为正确的 `(40, 40)`；S7b 窗口由"清空且显示成功"变为
   接管后重跑、数据正确 `(60, 60)`；S1、S1b、S2、S5 回归通过。全量测试与基线一致（50 个既有失败，无新增）。
+
+## 修复与复测（BUG-2、BUG-6）
+
+- BUG-2：主节点遇到 Redis 不可用、失租或被 fencing 时结束当前任期，在途 SQL 收尾后释放租约与文件锁，进程内回到备机重新竞选
+  （`application.py:serve` / `coordination/terms.py`）；备机等待时把 Redis 连接失败当作暂时错误重试（`coordination/admission.py`）。
+  复测：S4 clean、S4 lag 两个进程均存活、备机自动接管、无双写、数据全部正确；S9 备机经历 6 秒闪断后仍存活；
+  S2、S3 旧主被 fencing / 断网后回到备机等待，不再退出。
+- BUG-6：响应头异常码 159/241/394 归为可重试的 `CLICKHOUSE_QUERY_ABORTED`；复测发现客户端与服务端同一时刻超时，仍记为 UNKNOWN，
+  因此客户端等待时长改为服务端 `max_execution_time` + 5 秒。复测：S6 超时窗口按重试策略重跑后为 FAILED，不再需要人工核对。
+- 全量测试与基线一致（50 个既有失败，无新增）。
 
 ## 已验证正常的部分
 

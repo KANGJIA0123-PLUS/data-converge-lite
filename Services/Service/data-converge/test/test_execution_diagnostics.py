@@ -37,9 +37,10 @@ def test_failure_metadata_is_filtered_and_copied():
         "query_id": "attempt-1", "http_status": 503}
 
 
-@pytest.mark.parametrize("header, expected", [("241", 241), ("241 private password", None),
-                                              pytest.param("9" * 5000, None, id="oversized"), ("-1", None)])
-def test_http_failure_retains_only_numeric_server_evidence(monkeypatch, header, expected):
+@pytest.mark.parametrize("header, expected, aborted", [
+    ("241", 241, True), ("241 private password", None, False),
+    pytest.param("9" * 5000, None, False, id="oversized"), ("-1", None, False)])
+def test_http_failure_retains_only_numeric_server_evidence(monkeypatch, header, expected, aborted):
     response = io.BytesIO(b"SELECT private password")
     failure = urllib.error.HTTPError("private URL", 503, "private password",
                                      {"X-ClickHouse-Exception-Code": header}, response)
@@ -52,7 +53,11 @@ def test_http_failure_retains_only_numeric_server_evidence(monkeypatch, header, 
     assert details.get("clickhouse_exception_code") == expected
     assert details["query_id"] == "attempt-2"
     assert "private" not in json.dumps(details)
-    assert caught.value.outcome_unknown and not caught.value.retryable
+    if aborted:
+        assert str(caught.value) == "CLICKHOUSE_QUERY_ABORTED"
+        assert caught.value.retryable and not caught.value.outcome_unknown
+    else:
+        assert caught.value.outcome_unknown and not caught.value.retryable
     assert response.closed
 
 

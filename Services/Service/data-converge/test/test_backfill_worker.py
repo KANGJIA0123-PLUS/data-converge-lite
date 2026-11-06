@@ -32,11 +32,11 @@ def submit(setup, *, recompute=False, task=None):
     return queue.submit(plan)
 
 
-def worker(setup, runner, stop_check=lambda: False):
+def worker(setup, runner, stop_check=lambda: False, clock=None):
     assert find_spec("data_converge.backfill.worker") is not None
     from data_converge.backfill.worker import BackfillWorker
     definition, store, _ = setup
-    return BackfillWorker(definition, store, runner, stop_check=stop_check)
+    return BackfillWorker(definition, store, runner, stop_check=stop_check, clock=clock)
 
 
 def test_service_drains_one_window_at_a_time_and_preserves_dependency_order(setup):
@@ -151,3 +151,104 @@ def test_cross_period_failures_do_not_gate_hour_backfill(app):
                 service.run_one(queue)
             assert calls == ["task_0"] * 12 + ["task_1"]
             assert queue.status(job)["counts"] == {"FAILED": 12, "SUCCESS": 1}
+
+
+def _claimed_instance(setup, queue):
+    from datetime import datetime
+
+    definition, store, _ = setup
+    item = queue.next_item()
+    instance = definition.builder.create_instance(
+        definition.dag, item["taskname"], datetime.fromisoformat(item["scheduled_time"]))
+    store.enqueue_and_advance([instance], {})
+    store.claim(instance.instance_id)
+    return instance
+
+
+def test_local_running_window_stays_queued_until_its_status_changes(setup):
+    job = submit(setup, task="task_0", recompute=True)
+    definition, store, queue = setup
+    instance = _claimed_instance(setup, queue)
+    calls = []
+    service = worker(setup, lambda item: calls.append(item.instance_id))
+
+    service.run_one(queue)
+    assert calls == []
+    assert queue.status(job)["counts"] == {"QUEUED": 2}
+
+    store.finish(instance.instance_id, TaskStatus.SUCCESS)
+    service.run_one(queue)
+    assert calls == [instance.instance_id]
+    assert queue.status(job)["counts"] == {"QUEUED": 1, "SUCCESS": 1}
+
+
+def test_stale_running_window_blocks_after_the_hold_period(setup):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from data_converge.backfill.worker import RUNNING_HOLD_SECONDS
+
+    job = submit(setup, task="task_0", recompute=True)
+    definition, store, queue = setup
+    instance = _claimed_instance(setup, queue)
+    calls = []
+    zone = ZoneInfo(definition.options.timezone)
+
+    def later():
+        return datetime.now(zone) + timedelta(seconds=RUNNING_HOLD_SECONDS + 1)
+
+    service = worker(setup, lambda item: calls.append(item.instance_id), clock=later)
+
+    service.run_one(queue)
+    first = queue.status(job)["items"][0]
+    assert calls == []
+    assert first["status"] == "BLOCKED"
+    assert first["error"] == "BACKFILL_INSTANCE_RUNNING"
+
+
+def test_imported_running_without_start_time_holds_from_first_observation(setup):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from data_converge.backfill.worker import RUNNING_HOLD_SECONDS
+
+    job = submit(setup, task="task_0", recompute=True)
+    definition, store, queue = setup
+    item = queue.next_item()
+    instance = definition.builder.create_instance(
+        definition.dag, item["taskname"], datetime.fromisoformat(item["scheduled_time"]))
+    store.enqueue_and_advance([instance], {})
+    assert store.prepare_attempt(instance.instance_id)
+    zone = ZoneInfo(definition.options.timezone)
+    now = [datetime.now(zone)]
+    calls = []
+    service = worker(setup, lambda item: calls.append(item.instance_id), clock=lambda: now[0])
+
+    service.run_one(queue)
+    assert calls == [] and queue.status(job)["counts"] == {"QUEUED": 2}
+
+    now[0] += timedelta(seconds=RUNNING_HOLD_SECONDS + 1)
+    service.run_one(queue)
+    first = queue.status(job)["items"][0]
+    assert calls == []
+    assert first["status"] == "BLOCKED"
+    assert first["error"] == "BACKFILL_INSTANCE_RUNNING"
+
+
+def test_window_held_for_previous_query_stays_queued_until_released(setup):
+    from datetime import datetime
+
+    job = submit(setup, task="task_0", recompute=True)
+    definition, store, queue = setup
+    item = queue.next_item()
+    instance = definition.builder.create_instance(
+        definition.dag, item["taskname"], datetime.fromisoformat(item["scheduled_time"]))
+    store.enqueue_and_advance([instance], {})
+    store.hold_orphans([(instance.instance_id, "old-leader-query")])
+    calls = []
+    service = worker(setup, lambda run: calls.append(run.instance_id))
+    service.run_one(queue)
+    assert calls == [] and queue.status(job)["counts"] == {"QUEUED": 2}
+    store.release_orphans([instance.instance_id])
+    service.run_one(queue)
+    assert calls == [instance.instance_id]

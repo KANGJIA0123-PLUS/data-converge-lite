@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, replace
@@ -34,6 +35,21 @@ from data_converge.coordination import admit_writer, acquire_state
 from data_converge.time_policy import system_timezone
 
 logger = logging.getLogger(__name__)
+
+
+class StopFlag:
+    """Remember whether a term ended because of SIGTERM/SIGINT rather than lease loss."""
+
+    def __init__(self):
+        self._runtime = None
+
+    def watch(self, runtime) -> None:
+        self._runtime = runtime
+
+    @property
+    def requested(self) -> bool:
+        scheduler = getattr(self._runtime, 'scheduler', None)
+        return bool(getattr(scheduler, '_stop_requested', False))
 
 
 @dataclass(frozen=True)
@@ -321,10 +337,46 @@ class Application:
     def serve(self) -> CommandResult:
         logger.info('SYSTEM_TIMEZONE_SELECTED: timezone=%s', self.definition.options.timezone)
         dependencies = self.dependencies or RuntimeDependencies()
+        with service_heartbeat(self.definition, self.directory, dependencies) as heartbeat:
+            while True:
+                try:
+                    stopped, lease_lost = self._serve_term(heartbeat, dependencies)
+                except Exception as error:
+                    if not self._rejoin_after(error):
+                        raise
+                    continue
+                if stopped or not self.definition.leadership.enabled or not lease_lost:
+                    return CommandResult()
+                # The term ended without an error: the lease expired while idle.
+                logger.warning('LEADERSHIP_TERM_ENDED: reason=LEADERSHIP_LOST; rejoining as standby')
+                time.sleep(self.definition.leadership.standby_poll_seconds)
+
+    def _serve_term(self, heartbeat, dependencies) -> tuple[bool, bool]:
+        """Serve one term; report operator stop and whether the lease was lost."""
+        stop = StopFlag()
         with (
-            service_heartbeat(self.definition, self.directory, dependencies) as heartbeat,
             self._active_state(bootstrap=True) as (store, lease),
             self._runtime(store, lease, heartbeat) as runtime,
         ):
+            stop.watch(runtime)
             runtime.serve()
-        return CommandResult()
+            lease_lost = lease is None or lease.lost
+        if heartbeat is not None:
+            heartbeat.set_ready(False)
+        return stop.requested, lease_lost
+
+    def _rejoin_after(self, error: BaseException) -> bool:
+        """Return to standby after a recoverable coordination failure.
+
+        Every context above has exited: in-flight SQL drained, the Redis lease
+        released (or left to expire), and the local file lock closed, so the
+        next term starts from a clean admission exactly like a fresh process.
+        """
+        from data_converge.coordination.terms import is_term_end, reason
+
+        if not self.definition.leadership.enabled or not is_term_end(error):
+            return False
+        logger.warning('LEADERSHIP_TERM_ENDED: reason=%s; released local state, rejoining as standby',
+                       reason(error))
+        time.sleep(self.definition.leadership.standby_poll_seconds)
+        return True

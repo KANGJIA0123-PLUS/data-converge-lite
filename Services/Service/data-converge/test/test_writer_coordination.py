@@ -196,7 +196,9 @@ def test_standby_has_own_live_but_not_ready_heartbeat(app, monkeypatch):
 
     lease.acquire = acquire
     monkeypatch.setattr('data_converge.coordination.admission.time.sleep', lambda _: None)
-    monkeypatch.setattr(runtime.TaskScheduler, 'start', lambda self: None)
+    # Simulate the operator stop that ends the term; without it serve() keeps
+    # rejoining as a standby by design.
+    monkeypatch.setattr(runtime.TaskScheduler, 'start', lambda self: self.shutdown())
     assert application.serve().exit_code == 0
     assert attempts == [(0, 1), (0, 1)]
     assert application.check_health('liveness').exit_code == 1

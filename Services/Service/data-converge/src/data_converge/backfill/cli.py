@@ -6,6 +6,9 @@ import re
 
 from data_converge.application import Application
 from data_converge.errors import safe_error_details
+from data_converge.infrastructure.redis import create_connection
+from data_converge.infrastructure.redis.pools import RedisPools
+from data_converge.leader_election import LeaderElector
 from .queue import BackfillQueueError, Queue, TOKEN_PATTERN, validate_request_id
 
 
@@ -74,7 +77,34 @@ def _submit(args, application):
     with Queue(application.directory / 'backfill.sqlite3', create=True) as queue:
         job_id = queue.submit(plan, request_id=args.request_id)
         result = queue.status(job_id)
-    return {'schema_version': 1, 'command': 'backfill', 'status': result['status'], 'data': result}
+    value = {'schema_version': 1, 'command': 'backfill', 'status': result['status'], 'data': result}
+    notice = _leadership_notice(application)
+    if notice is not None:
+        value['notices'] = [notice]
+    return value
+
+
+LOCAL_ONLY_NOTICE = '请求只保存在本节点，只有本节点成为主节点后才会执行。'
+
+
+def _leadership_notice(application):
+    """Tell an operator that the local queue is not consumed by a standby."""
+    if not application.definition.leadership.enabled:
+        return None
+    try:
+        leader = _read_leader(application.definition)
+    except Exception:
+        return '无法读取 Redis 选主状态；' + LOCAL_ONLY_NOTICE
+    return ('当前没有主节点；' if leader is None else '') + LOCAL_ONLY_NOTICE
+
+
+def _read_leader(definition):
+    """Read the lease without acquiring it; a CLI process never owns the token."""
+    policy = definition.leadership
+    pools = RedisPools.from_mapping(definition.config.get('redis_pools'))
+    ready = pools.connection_config(definition.config['dwd_ready'], 'leader')
+    with closing(create_connection(ready)) as connection:
+        return LeaderElector(policy.cluster_name, client=connection.client).get_current_leader()
 
 
 def _build_plan(args, application):
@@ -120,6 +150,8 @@ def _render(value):
     if data.get('has_more'):
         lines.append(paint(f"  下一页：dconv --backfill-status {data['job_id']} --limit {data['limit']}"
                            f" --offset {data['offset'] + data['limit']}", 'grey'))
+    for notice in value.get('notices', []):
+        lines.append(paint('  ! ' + notice, 'yellow'))
     return '\n'.join(lines)
 
 

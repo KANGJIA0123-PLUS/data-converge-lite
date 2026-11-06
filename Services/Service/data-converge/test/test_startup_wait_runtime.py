@@ -157,7 +157,7 @@ def test_lease_loss_during_wait_preserves_failure_and_releases_resources(
     monkeypatch.setattr(runtime.TaskScheduler, 'start', lambda self: started.append(True))
 
     with pytest.raises(LeadershipError, match='LEADERSHIP_LOST'):
-        state.application.serve()
+        state.application._serve_term(None, state.application.dependencies)
 
     assert len(state.requests) == 1
     assert state.health == [(0, 1)]
