@@ -338,6 +338,9 @@ class Application:
         logger.info('SYSTEM_TIMEZONE_SELECTED: timezone=%s', self.definition.options.timezone)
         dependencies = self.dependencies or RuntimeDependencies()
         with service_heartbeat(self.definition, self.directory, dependencies) as heartbeat:
+            if heartbeat is not None:
+                # 主备都算正常：进入服务循环即视为就绪，不按是否持有租约区分。
+                heartbeat.set_ready(True)
             while True:
                 try:
                     stopped, lease_lost = self._serve_term(heartbeat, dependencies)
@@ -361,8 +364,6 @@ class Application:
             stop.watch(runtime)
             runtime.serve()
             lease_lost = lease is None or lease.lost
-        if heartbeat is not None:
-            heartbeat.set_ready(False)
         return stop.requested, lease_lost
 
     def _rejoin_after(self, error: BaseException) -> bool:

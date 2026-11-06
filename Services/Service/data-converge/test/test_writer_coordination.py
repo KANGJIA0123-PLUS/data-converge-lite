@@ -181,7 +181,7 @@ def test_lease_loss_drains_completed_sql_and_restart_runs_only_remaining_task(ap
     assert next_lease.bindings == lease.bindings == []
 
 
-def test_standby_has_own_live_but_not_ready_heartbeat(app, monkeypatch):
+def test_standby_is_live_and_ready_but_does_not_schedule(app, monkeypatch):
     from data_converge import runtime
 
     enable_leadership(app)
@@ -200,7 +200,8 @@ def test_standby_has_own_live_but_not_ready_heartbeat(app, monkeypatch):
     # rejoining as a standby by design.
     monkeypatch.setattr(runtime.TaskScheduler, 'start', lambda self: self.shutdown())
     assert application.serve().exit_code == 0
-    assert attempts == [(0, 1), (0, 1)]
+    # 备机进程正常时两个探针都必须通过；是否持有租约不由探针表达。
+    assert attempts == [(0, 0), (0, 0)]
     assert application.check_health('liveness').exit_code == 1
 
 
