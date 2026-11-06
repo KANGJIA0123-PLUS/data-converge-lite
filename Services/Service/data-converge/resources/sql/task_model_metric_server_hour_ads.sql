@@ -212,7 +212,7 @@ SELECT
     -- ============================================================================
     -- (1) 输入/输出比率
     CAST(coalesce(
-        t.engine_prompt_tokens_total_delta / nullIf(t.engine_generation_tokens_total_delta, 0.0),
+        t.engine_prompt_tokens_total_delta / nullIf(t.engine_generation_tokens_total_delta, 0),
         0.0
     ) AS Nullable(Float32)) AS input_output_token_rate,
 
@@ -375,14 +375,14 @@ FROM
     -- 平均每条请求输入token均值
     CAST(coalesce(
         sum(ins.engine_prompt_tokens_total_delta)
-        / nullIf(sum(ins.engine_request_received_total_delta), 0.0),
+        / nullIf(sum(ins.engine_request_received_total_delta), 0),
         0.0
     ) AS Nullable(Float32)) AS engine_input_token_num_length_delta_avg,
 
     -- 平均每条请求输出token均值
     CAST(coalesce(
         sum(ins.engine_generation_tokens_total_delta)
-        / nullIf(sum(ins.engine_request_received_total_delta), 0.0),
+        / nullIf(sum(ins.engine_request_received_total_delta), 0),
         0.0
     ) AS Nullable(Float32)) AS engine_output_token_num_length_delta_avg,
 
@@ -390,14 +390,14 @@ FROM
     CAST(coalesce(
         sum(ins.engine_prompt_tokens_total_argMax)
         + sum(ins.engine_generation_tokens_total_argMax),
-        0.0
+        0
     ) AS Nullable(Float32)) AS engine_total_token_argMax,
 
     -- 输入输出token增量
     CAST(coalesce(
         sum(ins.engine_prompt_tokens_total_delta)
         + sum(ins.engine_generation_tokens_total_delta),
-        0.0
+        0
     ) AS Nullable(Float32)) AS engine_total_token_delta,
 
     -- 4.3 引擎关键耗时 (TTFT: prefill/engine/single, TPOT: decode/engine/single, Engine E2E: 全量)

@@ -281,7 +281,7 @@ SELECT
     -- ============================================================================
     -- (1) 输入/输出比率
     CAST(coalesce(
-        t.engine_prompt_tokens_total_delta / nullIf(t.engine_generation_tokens_total_delta, 0.0),
+        t.engine_prompt_tokens_total_delta / nullIf(t.engine_generation_tokens_total_delta, 0),
         0.0
     ) AS Nullable(Float32)) AS input_output_token_rate,
 
@@ -456,14 +456,14 @@ FROM
     -- 平均每条请求输入token均值
     CAST(coalesce(
         sumIf(group_prompt_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
-        / nullIf(sumIf(group_request_received_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0.0),
+        / nullIf(sumIf(group_request_received_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
     ) AS Nullable(Float32)) AS engine_input_token_num_length_delta_avg,
 
     -- 平均每条请求输出token均值
     CAST(coalesce(
         sumIf(group_generation_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
-        / nullIf(sumIf(group_request_received_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0.0),
+        / nullIf(sumIf(group_request_received_delta, process_role IN ('engine', 'prefill', 'decode', 'single')), 0),
         0.0
     ) AS Nullable(Float32)) AS engine_output_token_num_length_delta_avg,
 
@@ -471,14 +471,14 @@ FROM
     CAST(coalesce(
         sumIf(group_prompt_tokens_argMax, process_role IN ('engine', 'prefill', 'decode', 'single'))
         + sumIf(group_generation_tokens_argMax, process_role IN ('engine', 'prefill', 'decode', 'single')),
-        0.0
+        0
     ) AS Nullable(Float32)) AS engine_total_token_argMax,
 
     -- 输入输出token增量
     CAST(coalesce(
         sumIf(group_prompt_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single'))
         + sumIf(group_generation_tokens_delta, process_role IN ('engine', 'prefill', 'decode', 'single')),
-        0.0
+        0
     ) AS Nullable(Float32)) AS engine_total_token_delta,
 
     -- ============================================================================
