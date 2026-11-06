@@ -188,18 +188,23 @@ WITH
     ),
 
     -- 2. 抽取"实例-物理卡"去重映射关系（不管一个卡上有多少个容器，在当前实例下只算作一个卡/芯片关联节点）
+    --    注意：必须从 DWD 取卡关系，不能用 DWS。
+    --    DWS 的 GROUP BY 含 container_id 且对 ai_card_id/chip_id 取 any()，
+    --    多卡实例在 DWS 已被折叠成一行，卡维度信息丢失，在此取不到第 2 张卡。
+    --    DWD 的 ai_card_id 是节点内真实卡序号（GPU DWD 的同名字段是 hash，真实序号在 ai_card_index），
+    --    与 t_mops_gpu_*_dws.ai_card_index 对应。
     instance_card_rel AS (
         SELECT DISTINCT
-            dws.window_time,
-            dws.server_name,
-            dws.modelinstance_id,
-            dws.node_ip,
-            dws.ai_card_id,
-            dws.chip_id
-        FROM modelmate_metric.t_mops_modelinstance_5min_dws AS dws
-        WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
-          AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
-          AND dws.sync_flag = 0
+            toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
+            dwd.server_name,
+            dwd.modelinstance_id,
+            dwd.node_ip,
+            dwd.ai_card_id,
+            dwd.chip_id
+        FROM modelmate_metric.t_mops_modelinstance_realtime_dwd AS dwd
+        WHERE dwd.metric_datetime >= toDateTime({start_time:UInt32}, {system_timezone:String})
+          AND dwd.metric_datetime <  toDateTime({end_time:UInt32}, {system_timezone:String})
+          AND dwd.sync_flag = 0
     ),
 
     -- 3. 关联物理卡表计算"卡层指标"（通过关联去重表，解决一对多 JOIN 导致的数据计算膨胀问题）

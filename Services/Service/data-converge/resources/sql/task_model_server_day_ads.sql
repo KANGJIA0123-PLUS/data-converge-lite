@@ -175,14 +175,14 @@ WITH
     server_card_rel AS (
         SELECT DISTINCT
             toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
-            dws.server_name,
-            dws.node_ip,
-            dws.ai_card_id,
-            dws.chip_id
-        FROM modelmate_metric.t_mops_modelinstance_day_dws AS dws
-        WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
-          AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
-          AND dws.sync_flag = 0
+            dwd.server_name,
+            dwd.node_ip,
+            dwd.ai_card_id,
+            dwd.chip_id
+        FROM modelmate_metric.t_mops_modelinstance_realtime_dwd AS dwd
+        WHERE dwd.metric_datetime >= toDateTime({start_time:UInt32}, {system_timezone:String})
+          AND dwd.metric_datetime <  toDateTime({end_time:UInt32}, {system_timezone:String})
+          AND dwd.sync_flag = 0
     ),
 
     -- 3. 关联天级物理卡 DWS 表计算服务级卡层及忙闲时指标

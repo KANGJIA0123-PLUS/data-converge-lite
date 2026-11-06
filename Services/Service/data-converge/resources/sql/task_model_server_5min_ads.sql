@@ -165,17 +165,22 @@ WITH
     ),
 
     -- 2. 抽取"模型服务-物理卡"去重映射关系（按服务维度去重物理卡，无论服务下有多少实例/容器共享卡，每张物理卡只算一次）
+    --    注意：必须从 DWD 取卡关系，不能用 DWS。
+    --    DWS 的 GROUP BY 含 container_id 且对 ai_card_id/chip_id 取 any()，
+    --    多卡实例在 DWS 已被折叠成一行，卡维度信息丢失，allocated_npu_num 只会数到 1。
+    --    DWD 的 ai_card_id 是节点内真实卡序号（GPU DWD 的同名字段是 hash，真实序号在 ai_card_index），
+    --    与 t_mops_gpu_*_dws.ai_card_index 对应。
     server_card_rel AS (
         SELECT DISTINCT
             toDateTime({start_time:UInt32}, {system_timezone:String}) AS window_time,
-            dws.server_name,
-            dws.node_ip,
-            dws.ai_card_id,
-            dws.chip_id
-        FROM modelmate_metric.t_mops_modelinstance_5min_dws AS dws
-        WHERE dws.window_time >= toDateTime({start_time:UInt32}, {system_timezone:String})
-          AND dws.window_time <  toDateTime({end_time:UInt32}, {system_timezone:String})
-          AND dws.sync_flag = 0
+            dwd.server_name,
+            dwd.node_ip,
+            dwd.ai_card_id,
+            dwd.chip_id
+        FROM modelmate_metric.t_mops_modelinstance_realtime_dwd AS dwd
+        WHERE dwd.metric_datetime >= toDateTime({start_time:UInt32}, {system_timezone:String})
+          AND dwd.metric_datetime <  toDateTime({end_time:UInt32}, {system_timezone:String})
+          AND dwd.sync_flag = 0
     ),
 
     -- 3. 关联物理卡表计算服务级别的硬件层指标
